@@ -1,11 +1,29 @@
 package main
 
+type ProcessStatus int
+
 const (
-	StatusRunning = "Running"
-	StatusHalting = "Halting"
-	StatusHalted  = "Halted"
-	StatusExited  = "Exited"
+	StatusUnknown ProcessStatus = iota
+	StatusRunning
+	StatusHalting
+	StatusHalted
+	StatusExited
 )
+
+func (s ProcessStatus) String() string {
+	switch s {
+	case StatusRunning:
+		return "Running"
+	case StatusHalting:
+		return "Halting"
+	case StatusHalted:
+		return "Halted"
+	case StatusExited:
+		return "Exited"
+	default:
+		return "Unknown"
+	}
+}
 
 type Process struct {
 	ID         int
@@ -14,7 +32,7 @@ type Process struct {
 	Args       []string
 	PID        int
 	PaneID     string
-	Status     string // "Running", "Halting", "Halted", "Exited", etc.
+	Status     ProcessStatus
 	Categories []string
-	Config     *ProcessConfig // Optional: pointer to config for this process
+	Config     *ProcessConfig
 }

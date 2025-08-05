@@ -1,17 +1,15 @@
 package main
 
-// Updated AppState to match Rust logic and support TUI controller
-
 type AppState struct {
 	Processes          []*Process
-	ActiveIdx          int // Index of currently selected process
-	ActiveID           int // ID of currently selected process (for parity)
+	ActiveIdx          int
+	ActiveID           int
 	Config             *ProcTmuxConfig
 	Exiting            bool
-	Messages           []string // Info and error messages for the UI
+	Messages           []string
 	EnteringFilterText bool
 	FilterText         string
-	Info               string // Current info message
+	Info               string
 }
 
 func NewAppState(cfg *ProcTmuxConfig) *AppState {
@@ -31,7 +29,7 @@ func (s *AppState) AddProcess(p *Process) {
 	s.ActiveID = p.ID
 }
 
-func (s *AppState) SetProcessStatus(id int, status string) {
+func (s *AppState) SetProcessStatus(id int, status ProcessStatus) {
 	for _, p := range s.Processes {
 		if p.ID == id {
 			p.Status = status

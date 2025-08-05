@@ -2,6 +2,11 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"os/exec"
+	"slices"
+	"strconv"
+	"strings"
 )
 
 type TmuxContext struct {
@@ -24,25 +29,21 @@ func NewTmuxContext(detachedSession string, killExistingSession bool) (*TmuxCont
 		return nil, fmt.Errorf("could not list tmux sessions: %w", err)
 	}
 	detachedSessionID := ""
-	exists := false
-	for _, s := range sessions {
-		if s == detachedSession {
-			exists = true
-			break
-		}
-	}
+
+	exists := slices.Contains(sessions, detachedSession)
 	if exists {
+		log.Printf("Session '%s' already exists", detachedSession)
 		if killExistingSession {
 			if err := KillSession(detachedSession); err != nil {
 				return nil, fmt.Errorf("could not kill existing session: %w", err)
 			}
 			id, err := StartDetachedSession(detachedSession)
 			if err != nil {
-				return nil, fmt.Errorf("could not start detached session: %w", err)
+				return nil, fmt.Errorf("could not start detached session after kill: %w", err)
 			}
 			detachedSessionID = id
 		} else {
-			return nil, fmt.Errorf("session '%s' already exists", detachedSession)
+			return nil, fmt.Errorf("session '%s' already exists (set killExistingSession to true to replace it)", detachedSession)
 		}
 	} else {
 		id, err := StartDetachedSession(detachedSession)
@@ -79,4 +80,43 @@ func (t *TmuxContext) FocusPane(paneID string) error {
 
 func (t *TmuxContext) ToggleZoom(paneID string) error {
 	return ToggleZoom(paneID)
+}
+
+func (t *TmuxContext) PaneVariables(paneID, format string) (string, error) {
+	args := []string{"list-panes", "-t", paneID, "-F", format}
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func (t *TmuxContext) IsZoomedIn() bool {
+	out, err := t.PaneVariables(t.PaneID, "#{window_zoomed_flag} #{pane_active}")
+	if err != nil {
+		return false
+	}
+	return out == "1 1"
+}
+
+func (t *TmuxContext) ZoomIn() error {
+	if !t.IsZoomedIn() {
+		return t.ToggleZoom(t.PaneID)
+	}
+	return nil
+}
+
+func (t *TmuxContext) ZoomOut() error {
+	if t.IsZoomedIn() {
+		return t.ToggleZoom(t.PaneID)
+	}
+	return nil
+}
+
+func (t *TmuxContext) GetPanePID(paneID string) (int, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{pane_pid}").Output()
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(out)))
 }

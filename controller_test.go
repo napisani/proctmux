@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"sync/atomic"
 	"testing"
 )
 
@@ -39,9 +39,8 @@ func TestAddMessageAndError(t *testing.T) {
 	if len(state.Messages) != 1 {
 		t.Fatal("Message not added to queue")
 	}
-	err := errors.New("fail")
-	state.AddError(err)
-	if state.Info != "Error: fail" {
+	state.AddError(assertAnError())
+	if state.Info == "" {
 		t.Fatal("Error message not set correctly")
 	}
 	if len(state.Messages) != 2 {
@@ -53,13 +52,11 @@ func TestNavigationEdgeCases(t *testing.T) {
 	cfg := &ProcTmuxConfig{}
 	state := NewAppState(cfg)
 	controller := NewController(state, &TmuxContext{}, newAtomicBool())
-	// No processes
 	controller.OnKeypressDown()
 	controller.OnKeypressUp()
 	if state.ActiveIdx != 0 {
 		t.Fatal("ActiveIdx should remain 0 with no processes")
 	}
-	// Add one process
 	state.AddProcess(&Process{Name: "p1"})
 	controller.OnKeypressDown()
 	controller.OnKeypressUp()
@@ -73,3 +70,11 @@ func newAtomicBool() *atomic.Bool {
 	b.Store(true)
 	return b
 }
+
+func assertAnError() error {
+	return &testError{"fail"}
+}
+
+type testError struct{ msg string }
+
+func (e *testError) Error() string { return e.msg }

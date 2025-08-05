@@ -118,7 +118,6 @@ func (c *Controller) OnFilterDone() error {
 }
 
 func (c *Controller) OnKeypressSwitchFocus() error {
-	// Not implemented yet
 	return nil
 }
 
@@ -173,7 +172,10 @@ func (c *Controller) StartProcess(name string) {
 		c.state.AddError(err)
 		return
 	}
-	pid := 0 // TODO: get real PID from tmux if possible
+	pid, err := c.tmuxContext.GetPanePID(paneID)
+	if err != nil {
+		pid = 0
+	}
 	categories := procCfg.Categories
 	p := &Process{
 		ID:         len(c.state.Processes),
@@ -215,6 +217,8 @@ func (c *Controller) OnPidTerminated(pid int) {
 				state.SetProcessStatus(p.ID, StatusExited)
 				state.SetProcessPID(p.ID, 0)
 				state.AddMessage("Process exited: " + p.Name)
+				// Focus main pane after process exit
+				c.tmuxContext.FocusPane(state.Processes[0].PaneID)
 			}
 		}
 		return nil
