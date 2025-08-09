@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"slices"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type Mode int
@@ -100,7 +101,7 @@ func (m Model) View() string {
 	s := "Proctmux (Go + Bubbletea version)\n\n"
 	for i, p := range procs {
 		cursor := "  "
-		if i == m.state.ActiveIdx {
+		if i == m.state.CurrentProcID {
 			cursor = m.state.Config.Style.PointerChar + " "
 		}
 		cat := ""
@@ -111,7 +112,7 @@ func (m Model) View() string {
 		if m.controller.tmuxContext.IsZoomedIn() && p.PaneID == m.controller.tmuxContext.PaneID {
 			zoom = " (zoomed)"
 		}
-		s += fmt.Sprintf("%s%s [%s] PID:%d%s%s (Pane: %s)\n", cursor, p.Name, p.Status.String(), p.PID, cat, zoom, p.PaneID)
+		s += fmt.Sprintf("%s%s [%s] PID:%d%s%s (Pane: %s)\n", cursor, p.Label, p.Status.String(), p.PID, cat, zoom, p.PaneID)
 	}
 	if m.state.EnteringFilterText {
 		s += "\nFilter: " + m.state.FilterText + "_\n"
@@ -168,7 +169,7 @@ func (m Model) filteredProcesses() []*Process {
 		}
 	} else {
 		for _, p := range m.state.Processes {
-			if fuzzyMatch(p.Name, m.state.FilterText) {
+			if fuzzyMatch(p.Label, m.state.FilterText) {
 				out = append(out, p)
 			}
 		}

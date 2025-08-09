@@ -92,7 +92,10 @@ func BreakPane(paneID, destSession string, destWindow int, windowLabel string) e
 
 // JoinPane joins a source pane into a destination pane
 func JoinPane(sourcePane, destPane string) error {
-	return exec.Command("tmux", "join-pane", "-d", "-h", "-l", "70%", "-s", sourcePane, "-t", destPane).Run()
+	return exec.Command("tmux", "join-pane", "-d", "-h",
+		// "-l", "70%",
+		"-f",
+		"-s", sourcePane, "-t", destPane).Run()
 }
 
 // GetPanePID returns the PID of the process running in a pane

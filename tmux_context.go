@@ -59,8 +59,35 @@ func NewTmuxContext(detachedSession string, killExistingSession bool) (*TmuxCont
 	}, nil
 }
 
-func (t *TmuxContext) CreatePane(cmd, cwd string, env map[string]string) (string, error) {
-	return CreatePane(t.PaneID, cmd, cwd, env)
+func (t *TmuxContext) CreatePane(process *Process) (string, error) {
+	return CreatePane(
+		process.PaneID,
+		process.Command(),
+		process.Config.Cwd,
+		process.Config.Env,
+	)
+}
+
+// Create a pane in the detached session
+func (t *TmuxContext) CreateDetachedPane(process *Process) (string, error) {
+	return CreateDetachedPane(
+		t.DetachedSessionID,
+		process.ID,
+		process.Label,
+		process.Command(),
+		process.Config.Cwd,
+		process.Config.Env,
+	)
+}
+
+// Move a pane to the detached session
+func (t *TmuxContext) BreakPane(paneID string, destWindow int, windowLabel string) error {
+	return BreakPane(paneID, t.DetachedSessionID, destWindow, windowLabel)
+}
+
+// Move a pane from the detached session to the user session
+func (t *TmuxContext) JoinPane(sourcePaneID string) error {
+	return JoinPane(sourcePaneID, t.PaneID)
 }
 
 func (t *TmuxContext) Prepare() error {

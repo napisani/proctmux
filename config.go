@@ -1,50 +1,74 @@
 package main
 
 import (
+	"log"
 	"os"
 
 	"gopkg.in/yaml.v3"
 )
 
 type KeybindingConfig struct {
-	Quit         []string
-	Up           []string
-	Down         []string
-	Start        []string
-	Stop         []string
-	Filter       []string
-	FilterSubmit []string
-	SwitchFocus  []string
-	Zoom         []string
-	Focus        []string
+	Quit         []string `yaml:"quit"`
+	Up           []string `yaml:"up"`
+	Down         []string `yaml:"down"`
+	Start        []string `yaml:"start"`
+	Stop         []string `yaml:"stop"`
+	Filter       []string `yaml:"filter"`
+	FilterSubmit []string `yaml:"submit_filter"`
+	SwitchFocus  []string `yaml:"switch_focus"`
+	Zoom         []string `yaml:"zoom"`
+	Focus        []string `yaml:"focus"`
 }
 
 type LayoutConfig struct {
-	CategorySearchPrefix string
+	CategorySearchPrefix        string `yaml:"category_search_prefix"`
+	HideHelp                    bool   `yaml:"hide_help"`
+	HideProcessDescriptionPanel bool   `yaml:"hide_process_description_panel"`
+	ProcessesListWidth          int    `yaml:"processes_list_width"`
+	SortProcessListAlpha        bool   `yaml:"sort_process_list_alpha"`
+}
+
+type StyleConfig struct {
+	SelectedProcessColor       string            `yaml:"selected_process_color"`
+	SelectedProcessBgColor     string            `yaml:"selected_process_bg_color"`
+	UnselectedProcessColor     string            `yaml:"unselected_process_color"`
+	StatusRunningColor         string            `yaml:"status_running_color"`
+	StatusStoppedColor         string            `yaml:"status_stopped_color"`
+	PlaceholderTerminalBgColor string            `yaml:"placeholder_terminal_bg_color"`
+	PointerChar                string            `yaml:"pointer_char"`
+	StyleClasses               map[string]string `yaml:"style_classes"`
+	ColorLevel                 string            `yaml:"color_level"`
 }
 
 type ProcTmuxConfig struct {
-	Keybinding KeybindingConfig
-	Layout     LayoutConfig
-	Style      struct {
-		PointerChar string
-	}
-	Procs   map[string]ProcessConfig
-	General struct {
-		DetachedSessionName string
-		KillExistingSession bool
-	}
+	Keybinding KeybindingConfig         `yaml:"keybinding"`
+	Layout     LayoutConfig             `yaml:"layout"`
+	Style      StyleConfig              `yaml:"style"`
+	Procs      map[string]ProcessConfig `yaml:"procs"`
+	General    struct {
+		DetachedSessionName string `yaml:"detached_session_name"`
+		KillExistingSession bool   `yaml:"kill_existing_session"`
+	} `yaml:"general"`
+	ShellCmd    []string `yaml:"shell_cmd"`
+	LogFile     string   `yaml:"log_file"`
+	EnableMouse bool     `yaml:"enable_mouse"`
 }
 
 type ProcessConfig struct {
-	Shell      string
-	Cmd        []string
-	Cwd        string
-	Env        map[string]*string
-	Autostart  bool
-	Categories []string
+	Shell       string            `yaml:"shell"`
+	Cmd         []string          `yaml:"cmd"`
+	Cwd         string            `yaml:"cwd"`
+	Env         map[string]string `yaml:"env"`
+	Stop        int          `yaml:"stop"`
+	Autostart   bool              `yaml:"autostart"`
+	Autofocus   bool              `yaml:"autofocus"`
+	Description string            `yaml:"description"`
+	Docs        string            `yaml:"docs"`
+	MetaTags    []string          `yaml:"meta_tags"`
+	Categories  []string          `yaml:"categories"`
 }
 
+// Ensure all config structs are properly tagged for YAML unmarshalling
 func LoadConfig(path string) (*ProcTmuxConfig, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -55,6 +79,7 @@ func LoadConfig(path string) (*ProcTmuxConfig, error) {
 	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
 		return nil, err
 	}
+	log.Printf("Loaded config %+v", cfg)
 
 	cfg = applyDefaults(cfg)
 	return &cfg, nil
@@ -98,6 +123,7 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	if cfg.General.DetachedSessionName == "" {
 		cfg.General.DetachedSessionName = "_proctmux"
 	}
+	log.Println(cfg.General.KillExistingSession)
 
 	return cfg
 }

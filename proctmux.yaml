@@ -70,7 +70,7 @@ procs:
   # each key will show up as its own process/script in the process list
   "tail log":
     # the shell command to run when this process is started
-    shell: "tail -f /tmp/term.log"
+    shell: "tail -f /tmp/proctmux.log"
     # whether to start this process when ProcMux starts
     autostart: true
     # a short description of what this process/command does - will be displayed at the bottom of the screen when selected

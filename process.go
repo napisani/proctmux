@@ -26,13 +26,22 @@ func (s ProcessStatus) String() string {
 }
 
 type Process struct {
-	ID         int
-	Name       string
-	Cmd        string
-	Args       []string
-	PID        int
-	PaneID     string
-	Status     ProcessStatus
-	Categories []string
-	Config     *ProcessConfig
+	ID     int
+	Label  string
+	Status ProcessStatus
+	PaneID string
+	PID    int
+	Config *ProcessConfig
+}
+
+func NewFromProcessConfig(id int, label string, cfg *ProcessConfig) Process {
+	return Process{
+		ID:     id,
+		Label:  label,
+		Status: StatusHalted,
+		PaneID: "",
+		PID:    -1,
+		Config: cfg,
+	}
+
 }

@@ -45,7 +45,7 @@ func main() {
 	}
 	running := new(atomic.Bool)
 	running.Store(true)
-	controller := NewController(state, tmuxContext, running)
+	controller := NewController(&state, tmuxContext, running)
 
 	// --- TmuxDaemon logic ---
 	attachedDaemon, err := NewTmuxDaemon(tmuxContext.SessionID)

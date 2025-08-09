@@ -1,9 +1,11 @@
 package main
 
 import (
-	"fmt"
+	"log"
+	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 )
 
 type Controller struct {
@@ -17,210 +19,281 @@ func NewController(state *AppState, tmuxContext *TmuxContext, running *atomic.Bo
 	return &Controller{state: state, tmuxContext: tmuxContext, running: running}
 }
 
-func (c *Controller) lockAndLoad(f func(*AppState) error) error {
+func (c *Controller) lockAndLoad(f func(*AppState) (*AppState, error)) error {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
-	return f(c.state)
+	newState, err := f(c.state)
+	if err != nil {
+		log.Printf("Error in controller operation: %v", err)
+		return err
+	}
+	if newState != nil {
+		c.state = newState
+	}
+	return nil
 }
 
 func (c *Controller) OnStartup() error {
 	if err := c.tmuxContext.Prepare(); err != nil {
 		return err
 	}
-	return c.lockAndLoad(func(state *AppState) error {
-		for name, procCfg := range state.Config.Procs {
-			if procCfg.Autostart {
-				c.StartProcess(name)
+	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		newState := state
+		var err error
+		for name, proc := range state.Processes {
+			if proc.Config.Autostart {
+				newState, err = startProcess(state, c.tmuxContext, &proc)
+				if err != nil {
+					log.Printf("Error auto-starting process %s: %v", name, err)
+					return nil, err
+				}
 			}
 		}
-		return nil
+		return newState, nil
 	})
 }
 
 func (c *Controller) OnExit() error {
-	c.lockAndLoad(func(state *AppState) error {
-		for _, p := range state.Processes {
-			if p.Status == StatusRunning {
-				c.StopProcess(p.Name)
+	c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		for _, process := range state.Processes {
+			if process.Status == StatusHalted {
+				KillPane(process.PaneID)
 			}
+
 		}
-		return nil
+		err:= c.tmuxContext.Cleanup()
+		if err != nil {
+			log.Printf("Error cleaning up tmux context: %v", err)
+			return nil, err
+		}
+		
+		return state, nil
 	})
 	return c.tmuxContext.Cleanup()
 }
 
-func (c *Controller) OnKeypressDown() error {
-	return c.lockAndLoad(func(state *AppState) error {
-		if state.ActiveIdx < len(state.Processes)-1 {
-			state.ActiveIdx++
-			state.ActiveID = state.Processes[state.ActiveIdx].ID
-		}
-		return nil
+func (c *Controller) handleMove(directionNum int) error {
+	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+
+		return state, nil
 	})
+}
+
+func (c *Controller) OnKeypressDown() error {
+	return c.handleMove(1)
 }
 
 func (c *Controller) OnKeypressUp() error {
-	return c.lockAndLoad(func(state *AppState) error {
-		if state.ActiveIdx > 0 {
-			state.ActiveIdx--
-			state.ActiveID = state.Processes[state.ActiveIdx].ID
-		}
-		return nil
-	})
+	return c.handleMove(-1)
 }
 
 func (c *Controller) OnKeypressStart() error {
-	return c.lockAndLoad(func(state *AppState) error {
-		if len(state.Processes) == 0 {
-			return nil
+	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		if state.Exiting {
+			return state, nil
 		}
-		name := state.Processes[state.ActiveIdx].Name
-		c.StartProcess(name)
-		return nil
+		currentProcess := state.GetProcessByID(state.CurrentProcID)
+
+		if currentProcess == nil {
+			log.Println("No current process selected")
+			return state, nil
+		}
+
+		newState, err := startProcess(state, c.tmuxContext, currentProcess)
+		return newState, err
 	})
 }
 
 func (c *Controller) OnKeypressStop() error {
-	return c.lockAndLoad(func(state *AppState) error {
-		if len(state.Processes) == 0 {
-			return nil
-		}
-		name := state.Processes[state.ActiveIdx].Name
-		c.StopProcess(name)
-		return nil
+	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		currentProcess := state.GetCurrentProcess()
+		return haltProcess(state, currentProcess)
 	})
 }
 
 func (c *Controller) OnKeypressQuit() error {
-	return c.OnExit()
+	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		if state.Exiting {
+			return state, nil
+		}
+
+		newState := NewStateMutation(state).SetExiting().Commit()
+		var err error
+		for _, p := range newState.Processes {
+			if p.Status != StatusHalted {
+				newState, err = haltProcess(newState, &p)
+				if err != nil {
+					log.Printf("Error halting process %s: %v", p.Label, err)
+					return nil, err
+				}
+			}
+		}
+
+		return state, nil
+	})
 }
 
 func (c *Controller) OnFilterStart() error {
-	return c.lockAndLoad(func(state *AppState) error {
-		state.EnteringFilterText = true
-		state.FilterText = ""
-		return nil
+	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		guiState := NewGUIStateMutation(&state.GUIState).StartEnteringFilter().Commit()
+		newState := NewStateMutation(state).SetGUIState(guiState).Commit()
+		return newState, nil
 	})
 }
 
 func (c *Controller) OnFilterSet(text string) error {
-	return c.lockAndLoad(func(state *AppState) error {
-		state.FilterText = text
-		return nil
+	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		guiState := NewGUIStateMutation(&state.GUIState).SetFilterText(text).Commit()
+		newState := NewStateMutation(state).SetGUIState(guiState).Commit()
+		return newState, nil
 	})
 }
 
 func (c *Controller) OnFilterDone() error {
-	return c.lockAndLoad(func(state *AppState) error {
-		state.EnteringFilterText = false
-		return nil
+	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		guiState := NewGUIStateMutation(&state.GUIState).
+			StopEnteringFilter().
+			Commit()
+		newState := NewStateMutation(state).
+			SetGUIState(guiState).
+			Commit()
+		return newState, nil
 	})
 }
 
 func (c *Controller) OnKeypressSwitchFocus() error {
-	return nil
-}
-
-func (c *Controller) OnKeypressFocus() error {
-	return c.lockAndLoad(func(state *AppState) error {
-		if len(state.Processes) == 0 {
-			return nil
+	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		err := focusActivePane(state, c.tmuxContext)
+		if err != nil {
+			log.Printf("Error focusing active pane: %v", err)
 		}
-		p := state.Processes[state.ActiveIdx]
-		return c.tmuxContext.FocusPane(p.PaneID)
+		return state, err
 	})
 }
 
-func (c *Controller) OnKeypressZoom() error {
-	return c.lockAndLoad(func(state *AppState) error {
-		if len(state.Processes) == 0 {
-			return nil
-		}
-		p := state.Processes[state.ActiveIdx]
-		return c.tmuxContext.ToggleZoom(p.PaneID)
-	})
+// func (c *Controller) OnKeypressZoom() error {
+// 	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+// 		if len(state.Processes) == 0 {
+// 			return nil
+// 		}
+// 		p := state.Processes[state.ActiveIdx]
+// 		return c.tmuxContext.ToggleZoom(p.PaneID)
+// 	})
+// }
+
+func startProcess(state *AppState, tmuxContext *TmuxContext, process *Process) (*AppState, error) {
+	isSameProc := process.ID == state.CurrentProcID
+	if process.Status != StatusHalted {
+		return state, nil
+	}
+
+	var newPane string
+	var errPane error
+	if isSameProc {
+		newPane, errPane = tmuxContext.CreatePane(process)
+	} else {
+		newPane, errPane = tmuxContext.CreateDetachedPane(process)
+	}
+
+	if errPane != nil {
+		log.Printf("Error creating pane for process %s: %v", process.Label, errPane)
+		return nil, errPane
+	}
+
+	pid, pidErr := tmuxContext.GetPanePID(newPane)
+	if pidErr != nil {
+		log.Printf("Error getting PID for process %s: %v", process.Label, pidErr)
+		return nil, pidErr
+	}
+	log.Printf("Started process %s with PID %d in pane %s", process.Label, pid, newPane)
+
+	newState := NewStateMutation(state).
+		SetProcessStatus(StatusRunning, process.ID).
+		SetProcessPaneID(newPane, process.ID).
+		SetProcessPID(pid, process.ID).
+		Commit()
+	return newState, nil
+
 }
 
-func (c *Controller) StartProcess(name string) {
-	procCfg, ok := c.state.Config.Procs[name]
-	if !ok {
-		c.state.AddError(fmt.Errorf("process config not found for %s", name))
-		return
+func focusActivePane(state *AppState, tmuxContext *TmuxContext) error {
+	currentProcess := state.GetCurrentProcess()
+	if currentProcess == nil {
+		log.Println("No current process to focus")
+		return nil
 	}
-	cmd := procCfg.Shell
-	if cmd == "" && len(procCfg.Cmd) > 0 {
-		cmd = procCfg.Cmd[0]
-	}
-	args := []string{}
-	if len(procCfg.Cmd) > 1 {
-		args = procCfg.Cmd[1:]
-	}
-	cwd := procCfg.Cwd
-	if cwd == "" {
-		cwd = "."
-	}
-	env := map[string]string{}
-	for k, v := range procCfg.Env {
-		if v != nil {
-			env[k] = *v
-		} else {
-			env[k] = ""
-		}
-	}
-	paneID, err := c.tmuxContext.CreatePane(cmd, cwd, env)
-	if err != nil {
-		c.state.AddError(err)
-		return
-	}
-	pid, err := c.tmuxContext.GetPanePID(paneID)
-	if err != nil {
-		pid = 0
-	}
-	categories := procCfg.Categories
-	p := &Process{
-		ID:         len(c.state.Processes),
-		Name:       name,
-		Cmd:        cmd,
-		Args:       args,
-		PID:        pid,
-		PaneID:     paneID,
-		Status:     StatusRunning,
-		Categories: categories,
-		Config:     &procCfg,
-	}
-	c.state.AddProcess(p)
-	c.state.SetProcessStatus(p.ID, StatusRunning)
-	c.state.SetProcessPID(p.ID, pid)
-	c.state.SetProcessPaneID(p.ID, paneID)
-	c.state.AddMessage("Started process: " + name)
+	return tmuxContext.FocusPane(currentProcess.PaneID)
+
 }
 
-func (c *Controller) StopProcess(name string) {
-	for _, p := range c.state.Processes {
-		if p.Name == name && p.Status == StatusRunning {
-			err := KillPane(p.PaneID)
-			if err == nil {
-				c.state.SetProcessStatus(p.ID, StatusHalted)
-				c.state.SetProcessPID(p.ID, 0)
-				c.state.AddMessage("Stopped process: " + name)
-			} else {
-				c.state.AddError(err)
-			}
-		}
+func haltProcess(state *AppState, process *Process) (*AppState, error) {
+	if process.Status != StatusRunning {
+		log.Printf("Process %s is not running, cannot halt", process.Label)
+		return state, nil
 	}
+
+	if process.PID <= 0 {
+		log.Printf("Process %s has no valid PID to halt", process.Label)
+		return state, nil
+	}
+
+	signal := process.Config.Stop
+	if signal == 0 {
+		signal = 15 // Default to SIGTERM if not specified
+	}
+
+	osProcess, err := os.FindProcess(process.PID)
+	if err != nil {
+		log.Printf("Failed to find process: %v\n", err)
+		return nil, err
+	}
+
+	err = osProcess.Signal(syscall.Signal(signal))
+	if err != nil {
+		log.Printf("Failed to send signal: %v\n", err)
+		return nil, err
+	}
+
+	newState := NewStateMutation(state).
+		SetProcessStatus(StatusHalting, process.ID).
+		Commit()
+
+	return newState, nil
 }
 
 func (c *Controller) OnPidTerminated(pid int) {
-	c.lockAndLoad(func(state *AppState) error {
-		for _, p := range state.Processes {
-			if p.PID == pid && p.Status == StatusRunning {
-				state.SetProcessStatus(p.ID, StatusExited)
-				state.SetProcessPID(p.ID, 0)
-				state.AddMessage("Process exited: " + p.Name)
-				// Focus main pane after process exit
-				c.tmuxContext.FocusPane(state.Processes[0].PaneID)
+	c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		process := state.GetProcessByPID(pid)
+		newState, err := setProcessTerminated(state, process)
+		if err != nil {
+			log.Printf("Error setting process terminated for PID %d: %v", pid, err)
+			return nil, err
+		} else {
+			err = SelectPane(c.tmuxContext.PaneID)
+			if err != nil {
+				log.Printf("Error selecting pane %s: %v", c.tmuxContext.PaneID, err)
+				return nil, err
 			}
 		}
-		return nil
+		return newState, nil
 	})
+}
+
+func setProcessTerminated(state *AppState, process *Process) (*AppState, error) {
+	if process == nil {
+		log.Println("No process found for PID termination")
+		return state, nil
+	}
+
+	if process.Status == StatusHalted {
+		return state, nil
+	}
+
+	log.Printf("Process %s with PID %d has exited", process.Label, process.PID)
+	newState := NewStateMutation(state).
+		SetProcessStatus(StatusExited, process.ID).
+		SetProcessPID(-1, process.ID).
+		Commit()
+
+	return newState, nil
 }
