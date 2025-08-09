@@ -9,6 +9,7 @@ type GUIState struct {
 	Messages           []string
 	FilterText         string
 	EnteringFilterText bool
+	Info               string
 }
 
 type AppState struct {

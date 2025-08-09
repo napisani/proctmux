@@ -35,21 +35,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cfg := m.state.Config
 		kb := cfg.Keybinding
 
-		if m.state.EnteringFilterText {
+		if m.state.GUIState.EnteringFilterText {
 			if contains(kb.FilterSubmit, key) {
 				m.controller.OnFilterDone()
 				m.mode = NormalMode
-				m.state.Info = "Filter applied: " + m.state.FilterText
+				m.state.GUIState.Info = "Filter applied: " + m.state.GUIState.FilterText
 			} else if contains(kb.Filter, key) {
 				m.controller.OnFilterDone()
 				m.mode = NormalMode
-				m.state.Info = "Filter cancelled"
+				m.state.GUIState.Info = "Filter cancelled"
 			} else if key == "backspace" || key == "ctrl+h" {
-				if len(m.state.FilterText) > 0 {
-					m.controller.OnFilterSet(m.state.FilterText[:len(m.state.FilterText)-1])
+				if len(m.state.GUIState.FilterText) > 0 {
+					m.controller.OnFilterSet(m.state.GUIState.FilterText[:len(m.state.GUIState.FilterText)-1])
 				}
 			} else if len(key) == 1 {
-				m.controller.OnFilterSet(m.state.FilterText + key)
+				m.controller.OnFilterSet(m.state.GUIState.FilterText + key)
 			}
 			return m, nil
 		}
@@ -73,23 +73,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if contains(kb.Filter, key) {
 			m.controller.OnFilterStart()
 			m.mode = FilterMode
-			m.state.Info = "Enter filter text:"
+			m.state.GUIState.Info = "Enter filter text:"
 		}
 		if contains(kb.SwitchFocus, key) {
 			m.controller.OnKeypressSwitchFocus()
-			m.state.Info = "Switched focus (not implemented)"
+			m.state.GUIState.Info = "Switched focus (not implemented)"
 		}
 		if contains(kb.Zoom, key) {
-			m.controller.OnKeypressZoom()
-			m.state.Info = "Toggled zoom for active pane"
+			// m.controller.OnKeypressZoom() // TODO: implement or remove
+			m.state.GUIState.Info = "Toggled zoom for active pane"
 		}
 		if contains(kb.Focus, key) {
-			m.controller.OnKeypressFocus()
-			m.state.Info = "Focused active pane"
+			// m.controller.OnKeypressFocus() // TODO: implement or remove
+			m.state.GUIState.Info = "Focused active pane"
 		}
 		if key == "enter" {
 			if len(m.state.Processes) > 0 {
-				m.state.Info = "Attach to pane: " + m.state.Processes[m.state.ActiveIdx].PaneID
+				m.state.GUIState.Info = "Attach to pane: " + func() string {
+					for i := range m.state.Processes {
+						if m.state.Processes[i].ID == m.state.CurrentProcID {
+							return m.state.Processes[i].PaneID
+						}
+					}
+					return ""
+				}()
 			}
 		}
 	}
@@ -105,8 +112,8 @@ func (m Model) View() string {
 			cursor = m.state.Config.Style.PointerChar + " "
 		}
 		cat := ""
-		if len(p.Categories) > 0 {
-			cat = " [" + strings.Join(p.Categories, ",") + "]"
+		if p.Config != nil && len(p.Config.Categories) > 0 {
+			cat = " [" + strings.Join(p.Config.Categories, ",") + "]"
 		}
 		zoom := ""
 		if m.controller.tmuxContext.IsZoomedIn() && p.PaneID == m.controller.tmuxContext.PaneID {
@@ -114,8 +121,8 @@ func (m Model) View() string {
 		}
 		s += fmt.Sprintf("%s%s [%s] PID:%d%s%s (Pane: %s)\n", cursor, p.Label, p.Status.String(), p.PID, cat, zoom, p.PaneID)
 	}
-	if m.state.EnteringFilterText {
-		s += "\nFilter: " + m.state.FilterText + "_\n"
+	if m.state.GUIState.EnteringFilterText {
+		s += "\nFilter: " + m.state.GUIState.FilterText + "_\n"
 	}
 	s += "\n[" + strings.Join(m.state.Config.Keybinding.Start, "/") + "] Start  [" +
 		strings.Join(m.state.Config.Keybinding.Stop, "/") + "] Stop  [" +
@@ -123,16 +130,16 @@ func (m Model) View() string {
 		strings.Join(m.state.Config.Keybinding.Down, "/") + "] Down  [" +
 		strings.Join(m.state.Config.Keybinding.Filter, "/") + "] Filter  [" +
 		strings.Join(m.state.Config.Keybinding.Quit, "/") + "] Quit\n"
-	if m.state.Info != "" {
-		s += "\n" + m.state.Info + "\n"
+	if m.state.GUIState.Info != "" {
+		s += "\n" + m.state.GUIState.Info + "\n"
 	}
-	if len(m.state.Messages) > 0 {
+	if len(m.state.GUIState.Messages) > 0 {
 		s += "\nMessages:\n"
 		start := 0
-		if len(m.state.Messages) > 5 {
-			start = len(m.state.Messages) - 5
+		if len(m.state.GUIState.Messages) > 5 {
+			start = len(m.state.GUIState.Messages) - 5
 		}
-		for _, msg := range m.state.Messages[start:] {
+		for _, msg := range m.state.GUIState.Messages[start:] {
 			s += "- " + msg + "\n"
 		}
 	}
@@ -140,19 +147,23 @@ func (m Model) View() string {
 }
 
 func (m Model) filteredProcesses() []*Process {
-	if m.state.FilterText == "" {
-		return m.state.Processes
+	if m.state.GUIState.FilterText == "" {
+		out := make([]*Process, len(m.state.Processes))
+		for i := range m.state.Processes {
+			out[i] = &m.state.Processes[i]
+		}
+		return out
 	}
 	prefix := m.state.Config.Layout.CategorySearchPrefix
 	var out []*Process
-	if strings.HasPrefix(m.state.FilterText, prefix) {
-		cats := strings.Split(strings.TrimPrefix(m.state.FilterText, prefix), ",")
+	if strings.HasPrefix(m.state.GUIState.FilterText, prefix) {
+		cats := strings.Split(strings.TrimPrefix(m.state.GUIState.FilterText, prefix), ",")
 		for _, p := range m.state.Processes {
 			match := true
 			for _, cat := range cats {
 				cat = strings.TrimSpace(cat)
 				found := false
-				for _, c := range p.Categories {
+				for _, c := range p.Config.Categories {
 					if fuzzyMatch(c, cat) {
 						found = true
 						break
@@ -164,13 +175,13 @@ func (m Model) filteredProcesses() []*Process {
 				}
 			}
 			if match {
-				out = append(out, p)
+				out = append(out, &p)
 			}
 		}
 	} else {
 		for _, p := range m.state.Processes {
-			if fuzzyMatch(p.Label, m.state.FilterText) {
-				out = append(out, p)
+			if fuzzyMatch(p.Label, m.state.GUIState.FilterText) {
+				out = append(out, &p)
 			}
 		}
 	}

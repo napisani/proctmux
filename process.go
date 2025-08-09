@@ -1,5 +1,7 @@
 package main
 
+import "fmt"
+
 type ProcessStatus int
 
 const (
@@ -44,4 +46,20 @@ func NewFromProcessConfig(id int, label string, cfg *ProcessConfig) Process {
 		Config: cfg,
 	}
 
+}
+
+func (p *Process) Command() string {
+	if p.Config.Shell != "" {
+		return p.Config.Shell
+	}
+
+	if len(p.Config.Cmd) == 0 {
+		return ""
+	}
+
+	var result string
+	for _, s := range p.Config.Cmd {
+		result += fmt.Sprintf("'%s' ", s)
+	}
+	return result
 }

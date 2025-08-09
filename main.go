@@ -71,7 +71,7 @@ func main() {
 	if err := controller.OnStartup(); err != nil {
 		log.Fatal("Controller startup failed:", err)
 	}
-	p := tea.NewProgram(NewModel(state, controller))
+	p := tea.NewProgram(NewModel(&state, controller))
 	if err := p.Start(); err != nil {
 		log.Fatal(err)
 	}
