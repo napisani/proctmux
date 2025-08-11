@@ -106,9 +106,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	procs := m.filteredProcesses()
 	s := "Proctmux (Go + Bubbletea version)\n\n"
-	for i, p := range procs {
+	for _, p := range procs {
 		cursor := "  "
-		if i == m.state.CurrentProcID {
+		if p.ID == m.state.CurrentProcID {
 			cursor = m.state.Config.Style.PointerChar + " "
 		}
 		cat := ""
@@ -158,7 +158,8 @@ func (m Model) filteredProcesses() []*Process {
 	var out []*Process
 	if strings.HasPrefix(m.state.GUIState.FilterText, prefix) {
 		cats := strings.Split(strings.TrimPrefix(m.state.GUIState.FilterText, prefix), ",")
-		for _, p := range m.state.Processes {
+		for i := range m.state.Processes {
+			p := &m.state.Processes[i]
 			match := true
 			for _, cat := range cats {
 				cat = strings.TrimSpace(cat)
@@ -175,13 +176,14 @@ func (m Model) filteredProcesses() []*Process {
 				}
 			}
 			if match {
-				out = append(out, &p)
+				out = append(out, p)
 			}
 		}
 	} else {
-		for _, p := range m.state.Processes {
+		for i := range m.state.Processes {
+			p := &m.state.Processes[i]
 			if fuzzyMatch(p.Label, m.state.GUIState.FilterText) {
-				out = append(out, &p)
+				out = append(out, p)
 			}
 		}
 	}

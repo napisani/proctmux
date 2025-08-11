@@ -59,7 +59,7 @@ type ProcessConfig struct {
 	Cmd         []string          `yaml:"cmd"`
 	Cwd         string            `yaml:"cwd"`
 	Env         map[string]string `yaml:"env"`
-	Stop        int          `yaml:"stop"`
+	Stop        int               `yaml:"stop"`
 	Autostart   bool              `yaml:"autostart"`
 	Autofocus   bool              `yaml:"autofocus"`
 	Description string            `yaml:"description"`
@@ -115,7 +115,7 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	}
 
 	if cfg.Layout.CategorySearchPrefix == "" {
-		cfg.Layout.CategorySearchPrefix = ":"
+		cfg.Layout.CategorySearchPrefix = "cat:"
 	}
 	if cfg.Style.PointerChar == "" {
 		cfg.Style.PointerChar = ">"

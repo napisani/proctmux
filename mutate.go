@@ -7,11 +7,9 @@ type StateMutation struct {
 
 // NewStateMutation creates a new mutation from the current state
 func NewStateMutation(state *AppState) *StateMutation {
-	// In Go we don't need to clone the entire state, but we need to
-	// be careful about references vs values
-	stateCopy := *state // This creates a shallow copy
+	// Mutate the provided state in-place so model and controller stay in sync
 	return &StateMutation{
-		initState: &stateCopy,
+		initState: state,
 	}
 }
 

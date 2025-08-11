@@ -57,25 +57,41 @@ func (c *Controller) OnExit() error {
 	c.lockAndLoad(func(state *AppState) (*AppState, error) {
 		for _, process := range state.Processes {
 			if process.Status == StatusHalted {
-				KillPane(process.PaneID)
+				_ = KillPane(process.PaneID)
 			}
-
 		}
-		err:= c.tmuxContext.Cleanup()
-		if err != nil {
+		if err := c.tmuxContext.Cleanup(); err != nil {
 			log.Printf("Error cleaning up tmux context: %v", err)
 			return nil, err
 		}
-		
 		return state, nil
 	})
-	return c.tmuxContext.Cleanup()
+	return nil
 }
 
 func (c *Controller) handleMove(directionNum int) error {
 	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		// Break current pane out to detached session (if any)
+		if curr := state.GetCurrentProcess(); curr != nil && curr.PaneID != "" {
+			_ = c.tmuxContext.BreakPane(curr.PaneID, curr.ID, curr.Label)
+		}
 
-		return state, nil
+		// Move selection
+		mut := NewStateMutation(state)
+		if directionNum > 0 {
+			mut = mut.NextProcess()
+		} else {
+			mut = mut.PreviousProcess()
+		}
+		newState := mut.Commit()
+
+		// Join newly selected pane into main pane (if any)
+		if sel := newState.GetCurrentProcess(); sel != nil && sel.PaneID != "" {
+			if err := c.tmuxContext.JoinPane(sel.PaneID); err != nil {
+				log.Printf("Error joining pane for %s: %v", sel.Label, err)
+			}
+		}
+		return newState, nil
 	})
 }
 
@@ -100,6 +116,11 @@ func (c *Controller) OnKeypressStart() error {
 		}
 
 		newState, err := startProcess(state, c.tmuxContext, currentProcess)
+		if err == nil && currentProcess.Config.Autofocus {
+			if err2 := focusActivePane(newState, c.tmuxContext); err2 != nil {
+				log.Printf("Error auto-focusing %s: %v", currentProcess.Label, err2)
+			}
+		}
 		return newState, err
 	})
 }
@@ -291,7 +312,7 @@ func setProcessTerminated(state *AppState, process *Process) (*AppState, error) 
 
 	log.Printf("Process %s with PID %d has exited", process.Label, process.PID)
 	newState := NewStateMutation(state).
-		SetProcessStatus(StatusExited, process.ID).
+		SetProcessStatus(StatusHalted, process.ID).
 		SetProcessPID(-1, process.ID).
 		Commit()
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"sort"
 	"strings"
 )
 
@@ -40,6 +41,10 @@ func NewAppState(cfg *ProcTmuxConfig) AppState {
 		proc := NewFromProcessConfig(i, k, &proc)
 		s.Processes = append(s.Processes, proc)
 		i++
+	}
+	// Optional alphabetical sort of process list
+	if cfg.Layout.SortProcessListAlpha {
+		sort.Slice(s.Processes, func(i, j int) bool { return s.Processes[i].Label < s.Processes[j].Label })
 	}
 
 	return s
@@ -90,8 +95,8 @@ func (s *AppState) AddError(err error) {
 }
 
 func (s *AppState) GetFilteredProcesses() []Process {
-	// If not filtering, return all processes
-	if s.GUIState.FilterText == "" || !s.GUIState.EnteringFilterText {
+	// If no filter text, return all processes
+	if strings.TrimSpace(s.GUIState.FilterText) == "" {
 		return s.Processes
 	}
 
@@ -99,22 +104,18 @@ func (s *AppState) GetFilteredProcesses() []Process {
 	prefix := s.Config.Layout.CategorySearchPrefix
 
 	var filtered []Process
-
 	for _, proc := range s.Processes {
-		// Check if filtering by category
 		if strings.HasPrefix(filterText, prefix) {
-			categoryFilter := strings.ToLower(filterText[len(prefix):])
+			categoryFilter := strings.ToLower(strings.TrimSpace(filterText[len(prefix):]))
 			if filterByCategory(categoryFilter, &proc) {
 				filtered = append(filtered, proc)
 			}
 		} else {
-			// Filter by name or meta tags
 			if filterByNameOrMetaTags(filterText, &proc) {
 				filtered = append(filtered, proc)
 			}
 		}
 	}
-
 	return filtered
 }
 
@@ -167,40 +168,31 @@ func (s *AppState) SelectFirstProcess() *AppState {
 
 func (s *AppState) MoveProcessSelection(directionNum int) *AppState {
 	log.Printf("move direction: %d", directionNum)
-	// Get filtered processes
 	filteredProcs := s.GetFilteredProcesses()
 	if len(filteredProcs) == 0 {
-		log.Printf("No processes after filtering - no state changes")
 		return s
 	}
 	if len(filteredProcs) == 1 {
-		log.Printf("Only one process after filtering - selecting first process")
 		return s.SelectFirstProcess()
 	}
-
+	// Build ids and locate current index
 	availableProcIDs := make([]int, len(filteredProcs))
 	currentIdx := -1
-	for _, p := range filteredProcs {
-		availableProcIDs = append(availableProcIDs, p.ID)
+	for i, p := range filteredProcs {
+		availableProcIDs[i] = p.ID
 		if p.ID == s.CurrentProcID {
-			currentIdx = p.ID
+			currentIdx = i
 		}
 	}
-	log.Printf("availableProcIDs: %+v", availableProcIDs)
-	log.Printf("currentIdx: %d", currentIdx)
-
 	if currentIdx == -1 {
-		log.Printf("Current process not in filtered list - selecting first process")
 		return s.SelectFirstProcess()
 	}
-
-	newIdx := (currentIdx + directionNum) % len(filteredProcs)
-	log.Printf("newIdx: %d", newIdx)
+	newIdx := currentIdx + directionNum
 	if newIdx < 0 {
 		newIdx = len(filteredProcs) - 1
+	} else {
+		newIdx = newIdx % len(filteredProcs)
 	}
-	newProc := filteredProcs[newIdx]
-	s.CurrentProcID = newProc.ID
+	s.CurrentProcID = availableProcIDs[newIdx]
 	return s
-
 }

@@ -60,8 +60,9 @@ func NewTmuxContext(detachedSession string, killExistingSession bool) (*TmuxCont
 }
 
 func (t *TmuxContext) CreatePane(process *Process) (string, error) {
+	// Create a new pane split off the main proctmux pane, not the process's pane
 	return CreatePane(
-		process.PaneID,
+		t.PaneID,
 		process.Command(),
 		process.Config.Cwd,
 		process.Config.Env,
@@ -70,7 +71,7 @@ func (t *TmuxContext) CreatePane(process *Process) (string, error) {
 
 // Create a pane in the detached session
 func (t *TmuxContext) CreateDetachedPane(process *Process) (string, error) {
-	return CreateDetachedPane(
+	paneID, err := CreateDetachedPane(
 		t.DetachedSessionID,
 		process.ID,
 		process.Label,
@@ -78,6 +79,12 @@ func (t *TmuxContext) CreateDetachedPane(process *Process) (string, error) {
 		process.Config.Cwd,
 		process.Config.Env,
 	)
+	if err != nil {
+		return "", err
+	}
+	// Ensure the new pane remains on screen after exit
+	_ = SetRemainOnExit(paneID, true)
+	return paneID, nil
 }
 
 // Move a pane to the detached session
