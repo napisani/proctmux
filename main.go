@@ -63,6 +63,7 @@ func main() {
 	// Handle dead PIDs
 	go func() {
 		for pid := range deadPidCh {
+			log.Printf("Received dead PID notification: %d", pid)
 			controller.OnPidTerminated(pid)
 		}
 	}()

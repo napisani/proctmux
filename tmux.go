@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// TODO make this part of the configuration
+const splitSize = "70%"
+
 func TmuxNewPane(cmd string, args ...string) (string, error) {
 	fullCmd := strings.Join(append([]string{cmd}, args...), " ")
 	out, err := exec.Command("tmux", "split-window", "-P", "-F", "#{pane_id}", fullCmd).Output()
@@ -93,7 +96,7 @@ func BreakPane(paneID, destSession string, destWindow int, windowLabel string) e
 // JoinPane joins a source pane into a destination pane
 func JoinPane(sourcePane, destPane string) error {
 	return exec.Command("tmux", "join-pane", "-d", "-h",
-		// "-l", "70%",
+		"-l", splitSize,
 		"-f",
 		"-s", sourcePane, "-t", destPane).Run()
 }
@@ -119,7 +122,7 @@ func ToggleZoom(paneID string) error {
 
 // CreatePane creates a new pane with env and working directory
 func CreatePane(parentPaneID, command, workingDir string, env map[string]string) (string, error) {
-	args := []string{"split-window", "-d", "-h", "-l", "70%", "-t", parentPaneID, "-c", workingDir, "-P", "-F", "#{pane_id}"}
+	args := []string{"split-window", "-d", "-h", "-l", splitSize, "-t", parentPaneID, "-c", workingDir, "-P", "-F", "#{pane_id}"}
 	for k, v := range env {
 		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
 	}

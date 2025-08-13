@@ -55,9 +55,15 @@ func (c *Controller) OnStartup() error {
 
 func (c *Controller) OnExit() error {
 	c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		newState := state
+		var err error
 		for _, process := range state.Processes {
 			if process.Status == StatusHalted {
-				_ = KillPane(process.PaneID)
+				newState, err = killPane(newState, &process)
+				if err != nil {
+					log.Printf("Error killing pane on exit for label: %s: %v", process.Label, err)
+					return nil, err
+				}
 			}
 		}
 		if err := c.tmuxContext.Cleanup(); err != nil {
@@ -115,7 +121,13 @@ func (c *Controller) OnKeypressStart() error {
 			return state, nil
 		}
 
-		newState, err := startProcess(state, c.tmuxContext, currentProcess)
+		newState, err := killPane(state, currentProcess)
+		if err != nil {
+			log.Printf("Error killing existing pane for %s: %v", currentProcess.Label, err)
+			return nil, err
+		}
+
+		newState, err = startProcess(state, c.tmuxContext, currentProcess)
 		if err == nil && currentProcess.Config.Autofocus {
 			if err2 := focusActivePane(newState, c.tmuxContext); err2 != nil {
 				log.Printf("Error auto-focusing %s: %v", currentProcess.Label, err2)
@@ -202,17 +214,36 @@ func (c *Controller) OnKeypressSwitchFocus() error {
 // 	})
 // }
 
+func killPane(state *AppState, process *Process) (*AppState, error) {
+	if process.PaneID == "" {
+		return state, nil
+	}
+	err := KillPane(process.PaneID)
+	if err != nil {
+		log.Printf("Error killing pane %s for process %s: %v", process.PaneID, process.Label, err)
+		return nil, err
+	}
+	newState := NewStateMutation(state).
+		SetProcessPaneID("", process.ID).
+		Commit()
+	return newState, nil
+}
+
 func startProcess(state *AppState, tmuxContext *TmuxContext, process *Process) (*AppState, error) {
 	isSameProc := process.ID == state.CurrentProcID
 	if process.Status != StatusHalted {
 		return state, nil
 	}
 
+	log.Printf("current process log before start: %+v", process)
+
 	var newPane string
 	var errPane error
 	if isSameProc {
+		log.Printf("Starting process %s in new attached pane, current process id %d", process.Label, process.ID)
 		newPane, errPane = tmuxContext.CreatePane(process)
 	} else {
+		log.Printf("Starting process %s in new detached pane, current process id %d", process.Label, process.ID)
 		newPane, errPane = tmuxContext.CreateDetachedPane(process)
 	}
 
