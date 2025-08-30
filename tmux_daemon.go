@@ -2,12 +2,18 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
+	"time"
 )
 
 type TmuxDaemon struct {
@@ -17,6 +23,8 @@ type TmuxDaemon struct {
 	Stdout           io.ReadCloser
 	Running          *atomic.Bool
 	SubscriptionName string
+	state            *AppState
+	stateMu          *sync.Mutex
 }
 
 func NewTmuxDaemon(sessionID string) (*TmuxDaemon, error) {
@@ -62,14 +70,16 @@ func (d *TmuxDaemon) ListenForDeadPanes(pidCh chan<- int) error {
 				return
 			}
 			if pid, ok := parsePaneDeadNotification(line, subscriptionName, sessionID); ok {
+				log.Printf("Detected dead pane in session %s with PID %d", sessionID, pid)
 				pidCh <- pid
 			}
 		}
 	}()
+	d.startPidReaper(pidCh)
 	return d.SubscribeToPaneDeadNotifications()
 }
 
-func (d *TmuxDaemon) Kill() error {
+func (d *TmuxDaemon) Destroy() error {
 	d.Running.Store(false)
 	if err := d.Cmd.Process.Kill(); err != nil {
 		return err
@@ -78,6 +88,56 @@ func (d *TmuxDaemon) Kill() error {
 	return err
 }
 
+func pidExists(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if runtime.GOOS != "windows" {
+		err := syscall.Kill(pid, 0)
+		if err == nil {
+			return true
+		}
+		if errors.Is(err, syscall.EPERM) {
+			return true
+		}
+		return false
+	}
+	// For windows, best effort check
+	return true
+}
+
+func (d *TmuxDaemon) startPidReaper(pidCh chan<- int) {
+	ticker := time.NewTicker(10 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for d.Running.Load() {
+			<-ticker.C
+			// snapshot PIDs under controller mutex
+			var pids []int
+			if d.stateMu != nil && d.state != nil {
+				d.stateMu.Lock()
+				for _, p := range d.state.Processes {
+					if p.PID > 0 {
+						pids = append(pids, p.PID)
+					}
+				}
+				d.stateMu.Unlock()
+			}
+			for _, pid := range pids {
+				if !pidExists(pid) {
+					log.Printf("Reaper detected dead PID %d", pid)
+					select {
+					case pidCh <- pid:
+					default:
+						log.Printf("pidCh full, cannot send pid %d", pid)
+					}
+				} else {
+					log.Printf("Reaper checked PID %d, still alive", pid)
+				}
+			}
+		}
+	}()
+}
 func parsePaneDeadNotification(line, subscriptionName, sessionID string) (int, bool) {
 	if strings.HasPrefix(line, "%subscription-changed "+subscriptionName) {
 		ss := strings.Fields(line)

@@ -1,2 +1,5 @@
 target/
 *.swp
+proctmux
+.swn
+.swo

@@ -46,27 +46,12 @@ func main() {
 	running := new(atomic.Bool)
 	running.Store(true)
 	controller := NewController(&state, tmuxContext, running)
+	defer controller.Destroy()
 
-	// --- TmuxDaemon logic ---
-	attachedDaemon, err := NewTmuxDaemon(tmuxContext.SessionID)
-	if err != nil {
-		log.Fatal("Failed to start attached TmuxDaemon:", err)
+	// --- TmuxDaemon logic moved into controller ---
+	if err := controller.RegisterTmuxDaemons(tmuxContext.SessionID, tmuxContext.DetachedSessionID); err != nil {
+		log.Fatal("Failed to register tmux daemons:", err)
 	}
-	detachedDaemon, err := NewTmuxDaemon(tmuxContext.DetachedSessionID)
-	if err != nil {
-		log.Fatal("Failed to start detached TmuxDaemon:", err)
-	}
-	deadPidCh := make(chan int, 10)
-	// Listen for dead panes in both daemons
-	go func() { _ = attachedDaemon.ListenForDeadPanes(deadPidCh) }()
-	go func() { _ = detachedDaemon.ListenForDeadPanes(deadPidCh) }()
-	// Handle dead PIDs
-	go func() {
-		for pid := range deadPidCh {
-			log.Printf("Received dead PID notification: %d", pid)
-			controller.OnPidTerminated(pid)
-		}
-	}()
 	// --- End TmuxDaemon logic ---
 
 	if err := controller.OnStartup(); err != nil {
@@ -76,7 +61,5 @@ func main() {
 	if err := p.Start(); err != nil {
 		log.Fatal(err)
 	}
-	// On shutdown, kill daemons
-	_ = attachedDaemon.Kill()
-	_ = detachedDaemon.Kill()
+
 }

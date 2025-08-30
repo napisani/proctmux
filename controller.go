@@ -13,10 +13,12 @@ type Controller struct {
 	stateMu     sync.Mutex
 	tmuxContext *TmuxContext
 	running     *atomic.Bool
+	pidCh       chan int
+	daemons     []*TmuxDaemon
 }
 
 func NewController(state *AppState, tmuxContext *TmuxContext, running *atomic.Bool) *Controller {
-	return &Controller{state: state, tmuxContext: tmuxContext, running: running}
+	return &Controller{state: state, tmuxContext: tmuxContext, running: running, pidCh: make(chan int, 64)}
 }
 
 func (c *Controller) lockAndLoad(f func(*AppState) (*AppState, error)) error {
@@ -30,6 +32,30 @@ func (c *Controller) lockAndLoad(f func(*AppState) (*AppState, error)) error {
 	if newState != nil {
 		c.state = newState
 	}
+	return nil
+}
+
+func (c *Controller) RegisterTmuxDaemons(attachedID, detachedID string) error {
+	attached, err := NewTmuxDaemon(attachedID)
+	if err != nil {
+		return err
+	}
+	attached.state = c.state
+	attached.stateMu = &c.stateMu
+	detached, err := NewTmuxDaemon(detachedID)
+	if err != nil {
+		return err
+	}
+	detached.state = c.state
+	detached.stateMu = &c.stateMu
+	go func() { _ = attached.ListenForDeadPanes(c.pidCh) }()
+	go func() { _ = detached.ListenForDeadPanes(c.pidCh) }()
+	go func() {
+		for pid := range c.pidCh {
+			c.OnPidTerminated(pid)
+		}
+	}()
+	c.daemons = []*TmuxDaemon{attached, detached}
 	return nil
 }
 
@@ -53,22 +79,25 @@ func (c *Controller) OnStartup() error {
 	})
 }
 
-func (c *Controller) OnExit() error {
+func (c *Controller) Destroy() error {
+
+	close(c.pidCh)
+	for _, d := range c.daemons {
+		d.Destroy()
+	}
 	c.lockAndLoad(func(state *AppState) (*AppState, error) {
+
+		haltAllProcesses(c.state)
 		newState := state
 		var err error
 		for _, process := range state.Processes {
-			if process.Status == StatusHalted {
-				newState, err = killPane(newState, &process)
-				if err != nil {
-					log.Printf("Error killing pane on exit for label: %s: %v", process.Label, err)
-					return nil, err
-				}
+			newState, err = killPane(newState, &process)
+			if err != nil {
+				log.Printf("Error killing pane on exit for label: %s: %v", process.Label, err)
 			}
 		}
 		if err := c.tmuxContext.Cleanup(); err != nil {
 			log.Printf("Error cleaning up tmux context: %v", err)
-			return nil, err
 		}
 		return state, nil
 	})
@@ -204,16 +233,6 @@ func (c *Controller) OnKeypressSwitchFocus() error {
 	})
 }
 
-// func (c *Controller) OnKeypressZoom() error {
-// 	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
-// 		if len(state.Processes) == 0 {
-// 			return nil
-// 		}
-// 		p := state.Processes[state.ActiveIdx]
-// 		return c.tmuxContext.ToggleZoom(p.PaneID)
-// 	})
-// }
-
 func killPane(state *AppState, process *Process) (*AppState, error) {
 	if process.PaneID == "" {
 		return state, nil
@@ -275,7 +294,21 @@ func focusActivePane(state *AppState, tmuxContext *TmuxContext) error {
 		return nil
 	}
 	return tmuxContext.FocusPane(currentProcess.PaneID)
+}
 
+func haltAllProcesses(state *AppState) (*AppState, error) {
+	newState := state
+	var err error
+	for _, process := range state.Processes {
+		if process.Status == StatusRunning {
+			newState, err = haltProcess(newState, &process)
+			if err != nil {
+				log.Printf("Error halting process %s: %v", process.Label, err)
+				return nil, err
+			}
+		}
+	}
+	return newState, nil
 }
 
 func haltProcess(state *AppState, process *Process) (*AppState, error) {
@@ -302,6 +335,15 @@ func haltProcess(state *AppState, process *Process) (*AppState, error) {
 
 	err = osProcess.Signal(syscall.Signal(signal))
 	if err != nil {
+		if err.Error() == "os: process already finished" {
+			log.Printf("Process %s with PID %d has already exited", process.Label, process.PID)
+			newState := NewStateMutation(state).
+				SetProcessStatus(StatusHalted, process.ID).
+				Commit()
+
+			return newState, nil
+		}
+
 		log.Printf("Failed to send signal: %v\n", err)
 		return nil, err
 	}
@@ -324,7 +366,7 @@ func (c *Controller) OnPidTerminated(pid int) {
 			err = SelectPane(c.tmuxContext.PaneID)
 			if err != nil {
 				log.Printf("Error selecting pane %s: %v", c.tmuxContext.PaneID, err)
-				return nil, err
+				// return nil, err
 			}
 		}
 		return newState, nil

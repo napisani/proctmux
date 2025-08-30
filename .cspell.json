@@ -5,6 +5,8 @@
     "proc",
     "procs",
     "proctmux",
-    "procmux"
+    "procmux",
+    "pid",
+    "pids"
   ]
 }
