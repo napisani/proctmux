@@ -80,26 +80,37 @@ func (c *Controller) OnStartup() error {
 }
 
 func (c *Controller) Destroy() error {
-
+	log.Println("Controller destroying, cleaning up...")
 	close(c.pidCh)
 	for _, d := range c.daemons {
+		log.Printf("Destroying daemon for session %s", d.SessionID)
 		d.Destroy()
 	}
 	c.lockAndLoad(func(state *AppState) (*AppState, error) {
-
-		haltAllProcesses(c.state)
-		newState := state
+		accState := state
 		var err error
+		newState, err := haltAllProcesses(c.state)
+		if err != nil {
+			log.Printf("Error halting all processes on exit: %v", err)
+		}
+
+		if newState != nil {
+			accState = newState
+		}
+
 		for _, process := range state.Processes {
 			newState, err = killPane(newState, &process)
 			if err != nil {
 				log.Printf("Error killing pane on exit for label: %s: %v", process.Label, err)
 			}
+			if newState != nil {
+				accState = newState
+			}
 		}
 		if err := c.tmuxContext.Cleanup(); err != nil {
 			log.Printf("Error cleaning up tmux context: %v", err)
 		}
-		return state, nil
+		return accState, nil
 	})
 	return nil
 }
@@ -234,17 +245,17 @@ func (c *Controller) OnKeypressSwitchFocus() error {
 }
 
 func killPane(state *AppState, process *Process) (*AppState, error) {
-	if process.PaneID == "" {
+	if process == nil || process.PaneID == "" {
 		return state, nil
 	}
-	err := KillPane(process.PaneID)
-	if err != nil {
-		log.Printf("Error killing pane %s for process %s: %v", process.PaneID, process.Label, err)
-		return nil, err
-	}
+
 	newState := NewStateMutation(state).
 		SetProcessPaneID("", process.ID).
 		Commit()
+	if err := KillPane(process.PaneID); err != nil {
+		// if there is an error, log it but continue because its likely because the pane is already dead
+		log.Printf("Error killing pane %s for process %s: %v", process.PaneID, process.Label, err)
+	}
 	return newState, nil
 }
 
@@ -297,18 +308,19 @@ func focusActivePane(state *AppState, tmuxContext *TmuxContext) error {
 }
 
 func haltAllProcesses(state *AppState) (*AppState, error) {
-	newState := state
-	var err error
+	accState := state
 	for _, process := range state.Processes {
 		if process.Status == StatusRunning {
-			newState, err = haltProcess(newState, &process)
+			newState, err := haltProcess(accState, &process)
 			if err != nil {
 				log.Printf("Error halting process %s: %v", process.Label, err)
-				return nil, err
+			}
+			if newState != nil {
+				accState = newState
 			}
 		}
 	}
-	return newState, nil
+	return accState, nil
 }
 
 func haltProcess(state *AppState, process *Process) (*AppState, error) {
@@ -347,7 +359,7 @@ func haltProcess(state *AppState, process *Process) (*AppState, error) {
 		log.Printf("Failed to send signal: %v\n", err)
 		return nil, err
 	}
-
+	log.Printf("Sent signal %d to process %s with PID %d", signal, process.Label, process.PID)
 	newState := NewStateMutation(state).
 		SetProcessStatus(StatusHalting, process.ID).
 		Commit()

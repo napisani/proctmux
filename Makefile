@@ -6,6 +6,11 @@ VERSION=0.1.0
 BUILD_DIR=bin
 SRC_DIR=cmd/$(APP_NAME)
 INTERNAL_DIR=internal
+# Run the app
+PHONY: run 
+run: 
+	@echo "Running the application..."
+	go run $(SRC_DIR)/main.go
 
 # Build the binary
 .PHONY: build
