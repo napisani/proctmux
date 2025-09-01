@@ -1,4 +1,4 @@
-package main
+package proctmux
 
 // StateMutation represents a series of mutations to apply to an AppState
 type StateMutation struct {

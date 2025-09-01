@@ -3,3 +3,4 @@ target/
 proctmux
 .swn
 .swo
+bin/

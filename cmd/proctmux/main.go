@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/nick/proctmux/internal/proctmux"
 	"log"
 	"os"
 	"sync/atomic"
@@ -30,7 +31,7 @@ func main() {
 	log.Println("Starting proctmux...")
 
 	// Now logs will go to the file
-	cfg, err := LoadConfig("proctmux.yaml")
+	cfg, err := proctmux.LoadConfig("proctmux.yaml")
 	if err != nil {
 		log.Printf("Config load warning: %v", err)
 	}
@@ -38,14 +39,14 @@ func main() {
 	// print the config for debugging
 	log.Printf("Loaded config: %+v", cfg)
 
-	state := NewAppState(cfg)
-	tmuxContext, err := NewTmuxContext(cfg.General.DetachedSessionName, cfg.General.KillExistingSession)
+	state := proctmux.NewAppState(cfg)
+	tmuxContext, err := proctmux.NewTmuxContext(cfg.General.DetachedSessionName, cfg.General.KillExistingSession)
 	if err != nil {
 		log.Fatal("Failed to create TmuxContext:", err)
 	}
 	running := new(atomic.Bool)
 	running.Store(true)
-	controller := NewController(&state, tmuxContext, running)
+	controller := proctmux.NewController(&state, tmuxContext, running)
 	defer controller.Destroy()
 
 	// --- TmuxDaemon logic moved into controller ---
@@ -57,7 +58,7 @@ func main() {
 	if err := controller.OnStartup(); err != nil {
 		log.Fatal("Controller startup failed:", err)
 	}
-	p := tea.NewProgram(NewModel(&state, controller))
+	p := tea.NewProgram(proctmux.NewModel(&state, controller))
 	if err := p.Start(); err != nil {
 		log.Fatal(err)
 	}
