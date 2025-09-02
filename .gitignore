@@ -1,6 +1,5 @@
 target/
 *.swp
-proctmux
 .swn
 .swo
 bin/
