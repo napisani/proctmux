@@ -2,6 +2,7 @@ package proctmux
 
 import (
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 )
@@ -90,6 +91,7 @@ func KillPane(paneID string) error {
 // BreakPane breaks a pane into a new window in a session
 func BreakPane(paneID, destSession string, destWindow int, windowLabel string) error {
 	target := fmt.Sprintf("%s:%d", destSession, destWindow)
+	log.Printf("running command: tmux break-pane -d -s %s -t %s -n %s", paneID, target, windowLabel)
 	return exec.Command("tmux", "break-pane", "-d", "-s", paneID, "-t", target, "-n", windowLabel).Run()
 }
 

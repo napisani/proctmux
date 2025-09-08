@@ -9,15 +9,20 @@ func (c *Controller) OnStartup() error {
 	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
 		newState := state
 		var err error
-		for name, proc := range state.Processes {
+
+		for idx := range newState.Processes {
+			log.Printf("index %d %d", idx, len(newState.Processes))
+			proc := newState.Processes[idx]
 			if proc.Config.Autostart {
-				newState, err = startProcess(state, c.tmuxContext, &proc)
+				newState, err = startProcess(newState, c.tmuxContext, &proc)
 				if err != nil {
-					log.Printf("Error auto-starting process %s: %v", name, err)
-					return nil, err
+					log.Printf("Error auto-starting process %s: %v", proc.Label, err)
 				}
 			}
 		}
+
+		c.joinSelectedPane(newState)
+
 		return newState, nil
 	})
 }

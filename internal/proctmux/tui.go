@@ -147,10 +147,19 @@ func (m Model) View() string {
 }
 
 func (m Model) filteredProcesses() []*Process {
+
+	// Pre-filter to exclude the dummy process
+	var preFiltered []Process
+	for _, proc := range m.state.Processes {
+		if proc.ID != DummyProcessID {
+			preFiltered = append(preFiltered, proc)
+		}
+	}
+
 	if m.state.GUIState.FilterText == "" {
-		out := make([]*Process, len(m.state.Processes))
-		for i := range m.state.Processes {
-			out[i] = &m.state.Processes[i]
+		out := make([]*Process, len(preFiltered))
+		for i := range preFiltered {
+			out[i] = &preFiltered[i]
 		}
 		return out
 	}
@@ -158,8 +167,8 @@ func (m Model) filteredProcesses() []*Process {
 	var out []*Process
 	if strings.HasPrefix(m.state.GUIState.FilterText, prefix) {
 		cats := strings.Split(strings.TrimPrefix(m.state.GUIState.FilterText, prefix), ",")
-		for i := range m.state.Processes {
-			p := &m.state.Processes[i]
+		for i := range preFiltered {
+			p := &preFiltered[i]
 			match := true
 			for _, cat := range cats {
 				cat = strings.TrimSpace(cat)
@@ -180,8 +189,8 @@ func (m Model) filteredProcesses() []*Process {
 			}
 		}
 	} else {
-		for i := range m.state.Processes {
-			p := &m.state.Processes[i]
+		for i := range preFiltered {
+			p := &preFiltered[i]
 			if fuzzyMatch(p.Label, m.state.GUIState.FilterText) {
 				out = append(out, p)
 			}
@@ -189,7 +198,6 @@ func (m Model) filteredProcesses() []*Process {
 	}
 	return out
 }
-
 func fuzzyMatch(a, b string) bool {
 	a = strings.ToLower(a)
 	b = strings.ToLower(b)

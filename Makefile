@@ -7,7 +7,7 @@ BUILD_DIR=bin
 SRC_DIR=cmd/$(APP_NAME)
 INTERNAL_DIR=internal
 # Run the app
-PHONY: run 
+PHONY: run 
 run: 
 	@echo "Running the application..."
 	go run $(SRC_DIR)/main.go
@@ -18,11 +18,6 @@ build:
 	@echo "Building the application..."
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) $(SRC_DIR)/main.go
 
-# Run the application
-.PHONY: run
-run: build
-	@echo "Running the application..."
-	./$(BUILD_DIR)/$(BINARY_NAME)
 
 # Clean build artifacts
 .PHONY: clean

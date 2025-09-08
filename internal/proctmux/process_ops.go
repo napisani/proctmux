@@ -22,7 +22,7 @@ func killPane(state *AppState, process *Process) (*AppState, error) {
 }
 
 func startProcess(state *AppState, tmuxContext *TmuxContext, process *Process) (*AppState, error) {
-	isSameProc := process.ID == state.CurrentProcID
+	isSameProc := process.ID == state.CurrentProcID || process.ID == DummyProcessID
 	if process.Status != StatusHalted {
 		return state, nil
 	}

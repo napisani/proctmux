@@ -21,12 +21,13 @@ type AppState struct {
 	Exiting       bool
 }
 
+const DummyProcessID = 1
+
 func NewAppState(cfg *ProcTmuxConfig) AppState {
 	s := AppState{
 		Config:        cfg,
 		CurrentProcID: 0,
 		Processes:     []Process{},
-
 		GUIState: GUIState{
 			Messages:           []string{},
 			FilterText:         "",
@@ -36,18 +37,29 @@ func NewAppState(cfg *ProcTmuxConfig) AppState {
 		Exiting: false,
 	}
 
-	i := 1
+	proc := NewFromProcessConfig(DummyProcessID, "Dummy", &ProcessConfig{
+		Cmd:       []string{"echo", "'placeholder'"},
+		Autostart: true,
+	})
+	s.Processes = append(s.Processes, proc)
+
+	i := 2
 	for k, proc := range cfg.Procs {
 		proc := NewFromProcessConfig(i, k, &proc)
 		s.Processes = append(s.Processes, proc)
 		i++
 	}
+
 	// Optional alphabetical sort of process list
 	if cfg.Layout.SortProcessListAlpha {
 		sort.Slice(s.Processes, func(i, j int) bool { return s.Processes[i].Label < s.Processes[j].Label })
 	}
 
 	return s
+}
+
+func (s *AppState) GetDummyProcess() *Process {
+	return s.GetProcessByID(DummyProcessID)
 }
 
 func (s *AppState) GetProcessByID(id int) *Process {
