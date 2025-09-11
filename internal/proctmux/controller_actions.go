@@ -17,15 +17,16 @@ func (c *Controller) OnKeypressStart() error {
 		newState, err := killPane(state, currentProcess)
 		if err != nil {
 			log.Printf("Error killing existing pane for %s: %v", currentProcess.Label, err)
-			return nil, err
 		}
-
-		newState, err = startProcess(state, c.tmuxContext, currentProcess)
-		if err == nil && currentProcess.Config.Autofocus {
-			if err2 := focusActivePane(newState, c.tmuxContext); err2 != nil {
-				log.Printf("Error auto-focusing %s: %v", currentProcess.Label, err2)
-			}
-		}
+		c.breakCurrentPane(newState, true)
+		currentProcess = newState.GetProcessByID(state.CurrentProcID)
+		newState, err = startProcess(newState, c.tmuxContext, currentProcess)
+		// c.joinSelectedPane(newState)
+		// if err == nil && currentProcess.Config.Autofocus {
+		// 	if err2 := focusActivePane(newState, c.tmuxContext); err2 != nil {
+		// 		log.Printf("Error auto-focusing %s: %v", currentProcess.Label, err2)
+		// 	}
+		// }
 		return newState, err
 	})
 }
@@ -69,6 +70,9 @@ func (c *Controller) OnFilterStart() error {
 
 func (c *Controller) OnFilterSet(text string) error {
 	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+		// Update filter text and reset selection
+		state.UpdateFilterText(text)
+		// Keep GUIState in sync for entering text flow
 		guiState := NewGUIStateMutation(&state.GUIState).SetFilterText(text).Commit()
 		newState := NewStateMutation(state).SetGUIState(guiState).Commit()
 		return newState, nil

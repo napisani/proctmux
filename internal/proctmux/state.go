@@ -17,8 +17,9 @@ type AppState struct {
 	Config        *ProcTmuxConfig
 	CurrentProcID int
 	Processes     []Process
-	GUIState      GUIState
-	Exiting       bool
+	GUIState
+	Exiting   bool
+	ActiveIdx int
 }
 
 const DummyProcessID = 1
@@ -207,4 +208,66 @@ func (s *AppState) MoveProcessSelection(directionNum int) *AppState {
 	}
 	s.CurrentProcID = availableProcIDs[newIdx]
 	return s
+}
+
+func fuzzyMatch(a, b string) bool {
+	a = strings.ToLower(a)
+	b = strings.ToLower(b)
+	return strings.Contains(a, b) || strings.Contains(b, a)
+}
+
+func (s *AppState) FilteredProcesses() []*Process {
+	var out []*Process
+	prefix := s.Config.Layout.CategorySearchPrefix
+	if strings.TrimSpace(s.GUIState.FilterText) == "" {
+		for i := range s.Processes {
+			if s.Processes[i].ID != DummyProcessID {
+				out = append(out, &s.Processes[i])
+			}
+		}
+		return out
+	}
+	if strings.HasPrefix(s.GUIState.FilterText, prefix) {
+		cats := strings.Split(strings.TrimPrefix(s.GUIState.FilterText, prefix), ",")
+		for i := range s.Processes {
+			if s.Processes[i].ID == DummyProcessID {
+				continue
+			}
+			match := true
+			for _, cat := range cats {
+				cat = strings.TrimSpace(cat)
+				found := false
+				for _, c := range s.Processes[i].Config.Categories {
+					if fuzzyMatch(c, cat) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					match = false
+					break
+				}
+			}
+			if match {
+				out = append(out, &s.Processes[i])
+			}
+		}
+	} else {
+		for i := range s.Processes {
+			if s.Processes[i].ID == DummyProcessID {
+				continue
+			}
+			if fuzzyMatch(s.Processes[i].Label, s.GUIState.FilterText) {
+				out = append(out, &s.Processes[i])
+			}
+		}
+	}
+	return out
+}
+
+func (s *AppState) UpdateFilterText(newText string) {
+	if s.GUIState.FilterText != newText {
+		s.GUIState.FilterText = newText
+		s.CurrentProcID = -1
+	}
 }

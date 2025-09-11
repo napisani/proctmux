@@ -10,6 +10,12 @@ import (
 // TODO make this part of the configuration
 const splitSize = "70%"
 
+const (
+	SessionTypeForeground = "FOREGROUND_SESSION"
+	SessionTypeDetached   = "DETACHED_SESSION"
+	SessionTypeNone       = "NO_SESSION"
+)
+
 func TmuxNewPane(cmd string, args ...string) (string, error) {
 	fullCmd := strings.Join(append([]string{cmd}, args...), " ")
 	out, err := exec.Command("tmux", "split-window", "-P", "-F", "#{pane_id}", fullCmd).Output()
@@ -85,7 +91,25 @@ func KillSession(sessionID string) error {
 
 // KillPane kills a tmux pane by id
 func KillPane(paneID string) error {
-	return exec.Command("tmux", "kill-pane", "-t", paneID).Run()
+	// Validate pane ID
+	if paneID == "" {
+		return fmt.Errorf("cannot kill pane: pane ID is empty")
+	}
+
+	// Optional: Check if the pane exists before trying to kill it
+	// This adds safety but requires additional command execution
+	checkCmd := exec.Command("tmux", "has-session", "-t", paneID)
+	if err := checkCmd.Run(); err != nil {
+		return fmt.Errorf("pane %s does not exist or is invalid: %w", paneID, err)
+	}
+
+	// Execute the kill command with the validated pane ID
+	killCmd := exec.Command("tmux", "kill-pane", "-t", paneID)
+	if err := killCmd.Run(); err != nil {
+		return fmt.Errorf("failed to kill pane %s: %w", paneID, err)
+	}
+
+	return nil
 }
 
 // BreakPane breaks a pane into a new window in a session
@@ -159,6 +183,25 @@ func PaneVariables(paneID, format string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// GetPaneSessionType returns FOREGROUND_SESSION, DETACHED_SESSION, or NO_SESSION
+// for the given pane by comparing its session_id via tmux.
+// It compares to the provided foreground and detached session IDs.
+func GetPaneSessionType(paneID, foregroundSessionID, detachedSessionID string) (string, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{session_id}").Output()
+	if err != nil {
+		// If the pane doesn't exist or tmux errors, treat as no session.
+		return SessionTypeNone, nil
+	}
+	session := strings.TrimSpace(string(out))
+	if session == strings.TrimSpace(foregroundSessionID) {
+		return SessionTypeForeground, nil
+	}
+	if session == strings.TrimSpace(detachedSessionID) {
+		return SessionTypeDetached, nil
+	}
+	return SessionTypeNone, nil
 }
 
 // ControlMode attaches to a session in control mode

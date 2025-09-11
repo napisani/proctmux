@@ -1,11 +1,13 @@
 package proctmux
 
-import "log"
+import (
+	"log"
+)
 
 func (c *Controller) handleMove(directionNum int) error {
 	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
 		// Break current pane out to detached session (if any)
-		c.breakCurrentPane(state)
+		c.breakCurrentPane(state, true)
 
 		// Move selection
 		mut := NewStateMutation(state)
@@ -23,41 +25,71 @@ func (c *Controller) handleMove(directionNum int) error {
 }
 
 // breakCurrentPane breaks the current pane out to a detached session if one exists
-func (c *Controller) breakCurrentPane(state *AppState) {
-	if curr := state.GetCurrentProcess(); curr != nil && curr.PaneID != "" {
-		log.Printf("Breaking pane for %s out to detached session", curr.Label)
-		err := c.tmuxContext.BreakPane(curr.PaneID, curr.ID, curr.Label)
+func (c *Controller) breakCurrentPane(state *AppState, includeDummy bool) {
+	breakPaneFn := func(paneID string, label string, windowID int) bool {
+		sessionType, err := c.tmuxContext.GetPaneSessionType(paneID)
 		if err != nil {
-			log.Printf("Error breaking pane for %s: %v", curr.Label, err)
+			log.Printf("Error getting session type for pane %s: %v", paneID, err)
+			return false
 		}
-	} else {
-		dummyProc := state.GetDummyProcess()
-		if dummyProc != nil && dummyProc.PaneID != "" {
-			log.Printf("Breaking dummy pane out to detached session PaneID %s", dummyProc.PaneID)
-			err := c.tmuxContext.BreakPane(dummyProc.PaneID, dummyProc.ID, dummyProc.Label)
-			if err != nil {
-				log.Printf("Error breaking dummy pane: %v", err)
-			}
+		if sessionType != SessionTypeForeground {
+			log.Printf("Pane %s is not in foreground session, skipping break", paneID)
+			return false
 		}
+		log.Printf("Breaking pane for %s out to detached session", label)
+		if err := c.tmuxContext.BreakPane(paneID, windowID, label); err != nil {
+			log.Printf("Error breaking pane for %s: %v", label, err)
+		}
+		return true
+	}
+
+	sel := state.GetCurrentProcess()
+	shouldBreak := sel != nil && sel.PaneID != ""
+	if shouldBreak {
+		_ = breakPaneFn(sel.PaneID, sel.Label, sel.ID)
+	}
+	if !includeDummy {
+		return
+	}
+	dummyProc := state.GetDummyProcess()
+	if dummyProc != nil && dummyProc.PaneID != "" {
+		_ = breakPaneFn(dummyProc.PaneID, dummyProc.Label, dummyProc.ID)
 	}
 }
 
 // joinSelectedPane joins the currently selected pane into the main pane if one exists
 func (c *Controller) joinSelectedPane(state *AppState) {
-	log.Printf("Joining selected pane into main pane")
-	if sel := state.GetCurrentProcess(); sel != nil && sel.PaneID != "" {
-		log.Printf("Joining pane for %s into main pane", sel.Label)
-		if err := c.tmuxContext.JoinPane(sel.PaneID); err != nil {
-			log.Printf("Error joining pane for %s: %v", sel.Label, err)
+	joinPaneFn := func(paneID string, label string) bool {
+		sessionType, err := c.tmuxContext.GetPaneSessionType(paneID)
+		if err != nil {
+			log.Printf("Error getting session type for pane %s: %v", paneID, err)
+			return false
+
 		}
-	} else {
+		if sessionType != SessionTypeDetached {
+			log.Printf("Selected pane %s is not in detached session, skipping join", paneID)
+			return false
+		}
+		log.Printf("Joining pane for %s into main pane", label)
+		if err := c.tmuxContext.JoinPane(paneID); err != nil {
+			log.Printf("Error joining pane for %s: %v", label, err)
+		}
+		return true
+	}
+
+	log.Printf("Joining selected pane into main pane")
+	sel := state.GetCurrentProcess()
+	shouldJoin := sel != nil && sel.PaneID != ""
+	foundJoinablePane := false
+	if shouldJoin {
+		foundJoinablePane = joinPaneFn(sel.PaneID, sel.Label)
+
+	}
+	if !foundJoinablePane || !shouldJoin {
 		dummyProc := state.GetDummyProcess()
 		log.Printf("No selected process, checking for dummy pane")
 		if dummyProc != nil && dummyProc.PaneID != "" {
-			log.Printf("Joining dummy pane into main pane PaneID %s", dummyProc.PaneID)
-			if err := c.tmuxContext.JoinPane(dummyProc.PaneID); err != nil {
-				log.Printf("Error joining dummy pane: %v", err)
-			}
+			_ = joinPaneFn(dummyProc.PaneID, dummyProc.Label)
 		}
 	}
 }

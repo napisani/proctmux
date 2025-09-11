@@ -104,7 +104,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	procs := m.filteredProcesses()
+	procs := m.state.FilteredProcesses()
 	s := "Proctmux (Go + Bubbletea version)\n\n"
 	for _, p := range procs {
 		cursor := "  "
@@ -144,67 +144,6 @@ func (m Model) View() string {
 		}
 	}
 	return s
-}
-
-func (m Model) filteredProcesses() []*Process {
-
-	// Pre-filter to exclude the dummy process
-	var preFiltered []Process
-	for _, proc := range m.state.Processes {
-		if proc.ID != DummyProcessID {
-			preFiltered = append(preFiltered, proc)
-		}
-	}
-
-	if m.state.GUIState.FilterText == "" {
-		out := make([]*Process, len(preFiltered))
-		for i := range preFiltered {
-			out[i] = &preFiltered[i]
-		}
-		return out
-	}
-	prefix := m.state.Config.Layout.CategorySearchPrefix
-	var out []*Process
-	if strings.HasPrefix(m.state.GUIState.FilterText, prefix) {
-		cats := strings.Split(strings.TrimPrefix(m.state.GUIState.FilterText, prefix), ",")
-		for i := range preFiltered {
-			p := &preFiltered[i]
-			match := true
-			for _, cat := range cats {
-				cat = strings.TrimSpace(cat)
-				found := false
-				for _, c := range p.Config.Categories {
-					if fuzzyMatch(c, cat) {
-						found = true
-						break
-					}
-				}
-				if !found {
-					match = false
-					break
-				}
-			}
-			if match {
-				out = append(out, p)
-			}
-		}
-	} else {
-		for i := range preFiltered {
-			p := &preFiltered[i]
-			if fuzzyMatch(p.Label, m.state.GUIState.FilterText) {
-				out = append(out, p)
-			}
-		}
-	}
-	return out
-}
-func fuzzyMatch(a, b string) bool {
-	a = strings.ToLower(a)
-	b = strings.ToLower(b)
-	if strings.Contains(a, b) || strings.Contains(b, a) {
-		return true
-	}
-	return false
 }
 
 func contains(slice []string, s string) bool {

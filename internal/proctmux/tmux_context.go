@@ -154,3 +154,8 @@ func (t *TmuxContext) GetPanePID(paneID string) (int, error) {
 	}
 	return strconv.Atoi(strings.TrimSpace(string(out)))
 }
+
+// GetPaneSessionType wraps GetPaneSessionType using the context's session IDs.
+func (t *TmuxContext) GetPaneSessionType(paneID string) (string, error) {
+	return GetPaneSessionType(paneID, t.SessionID, t.DetachedSessionID)
+}
