@@ -44,6 +44,7 @@ func startProcess(state *AppState, tmuxContext *TmuxContext, process *Process, i
 		return state, errPane
 	}
 
+	log.Printf("Created new pane %s for process %s, process id %d", newPane, process.Label, process.ID)
 	pid, pidErr := tmuxContext.GetPanePID(newPane)
 	if pidErr != nil {
 		log.Printf("Error getting PID for process %s: %v", process.Label, pidErr)

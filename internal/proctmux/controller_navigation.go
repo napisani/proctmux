@@ -5,7 +5,7 @@ import (
 )
 
 func (c *Controller) handleMove(directionNum int) error {
-	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		// Break current pane out to detached session (if any)
 		c.breakCurrentPane(state, true)
 
@@ -89,7 +89,14 @@ func (c *Controller) joinSelectedPane(state *AppState) {
 		dummyProc := state.GetDummyProcess()
 		log.Printf("No selected process, checking for dummy pane")
 		if dummyProc != nil && dummyProc.PaneID != "" {
+			log.Printf("Found dummy process, attempting to join its pane")
 			_ = joinPaneFn(dummyProc.PaneID, dummyProc.Label)
+		} else {
+			if dummyProc == nil {
+				log.Printf("No dummy process found")
+			} else {
+				log.Printf("Dummy process found but has no pane ID")
+			}
 		}
 	}
 }

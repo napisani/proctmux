@@ -3,7 +3,7 @@ package proctmux
 import "log"
 
 func (c *Controller) OnKeypressStart() error {
-	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		if state.Exiting {
 			return state, nil
 		}
@@ -31,14 +31,14 @@ func (c *Controller) OnKeypressStart() error {
 }
 
 func (c *Controller) OnKeypressStop() error {
-	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		currentProcess := state.GetCurrentProcess()
 		return haltProcess(state, currentProcess)
 	})
 }
 
 func (c *Controller) OnKeypressQuit() error {
-	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		if state.Exiting {
 			return state, nil
 		}
@@ -60,7 +60,7 @@ func (c *Controller) OnKeypressQuit() error {
 }
 
 func (c *Controller) OnFilterStart() error {
-	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		guiState := NewGUIStateMutation(&state.GUIState).StartEnteringFilter().Commit()
 		newState := NewStateMutation(state).SetGUIState(guiState).Commit()
 		return newState, nil
@@ -68,7 +68,7 @@ func (c *Controller) OnFilterStart() error {
 }
 
 func (c *Controller) OnFilterSet(text string) error {
-	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		// Update filter text and reset selection
 		state.UpdateFilterText(text)
 		// Keep GUIState in sync for entering text flow
@@ -79,7 +79,7 @@ func (c *Controller) OnFilterSet(text string) error {
 }
 
 func (c *Controller) OnFilterDone() error {
-	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		guiState := NewGUIStateMutation(&state.GUIState).
 			StopEnteringFilter().
 			Commit()
@@ -91,7 +91,7 @@ func (c *Controller) OnFilterDone() error {
 }
 
 func (c *Controller) OnKeypressSwitchFocus() error {
-	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		err := focusActivePane(state, c.tmuxContext)
 		if err != nil {
 			log.Printf("Error focusing active pane: %v", err)

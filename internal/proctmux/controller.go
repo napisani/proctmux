@@ -19,7 +19,7 @@ func NewController(state *AppState, tmuxContext *TmuxContext, running *atomic.Bo
 	return &Controller{state: state, tmuxContext: tmuxContext, running: running, pidCh: make(chan int, 64)}
 }
 
-func (c *Controller) lockAndLoad(f func(*AppState) (*AppState, error)) error {
+func (c *Controller) LockAndLoad(f func(*AppState) (*AppState, error)) error {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
 	newState, err := f(c.state)

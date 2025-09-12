@@ -9,21 +9,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type Mode int
-
-const (
-	NormalMode Mode = iota
-	FilterMode
-)
-
 type Model struct {
 	controller *Controller
 	state      *AppState
-	mode       Mode
 }
 
 func NewModel(state *AppState, controller *Controller) Model {
-	return Model{state: state, controller: controller, mode: NormalMode}
+	return Model{state: state, controller: controller}
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -38,12 +30,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state.GUIState.EnteringFilterText {
 			if contains(kb.FilterSubmit, key) {
 				m.controller.OnFilterDone()
-				m.mode = NormalMode
-				m.state.GUIState.Info = "Filter applied: " + m.state.GUIState.FilterText
+				_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
+					gui := NewGUIStateMutation(&state.GUIState).
+						SetMode(NormalMode).
+						SetInfo("Filter applied: " + state.GUIState.FilterText).
+						Commit()
+					newState := NewStateMutation(state).SetGUIState(gui).Commit()
+					return newState, nil
+				})
 			} else if contains(kb.Filter, key) {
 				m.controller.OnFilterDone()
-				m.mode = NormalMode
-				m.state.GUIState.Info = "Filter cancelled"
+				_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
+					gui := NewGUIStateMutation(&state.GUIState).
+						SetMode(NormalMode).
+						SetInfo("Filter cancelled").
+						Commit()
+					newState := NewStateMutation(state).SetGUIState(gui).Commit()
+					return newState, nil
+				})
 			} else if key == "backspace" || key == "ctrl+h" {
 				if len(m.state.GUIState.FilterText) > 0 {
 					m.controller.OnFilterSet(m.state.GUIState.FilterText[:len(m.state.GUIState.FilterText)-1])
@@ -72,31 +76,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if contains(kb.Filter, key) {
 			m.controller.OnFilterStart()
-			m.mode = FilterMode
-			m.state.GUIState.Info = "Enter filter text:"
+			_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
+				gui := NewGUIStateMutation(&state.GUIState).
+					SetMode(FilterMode).
+					SetInfo("Enter filter text:").
+					Commit()
+				newState := NewStateMutation(state).SetGUIState(gui).Commit()
+				return newState, nil
+			})
 		}
 		if contains(kb.SwitchFocus, key) {
 			m.controller.OnKeypressSwitchFocus()
-			m.state.GUIState.Info = "Switched focus (not implemented)"
+			_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
+				gui := NewGUIStateMutation(&state.GUIState).SetInfo("Switched focus (not implemented)").Commit()
+				newState := NewStateMutation(state).SetGUIState(gui).Commit()
+				return newState, nil
+			})
 		}
 		if contains(kb.Zoom, key) {
 			// m.controller.OnKeypressZoom() // TODO: implement or remove
-			m.state.GUIState.Info = "Toggled zoom for active pane"
+			_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
+				gui := NewGUIStateMutation(&state.GUIState).SetInfo("Toggled zoom for active pane").Commit()
+				newState := NewStateMutation(state).SetGUIState(gui).Commit()
+				return newState, nil
+			})
 		}
 		if contains(kb.Focus, key) {
 			// m.controller.OnKeypressFocus() // TODO: implement or remove
-			m.state.GUIState.Info = "Focused active pane"
+			_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
+				gui := NewGUIStateMutation(&state.GUIState).SetInfo("Focused active pane").Commit()
+				newState := NewStateMutation(state).SetGUIState(gui).Commit()
+				return newState, nil
+			})
 		}
 		if key == "enter" {
 			if len(m.state.Processes) > 0 {
-				m.state.GUIState.Info = "Attach to pane: " + func() string {
-					for i := range m.state.Processes {
-						if m.state.Processes[i].ID == m.state.CurrentProcID {
-							return m.state.Processes[i].PaneID
+				_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
+					var pane string
+					for i := range state.Processes {
+						if state.Processes[i].ID == state.CurrentProcID {
+							pane = state.Processes[i].PaneID
+							break
 						}
 					}
-					return ""
-				}()
+					gui := NewGUIStateMutation(&state.GUIState).SetInfo("Attach to pane: " + pane).Commit()
+					newState := NewStateMutation(state).SetGUIState(gui).Commit()
+					return newState, nil
+				})
 			}
 		}
 	}
@@ -104,7 +130,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	procs := m.state.FilteredProcesses()
+	procs := m.state.GetFilteredProcesses()
 	s := "Proctmux (Go + Bubbletea version)\n\n"
 	for _, p := range procs {
 		cursor := "  "

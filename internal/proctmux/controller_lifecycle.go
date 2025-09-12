@@ -6,15 +6,14 @@ func (c *Controller) OnStartup() error {
 	if err := c.tmuxContext.Prepare(); err != nil {
 		return err
 	}
-	return c.lockAndLoad(func(state *AppState) (*AppState, error) {
+	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		newState := state
 		var err error
 
 		for idx := range newState.Processes {
-			log.Printf("index %d %d", idx, len(newState.Processes))
 			proc := newState.Processes[idx]
 			if proc.Config.Autostart {
-
+				log.Printf("Auto-starting process %s", proc.Label)
 				newState, err = startProcess(newState, c.tmuxContext, &proc, true)
 				if err != nil {
 					log.Printf("Error auto-starting process %s: %v", proc.Label, err)
@@ -33,7 +32,7 @@ func (c *Controller) Destroy() error {
 		log.Printf("Destroying daemon for session %s", d.SessionID)
 		d.Destroy()
 	}
-	c.lockAndLoad(func(state *AppState) (*AppState, error) {
+	c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		accState := state
 		var err error
 		newState, err := haltAllProcesses(c.state)

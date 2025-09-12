@@ -166,3 +166,15 @@ func (m *GUIStateMutation) ClearMessages() *GUIStateMutation {
 	m.initState.Messages = []string{}
 	return m
 }
+
+// SetInfo updates the GUI info banner/message.
+func (m *GUIStateMutation) SetInfo(info string) *GUIStateMutation {
+	m.initState.Info = info
+	return m
+}
+
+// SetMode updates the GUI mode.
+func (m *GUIStateMutation) SetMode(mode Mode) *GUIStateMutation {
+	m.initState.Mode = mode
+	return m
+}

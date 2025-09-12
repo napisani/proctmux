@@ -6,11 +6,19 @@ import (
 	"strings"
 )
 
+type Mode int
+
+const (
+	NormalMode Mode = iota
+	FilterMode
+)
+
 type GUIState struct {
 	Messages           []string
 	FilterText         string
 	EnteringFilterText bool
 	Info               string
+	Mode               Mode
 }
 
 type AppState struct {
@@ -107,31 +115,6 @@ func (s *AppState) AddError(err error) {
 	s.GUIState.Messages = append(s.GUIState.Messages, msg)
 }
 
-func (s *AppState) GetFilteredProcesses() []Process {
-	// If no filter text, return all processes
-	if strings.TrimSpace(s.GUIState.FilterText) == "" {
-		return s.Processes
-	}
-
-	filterText := s.GUIState.FilterText
-	prefix := s.Config.Layout.CategorySearchPrefix
-
-	var filtered []Process
-	for _, proc := range s.Processes {
-		if strings.HasPrefix(filterText, prefix) {
-			categoryFilter := strings.ToLower(strings.TrimSpace(filterText[len(prefix):]))
-			if filterByCategory(categoryFilter, &proc) {
-				filtered = append(filtered, proc)
-			}
-		} else {
-			if filterByNameOrMetaTags(filterText, &proc) {
-				filtered = append(filtered, proc)
-			}
-		}
-	}
-	return filtered
-}
-
 // Helper function to filter by category
 func filterByCategory(filterText string, proc *Process) bool {
 	if proc.Config.Categories == nil {
@@ -216,7 +199,7 @@ func fuzzyMatch(a, b string) bool {
 	return strings.Contains(a, b) || strings.Contains(b, a)
 }
 
-func (s *AppState) FilteredProcesses() []*Process {
+func (s *AppState) GetFilteredProcesses() []*Process {
 	var out []*Process
 	prefix := s.Config.Layout.CategorySearchPrefix
 	if strings.TrimSpace(s.GUIState.FilterText) == "" {

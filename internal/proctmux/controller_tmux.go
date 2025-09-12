@@ -27,7 +27,7 @@ func (c *Controller) RegisterTmuxDaemons(attachedID, detachedID string) error {
 }
 
 func (c *Controller) OnPidTerminated(pid int) {
-	c.lockAndLoad(func(state *AppState) (*AppState, error) {
+	c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		process := state.GetProcessByPID(pid)
 		newState, err := setProcessTerminated(state, process)
 		if err != nil {
