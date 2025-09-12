@@ -22,7 +22,7 @@ func killPane(state *AppState, process *Process) (*AppState, error) {
 	return newState, nil
 }
 
-func startProcess(state *AppState, tmuxContext *TmuxContext, process *Process) (*AppState, error) {
+func startProcess(state *AppState, tmuxContext *TmuxContext, process *Process, inDetachedSession bool) (*AppState, error) {
 	if process.Status != StatusHalted {
 		return state, nil
 	}
@@ -30,7 +30,14 @@ func startProcess(state *AppState, tmuxContext *TmuxContext, process *Process) (
 	log.Printf("current process log before start: %+v", process)
 
 	log.Printf("Starting process %s in new detached pane, current process id %d", process.Label, process.ID)
-	newPane, errPane := tmuxContext.CreatePane(process)
+	var newPane string
+	var errPane error
+
+	if inDetachedSession {
+		newPane, errPane = tmuxContext.CreateDetachedPane(process)
+	} else {
+		newPane, errPane = tmuxContext.CreatePane(process)
+	}
 
 	if errPane != nil {
 		log.Printf("Error creating pane for process %s: %v", process.Label, errPane)

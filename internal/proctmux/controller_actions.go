@@ -20,13 +20,12 @@ func (c *Controller) OnKeypressStart() error {
 		}
 		c.breakCurrentPane(newState, true)
 		currentProcess = newState.GetProcessByID(state.CurrentProcID)
-		newState, err = startProcess(newState, c.tmuxContext, currentProcess)
-		// c.joinSelectedPane(newState)
-		// if err == nil && currentProcess.Config.Autofocus {
-		// 	if err2 := focusActivePane(newState, c.tmuxContext); err2 != nil {
-		// 		log.Printf("Error auto-focusing %s: %v", currentProcess.Label, err2)
-		// 	}
-		// }
+		newState, err = startProcess(newState, c.tmuxContext, currentProcess, false)
+		if err == nil && currentProcess.Config.Autofocus {
+			if err2 := focusActivePane(newState, c.tmuxContext); err2 != nil {
+				log.Printf("Error auto-focusing %s: %v", currentProcess.Label, err2)
+			}
+		}
 		return newState, err
 	})
 }

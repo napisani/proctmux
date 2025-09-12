@@ -1,5 +1,5 @@
 {
-  description = "A Nix flake for building and developing the tmux-mcp server.";
+  description = "A Nix flake for building and developing the proctmux cli tool";
 
   # Nixpkgs / NixOS version to use.
   inputs = {
@@ -23,7 +23,7 @@
 
       in {
         packages.default = pkgs.buildGo122Module {
-          pname = "tmux-mcphub";
+          pname = "proctmux";
           inherit version;
           # In 'nix develop', we don't need a copy of the source tree
           # in the Nix store.

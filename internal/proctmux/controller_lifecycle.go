@@ -14,15 +14,13 @@ func (c *Controller) OnStartup() error {
 			log.Printf("index %d %d", idx, len(newState.Processes))
 			proc := newState.Processes[idx]
 			if proc.Config.Autostart {
-				// newState, err = startProcess(newState, c.tmuxContext, &proc)
+
+				newState, err = startProcess(newState, c.tmuxContext, &proc, true)
 				if err != nil {
 					log.Printf("Error auto-starting process %s: %v", proc.Label, err)
 				}
 			}
 		}
-
-		// c.breakCurrentPane(newState)
-		// c.joinSelectedPane(newState)
 
 		return newState, nil
 	})
