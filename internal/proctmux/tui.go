@@ -12,16 +12,22 @@ import (
 type Model struct {
 	controller *Controller
 	state      *AppState
+	termWidth  int
+	termHeight int
 }
 
 func NewModel(state *AppState, controller *Controller) Model {
 	return Model{state: state, controller: controller}
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd { return tea.Batch(tea.EnterAltScreen, tea.ClearScreen) }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.termWidth = msg.Width
+		m.termHeight = msg.Height
+		return m, nil
 	case tea.KeyMsg:
 		key := msg.String()
 		cfg := m.state.Config
@@ -60,7 +66,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if contains(kb.Quit, key) {
 			m.controller.OnKeypressQuit()
-			return m, tea.Quit
+			return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
 		}
 		if contains(kb.Down, key) {
 			m.controller.OnKeypressDown()
@@ -131,7 +137,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) View() string {
 	procs := m.state.GetFilteredProcesses()
-	s := "Proctmux (Go + Bubbletea version)\n\n"
+	// an ANSI terminal control sequence that clears
+	// the screen and repositions the cursor to the home position (top-left corner)
+	clear := "\x1b[2J\x1b[H"
+	s := clear + "\nProctmux\n"
 	for _, p := range procs {
 		cursor := "  "
 		if p.ID == m.state.CurrentProcID {
@@ -167,6 +176,14 @@ func (m Model) View() string {
 		}
 		for _, msg := range m.state.GUIState.Messages[start:] {
 			s += "- " + msg + "\n"
+		}
+	}
+	// Pad to full terminal height so the panel fills the screen
+	if m.termHeight > 0 {
+		lines := strings.Count(s, "\n")
+		missing := m.termHeight - lines
+		for i := 0; i < missing; i++ {
+			s += "\n"
 		}
 	}
 	return s
