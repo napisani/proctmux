@@ -89,6 +89,15 @@ func (s *AppState) GetProcessByPID(pid int) *Process {
 	return nil
 }
 
+func (s *AppState) GetProcessByLabel(label string) *Process {
+	for i, p := range s.Processes {
+		if p.Label == label {
+			return &s.Processes[i]
+		}
+	}
+	return nil
+}
+
 func (s *AppState) GetCurrentProcess() *Process {
 	if s.CurrentProcID == 0 {
 		return nil

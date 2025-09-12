@@ -136,6 +136,14 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	if cfg.General.DetachedSessionName == "" {
 		cfg.General.DetachedSessionName = "_proctmux"
 	}
+	if cfg.SignalServer.Enable{
+		if cfg.SignalServer.Port == 0 {
+			cfg.SignalServer.Port = 9792
+		}
+		if cfg.SignalServer.Host == "" {
+			cfg.SignalServer.Host = "localhost"
+		}
+	}
 	log.Println(cfg.General.KillExistingSession)
 
 	return cfg
