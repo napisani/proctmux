@@ -31,12 +31,13 @@ func startProcess(state *AppState, tmuxContext *TmuxContext, process *Process, i
 
 	log.Printf("Starting process %s in new detached pane, current process id %d", process.Label, process.ID)
 	var newPane string
+	var pid int
 	var errPane error
 
 	if inDetachedSession {
-		newPane, errPane = tmuxContext.CreateDetachedPane(process)
+		newPane, pid, errPane = tmuxContext.CreateDetachedPane(process)
 	} else {
-		newPane, errPane = tmuxContext.CreatePane(process)
+		newPane, pid, errPane = tmuxContext.CreatePane(process)
 	}
 
 	if errPane != nil {
@@ -45,11 +46,6 @@ func startProcess(state *AppState, tmuxContext *TmuxContext, process *Process, i
 	}
 
 	log.Printf("Created new pane %s for process %s, process id %d", newPane, process.Label, process.ID)
-	pid, pidErr := tmuxContext.GetPanePID(newPane)
-	if pidErr != nil {
-		log.Printf("Error getting PID for process %s: %v", process.Label, pidErr)
-		return state, pidErr
-	}
 	log.Printf("Started process %s with PID %d in pane %s", process.Label, pid, newPane)
 
 	newState := NewStateMutation(state).

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -75,13 +76,18 @@ func StartDetachedSession(sessionName string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// SetRemainOnExit sets the remain-on-exit option for a pane
-func SetRemainOnExit(paneID string, on bool) error {
-	val := "off"
-	if on {
-		val = "on"
+func SetGlobalRemainOnExit(enabled bool) error {
+	value := "off"
+	if enabled {
+		value = "on"
 	}
-	return exec.Command("tmux", "set-option", "-t", paneID, "remain-on-exit", val).Run()
+
+	cmd := exec.Command("tmux", "set-option", "-g", "remain-on-exit", value)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to set global remain-on-exit option to %s: %w", value, err)
+	}
+
+	return nil
 }
 
 // KillSession kills a tmux session by id
@@ -127,15 +133,6 @@ func JoinPane(sourcePane, destPane string) error {
 		"-s", sourcePane, "-t", destPane).Run()
 }
 
-// GetPanePID returns the PID of the process running in a pane
-func GetPanePID(paneID string) (string, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{pane_pid}").Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
 // SelectPane selects a pane by id
 func SelectPane(paneID string) error {
 	return exec.Command("tmux", "select-pane", "-t", paneID).Run()
@@ -147,32 +144,57 @@ func ToggleZoom(paneID string) error {
 }
 
 // CreatePane creates a new pane with env and working directory
-func CreatePane(parentPaneID, command, workingDir string, env map[string]string) (string, error) {
-	args := []string{"split-window", "-d", "-h", "-l", splitSize, "-t", parentPaneID, "-c", workingDir, "-P", "-F", "#{pane_id}"}
+func CreatePane(parentPaneID, command, workingDir string, env map[string]string) (string, int, error) {
+	SetGlobalRemainOnExit(true)
+	args := []string{"split-window", "-d", "-h", "-l", splitSize, "-t", parentPaneID, "-c", workingDir, "-P", "-F", "#{pane_id}:#{pane_pid}"}
 	for k, v := range env {
 		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
 	}
 	args = append(args, command)
 	out, err := exec.Command("tmux", args...).Output()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return strings.TrimSpace(string(out)), nil
+
+	parts := strings.Split(strings.TrimSpace(string(out)), ":")
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("unexpected output format from tmux: %s", out)
+	}
+
+	paneID := parts[0]
+	pid, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return paneID, 0, fmt.Errorf("failed to parse PID: %w", err)
+	}
+
+	return paneID, pid, nil
 }
 
 // CreateDetachedPane creates a new detached window with env and working directory
-func CreateDetachedPane(destSession string, destWindow int, windowLabel, command, workingDir string, env map[string]string) (string, error) {
+func CreateDetachedPane(destSession string, destWindow int, windowLabel, command, workingDir string, env map[string]string) (string, int, error) {
 	target := fmt.Sprintf("%s:%d", destSession, destWindow)
-	args := []string{"new-window", "-d", "-t", target, "-n", windowLabel, "-c", workingDir, "-P", "-F", "#{pane_id}"}
+	args := []string{"new-window", "-d", "-t", target, "-n", windowLabel, "-c", workingDir, "-P", "-F", "#{pane_id}:#{pane_pid}"}
 	for k, v := range env {
 		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
 	}
 	args = append(args, command)
 	out, err := exec.Command("tmux", args...).Output()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return strings.TrimSpace(string(out)), nil
+
+	parts := strings.Split(strings.TrimSpace(string(out)), ":")
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("unexpected output format from tmux: %s", out)
+	}
+
+	paneID := parts[0]
+	pid, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return paneID, 0, fmt.Errorf("failed to parse PID: %w", err)
+	}
+
+	return paneID, pid, nil
 }
 
 // PaneVariables returns formatted variables for a pane

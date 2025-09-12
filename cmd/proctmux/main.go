@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/nick/proctmux/internal/proctmux"
 	"log"
 	"os"
 	"sync/atomic"
+
+	"github.com/nick/proctmux/internal/proctmux"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

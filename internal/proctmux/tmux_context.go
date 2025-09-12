@@ -59,7 +59,7 @@ func NewTmuxContext(detachedSession string, killExistingSession bool) (*TmuxCont
 	}, nil
 }
 
-func (t *TmuxContext) CreatePane(process *Process) (string, error) {
+func (t *TmuxContext) CreatePane(process *Process) (string, int, error) {
 	// Create a new pane split off the main proctmux pane, not the process's pane
 	return CreatePane(
 		t.PaneID,
@@ -70,8 +70,8 @@ func (t *TmuxContext) CreatePane(process *Process) (string, error) {
 }
 
 // Create a pane in the detached session
-func (t *TmuxContext) CreateDetachedPane(process *Process) (string, error) {
-	paneID, err := CreateDetachedPane(
+func (t *TmuxContext) CreateDetachedPane(process *Process) (string, int, error) {
+	paneID, pid, err := CreateDetachedPane(
 		t.DetachedSessionID,
 		process.ID,
 		process.Label,
@@ -80,11 +80,9 @@ func (t *TmuxContext) CreateDetachedPane(process *Process) (string, error) {
 		process.Config.Env,
 	)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	// Ensure the new pane remains on screen after exit
-	_ = SetRemainOnExit(paneID, true)
-	return paneID, nil
+	return paneID, pid, nil
 }
 
 // Move a pane to the detached session
@@ -98,14 +96,14 @@ func (t *TmuxContext) JoinPane(sourcePaneID string) error {
 }
 
 func (t *TmuxContext) Prepare() error {
-	return SetRemainOnExit(t.PaneID, true)
+	return SetGlobalRemainOnExit(true)
 }
 
 func (t *TmuxContext) Cleanup() error {
 	if err := KillSession(t.DetachedSessionID); err != nil {
 		return err
 	}
-	return SetRemainOnExit(t.PaneID, false)
+	return SetGlobalRemainOnExit(false)
 }
 
 func (t *TmuxContext) FocusPane(paneID string) error {
