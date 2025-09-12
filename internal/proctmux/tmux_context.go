@@ -3,6 +3,7 @@ package proctmux
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -59,13 +60,44 @@ func NewTmuxContext(detachedSession string, killExistingSession bool) (*TmuxCont
 	}, nil
 }
 
+// buildEnvWithAddPath merges process Env and AddPath into a final env map.
+// It appends AddPath entries to PATH (matching Python's sys.path.append semantics).
+func buildEnvWithAddPath(p *Process) map[string]string {
+	merged := map[string]string{}
+	if p.Config != nil && p.Config.Env != nil {
+		for k, v := range p.Config.Env {
+			merged[k] = v
+		}
+	}
+	// Base PATH from explicit env PATH or current process PATH
+	path := merged["PATH"]
+	if path == "" {
+		path = os.Getenv("PATH")
+	}
+	if p.Config != nil && len(p.Config.AddPath) > 0 {
+		sep := string(os.PathListSeparator)
+		for _, ap := range p.Config.AddPath {
+			if ap == "" {
+				continue
+			}
+			if path == "" {
+				path = ap
+			} else {
+				path = path + sep + ap // append
+			}
+		}
+	}
+	merged["PATH"] = path
+	return merged
+}
+
 func (t *TmuxContext) CreatePane(process *Process) (string, int, error) {
 	// Create a new pane split off the main proctmux pane, not the process's pane
 	return CreatePane(
 		t.PaneID,
 		process.Command(),
 		process.Config.Cwd,
-		process.Config.Env,
+		buildEnvWithAddPath(process),
 	)
 }
 
@@ -77,7 +109,7 @@ func (t *TmuxContext) CreateDetachedPane(process *Process) (string, int, error) 
 		process.Label,
 		process.Command(),
 		process.Config.Cwd,
-		process.Config.Env,
+		buildEnvWithAddPath(process),
 	)
 	if err != nil {
 		return "", 0, err

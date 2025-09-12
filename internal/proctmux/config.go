@@ -18,6 +18,7 @@ type KeybindingConfig struct {
 	SwitchFocus  []string `yaml:"switch_focus"`
 	Zoom         []string `yaml:"zoom"`
 	Focus        []string `yaml:"focus"`
+	Docs         []string `yaml:"docs"`
 }
 
 type LayoutConfig struct {
@@ -26,6 +27,7 @@ type LayoutConfig struct {
 	HideProcessDescriptionPanel bool   `yaml:"hide_process_description_panel"`
 	ProcessesListWidth          int    `yaml:"processes_list_width"`
 	SortProcessListAlpha        bool   `yaml:"sort_process_list_alpha"`
+	SortProcessListRunningFirst bool   `yaml:"sort_process_list_running_first"`
 }
 
 type StyleConfig struct {
@@ -40,6 +42,12 @@ type StyleConfig struct {
 	ColorLevel                 string            `yaml:"color_level"`
 }
 
+type SignalServerConfig struct {
+	Port   int    `yaml:"port"`
+	Host   string `yaml:"host"`
+	Enable bool   `yaml:"enable"`
+}
+
 type ProcTmuxConfig struct {
 	Keybinding KeybindingConfig         `yaml:"keybinding"`
 	Layout     LayoutConfig             `yaml:"layout"`
@@ -49,9 +57,10 @@ type ProcTmuxConfig struct {
 		DetachedSessionName string `yaml:"detached_session_name"`
 		KillExistingSession bool   `yaml:"kill_existing_session"`
 	} `yaml:"general"`
-	ShellCmd    []string `yaml:"shell_cmd"`
-	LogFile     string   `yaml:"log_file"`
-	EnableMouse bool     `yaml:"enable_mouse"`
+	SignalServer SignalServerConfig `yaml:"signal_server"`
+	ShellCmd     []string           `yaml:"shell_cmd"`
+	LogFile      string             `yaml:"log_file"`
+	EnableMouse  bool               `yaml:"enable_mouse"`
 }
 
 type ProcessConfig struct {
@@ -66,6 +75,7 @@ type ProcessConfig struct {
 	Docs        string            `yaml:"docs"`
 	MetaTags    []string          `yaml:"meta_tags"`
 	Categories  []string          `yaml:"categories"`
+	AddPath     []string          `yaml:"add_path"`
 }
 
 // Ensure all config structs are properly tagged for YAML unmarshalling
@@ -112,6 +122,9 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	}
 	if len(cfg.Keybinding.Zoom) == 0 {
 		cfg.Keybinding.Zoom = []string{"z"}
+	}
+	if len(cfg.Keybinding.Docs) == 0 {
+		cfg.Keybinding.Docs = []string{"?"}
 	}
 
 	if cfg.Layout.CategorySearchPrefix == "" {

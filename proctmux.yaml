@@ -9,6 +9,9 @@ layout:
   processes_list_width: 31
   # whether to sort the process list alphabetically
   sort_process_list_alpha: false 
+
+  # whether to sort the process list with running processes first 
+  sort_process_list_running_first: true
 style:
   #foreground color of the process in the process list when it is selected
   selected_process_color: 'ansiblack'

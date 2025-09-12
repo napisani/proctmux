@@ -208,9 +208,8 @@ func (s *AppState) GetFilteredProcesses() []*Process {
 				out = append(out, &s.Processes[i])
 			}
 		}
-		return out
-	}
-	if strings.HasPrefix(s.GUIState.FilterText, prefix) {
+	} else if strings.HasPrefix(s.GUIState.FilterText, prefix) {
+
 		cats := strings.Split(strings.TrimPrefix(s.GUIState.FilterText, prefix), ",")
 		for i := range s.Processes {
 			if s.Processes[i].ID == DummyProcessID {
@@ -244,6 +243,22 @@ func (s *AppState) GetFilteredProcesses() []*Process {
 				out = append(out, &s.Processes[i])
 			}
 		}
+	}
+	// Apply sorting based on config
+	if s.Config.Layout.SortProcessListRunningFirst {
+		sort.SliceStable(out, func(i, j int) bool {
+			ai := out[i].Status == StatusRunning
+			aj := out[j].Status == StatusRunning
+			if ai != aj {
+				return ai
+			}
+			if s.Config.Layout.SortProcessListAlpha {
+				return out[i].Label < out[j].Label
+			}
+			return false
+		})
+	} else if s.Config.Layout.SortProcessListAlpha {
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Label < out[j].Label })
 	}
 	return out
 }
