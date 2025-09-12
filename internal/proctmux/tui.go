@@ -107,6 +107,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return newState, nil
 			})
 		}
+		if contains(kb.Docs, key) {
+			_ = m.controller.OnKeypressDocs()
+		}
 		if contains(kb.Focus, key) {
 			// m.controller.OnKeypressFocus() // TODO: implement or remove
 			_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {

@@ -1,6 +1,9 @@
 package proctmux
 
-import "log"
+import (
+	"log"
+	"strings"
+)
 
 func (c *Controller) OnKeypressStart() error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
@@ -98,4 +101,24 @@ func (c *Controller) OnKeypressSwitchFocus() error {
 		}
 		return state, err
 	})
+}
+
+func (c *Controller) OnKeypressDocs() error {
+	var doc string
+	if err := c.LockAndLoad(func(state *AppState) (*AppState, error) {
+		current := state.GetCurrentProcess()
+		if current == nil || current.Config == nil || len(strings.TrimSpace(current.Config.Docs)) == 0 {
+			gui := NewGUIStateMutation(&state.GUIState).SetInfo("no documentation for process").Commit()
+			newState := NewStateMutation(state).SetGUIState(gui).Commit()
+			return newState, nil
+		}
+		doc = current.Config.Docs
+		return state, nil
+	}); err != nil {
+		return err
+	}
+	if len(strings.TrimSpace(doc)) > 0 {
+		return c.tmuxContext.ShowTextPopup(doc)
+	}
+	return nil
 }

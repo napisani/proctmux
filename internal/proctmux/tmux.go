@@ -3,6 +3,7 @@ package proctmux
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -232,4 +233,21 @@ func ControlMode(sessionID string) (*exec.Cmd, error) {
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	return cmd, nil
+}
+
+// ShowTextPopup opens a tmux popup and renders the given content.
+// Uses `less -R` so the user can scroll; close with 'q'.
+func (t *TmuxContext) ShowTextPopup(content string) error {
+	tmp, err := os.CreateTemp("", "proctmux-doc-*.txt")
+	if err != nil {
+		return err
+	}
+	path := tmp.Name()
+	_ = tmp.Close()
+	defer os.Remove(path)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		return err
+	}
+	cmd := exec.Command("tmux", "display-popup", "-E", "sh", "-lc", fmt.Sprintf("less -R %q", path))
+	return cmd.Run()
 }
