@@ -47,9 +47,21 @@ func NewAppState(cfg *ProcTmuxConfig) AppState {
 	}
 
 	proc := NewFromProcessConfig(DummyProcessID, "Dummy", &ProcessConfig{
-		Cmd:       []string{"echo", "'placeholder'"},
+		Cmd:       []string{},
 		Autostart: true,
 	})
+
+	echo := " echo \"\"; "
+
+	banner := cfg.Layout.PlaceholderBanner
+	for _, line := range strings.Split(banner, "\n") {
+		if strings.TrimSpace(line) != "" {
+			echo += "echo \"" + line + "\"; "
+		}
+	}
+
+	proc.Config.Cmd = []string{"bash", "-c", echo}
+
 	s.Processes = append(s.Processes, proc)
 
 	i := 2

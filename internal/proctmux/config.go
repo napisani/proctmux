@@ -28,6 +28,7 @@ type LayoutConfig struct {
 	ProcessesListWidth          int    `yaml:"processes_list_width"`
 	SortProcessListAlpha        bool   `yaml:"sort_process_list_alpha"`
 	SortProcessListRunningFirst bool   `yaml:"sort_process_list_running_first"`
+	PlaceholderBanner           string `yaml:"placeholder_banner"`
 }
 
 type StyleConfig struct {
@@ -95,6 +96,13 @@ func LoadConfig(path string) (*ProcTmuxConfig, error) {
 	return &cfg, nil
 }
 
+const banner = `
+███    ██  ██████      ██████  ██████   ██████   ██████ ███████ ███████ ███████ 
+████   ██ ██    ██     ██   ██ ██   ██ ██    ██ ██      ██      ██      ██      
+██ ██  ██ ██    ██     ██████  ██████  ██    ██ ██      █████   ███████ ███████ 
+██  ██ ██ ██    ██     ██      ██   ██ ██    ██ ██      ██           ██      ██ 
+██   ████  ██████      ██      ██   ██  ██████   ██████ ███████ ███████ ███████`
+
 func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	if len(cfg.Keybinding.Quit) == 0 {
 		cfg.Keybinding.Quit = []string{"q", "ctrl+c"}
@@ -130,13 +138,16 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	if cfg.Layout.CategorySearchPrefix == "" {
 		cfg.Layout.CategorySearchPrefix = "cat:"
 	}
+	if cfg.Layout.PlaceholderBanner == "" {
+		cfg.Layout.PlaceholderBanner = banner
+	}
 	if cfg.Style.PointerChar == "" {
 		cfg.Style.PointerChar = ">"
 	}
 	if cfg.General.DetachedSessionName == "" {
 		cfg.General.DetachedSessionName = "_proctmux"
 	}
-	if cfg.SignalServer.Enable{
+	if cfg.SignalServer.Enable {
 		if cfg.SignalServer.Port == 0 {
 			cfg.SignalServer.Port = 9792
 		}
@@ -144,6 +155,7 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 			cfg.SignalServer.Host = "localhost"
 		}
 	}
+
 	log.Println(cfg.General.KillExistingSession)
 
 	return cfg
