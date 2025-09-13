@@ -2,28 +2,56 @@ package proctmux
 
 import (
 	"fmt"
-	"strings"
-
 	"slices"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type Model struct {
-	controller *Controller
-	state      *AppState
-	termWidth  int
-	termHeight int
+	controller     *Controller
+	state          *AppState
+	termWidth      int
+	termHeight     int
+	stateUpdateSub chan StateUpdateMsg
 }
 
 func NewModel(state *AppState, controller *Controller) Model {
-	return Model{state: state, controller: controller}
+	model := Model{
+		state:          state,
+		controller:     controller,
+		stateUpdateSub: make(chan StateUpdateMsg),
+	}
+
+	// Register the model's channel with the controller
+	controller.SubscribeToStateChanges(model.stateUpdateSub)
+
+	return model
 }
 
-func (m Model) Init() tea.Cmd { return tea.Batch(tea.EnterAltScreen, tea.ClearScreen) }
+// subscribeToStateUpdates returns a command that listens for state updates
+func (m Model) subscribeToStateUpdates() tea.Cmd {
+	return func() tea.Msg {
+		return <-m.stateUpdateSub
+	}
+}
+
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(
+		tea.EnterAltScreen,
+		tea.ClearScreen,
+		m.subscribeToStateUpdates(),
+	)
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case StateUpdateMsg:
+		// Update the model's state with the new state
+		m.state = msg.State
+		// Re-subscribe to keep getting updates
+		return m, m.subscribeToStateUpdates()
+
 	case tea.WindowSizeMsg:
 		m.termWidth = msg.Width
 		m.termHeight = msg.Height
@@ -138,6 +166,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) appendHelpPanel(s string) string {
+	if m.state.Config.Layout.HideHelp {
+		return s
+	}
+
+	s += "\n[" + strings.Join(m.state.Config.Keybinding.Start, "/") + "] Start  [" +
+		strings.Join(m.state.Config.Keybinding.Stop, "/") + "] Stop  [" +
+		strings.Join(m.state.Config.Keybinding.Up, "/") + "] Up  [" +
+		strings.Join(m.state.Config.Keybinding.Down, "/") + "] Down  [" +
+		strings.Join(m.state.Config.Keybinding.Filter, "/") + "] Filter  [" +
+		strings.Join(m.state.Config.Keybinding.Quit, "/") + "] Quit\n"
+	return s
+}
+
+func (m Model) appendMessages(s string) string {
+	if m.state.GUIState.Info != "" {
+		s += "\n" + m.state.GUIState.Info + "\n"
+	}
+	if len(m.state.GUIState.Messages) > 0 {
+		s += "\nMessages:\n"
+		start := 0
+		if len(m.state.GUIState.Messages) > 5 {
+			start = len(m.state.GUIState.Messages) - 5
+		}
+		for _, msg := range m.state.GUIState.Messages[start:] {
+			s += "- " + msg + "\n"
+		}
+	}
+	return s
+}
+
 func (m Model) View() string {
 	procs := m.state.GetFilteredProcesses()
 	// an ANSI terminal control sequence that clears
@@ -162,25 +221,8 @@ func (m Model) View() string {
 	if m.state.GUIState.EnteringFilterText {
 		s += "\nFilter: " + m.state.GUIState.FilterText + "_\n"
 	}
-	s += "\n[" + strings.Join(m.state.Config.Keybinding.Start, "/") + "] Start  [" +
-		strings.Join(m.state.Config.Keybinding.Stop, "/") + "] Stop  [" +
-		strings.Join(m.state.Config.Keybinding.Up, "/") + "] Up  [" +
-		strings.Join(m.state.Config.Keybinding.Down, "/") + "] Down  [" +
-		strings.Join(m.state.Config.Keybinding.Filter, "/") + "] Filter  [" +
-		strings.Join(m.state.Config.Keybinding.Quit, "/") + "] Quit\n"
-	if m.state.GUIState.Info != "" {
-		s += "\n" + m.state.GUIState.Info + "\n"
-	}
-	if len(m.state.GUIState.Messages) > 0 {
-		s += "\nMessages:\n"
-		start := 0
-		if len(m.state.GUIState.Messages) > 5 {
-			start = len(m.state.GUIState.Messages) - 5
-		}
-		for _, msg := range m.state.GUIState.Messages[start:] {
-			s += "- " + msg + "\n"
-		}
-	}
+	s = m.appendHelpPanel(s)
+	s = m.appendMessages(s)
 	// Pad to full terminal height so the panel fills the screen
 	if m.termHeight > 0 {
 		lines := strings.Count(s, "\n")

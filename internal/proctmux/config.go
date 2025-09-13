@@ -22,10 +22,13 @@ type KeybindingConfig struct {
 }
 
 type LayoutConfig struct {
-	CategorySearchPrefix        string `yaml:"category_search_prefix"`
-	HideHelp                    bool   `yaml:"hide_help"`
-	HideProcessDescriptionPanel bool   `yaml:"hide_process_description_panel"`
-	ProcessesListWidth          int    `yaml:"processes_list_width"`
+	CategorySearchPrefix string `yaml:"category_search_prefix"`
+	HideHelp             bool   `yaml:"hide_help"`
+	ProcessesListWidth   int    `yaml:"processes_list_width"`
+
+	// TODO implement this
+	HideProcessDescriptionPanel bool `yaml:"hide_process_description_panel"`
+
 	SortProcessListAlpha        bool   `yaml:"sort_process_list_alpha"`
 	SortProcessListRunningFirst bool   `yaml:"sort_process_list_running_first"`
 	PlaceholderBanner           string `yaml:"placeholder_banner"`
@@ -141,6 +144,12 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	if cfg.Layout.PlaceholderBanner == "" {
 		cfg.Layout.PlaceholderBanner = banner
 	}
+
+	if cfg.Layout.ProcessesListWidth <= 0 || cfg.Layout.ProcessesListWidth > 100 {
+		log.Println("Invalid or missing processes_list_width in config, defaulting to 30%. provided value: %d", cfg.Layout.ProcessesListWidth)
+		cfg.Layout.ProcessesListWidth = 30
+	}
+
 	if cfg.Style.PointerChar == "" {
 		cfg.Style.PointerChar = ">"
 	}

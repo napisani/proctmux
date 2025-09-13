@@ -75,6 +75,12 @@ func (d *TmuxDaemon) ListenForDeadPanes(pidCh chan<- int) error {
 			}
 		}
 	}()
+
+	// Okay, for now there are two mechanisms by which we can detect dead panes.
+	// the first, and preferred, is via tmux's built-in pane_dead notification. However, from some testing, this seems unreliable under certain conditions. (d.SubscribeToPaneDeadNotifications())
+	// Therefore, we also implement a periodic reaper that checks the liveness of known PIDs.
+	// This is a fallback mechanism to ensure we catch any missed terminations.
+	// We start the reaper in a separate goroutine. (d.startPidReaper(pidCh))
 	d.startPidReaper(pidCh)
 	return d.SubscribeToPaneDeadNotifications()
 }

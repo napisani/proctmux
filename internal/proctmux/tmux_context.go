@@ -14,9 +14,10 @@ type TmuxContext struct {
 	PaneID            string
 	SessionID         string
 	DetachedSessionID string
+	SplitSize         string
 }
 
-func NewTmuxContext(detachedSession string, killExistingSession bool) (*TmuxContext, error) {
+func NewTmuxContext(detachedSession string, killExistingSession bool, processListWidthPercent int) (*TmuxContext, error) {
 	paneID, err := CurrentPane()
 	if err != nil {
 		return nil, fmt.Errorf("could not retrieve tmux pane id: %w", err)
@@ -53,10 +54,13 @@ func NewTmuxContext(detachedSession string, killExistingSession bool) (*TmuxCont
 		}
 		detachedSessionID = id
 	}
+	splitSize := 100 - processListWidthPercent
+
 	return &TmuxContext{
 		PaneID:            paneID,
 		SessionID:         sessionID,
 		DetachedSessionID: detachedSessionID,
+		SplitSize:         strconv.Itoa(splitSize) + "%",
 	}, nil
 }
 
@@ -98,6 +102,7 @@ func (t *TmuxContext) CreatePane(process *Process) (string, int, error) {
 		process.Command(),
 		process.Config.Cwd,
 		buildEnvWithAddPath(process),
+		t.SplitSize,
 	)
 }
 
@@ -124,7 +129,7 @@ func (t *TmuxContext) BreakPane(paneID string, destWindow int, windowLabel strin
 
 // Move a pane from the detached session to the user session
 func (t *TmuxContext) JoinPane(sourcePaneID string) error {
-	return JoinPane(sourcePaneID, t.PaneID)
+	return JoinPane(sourcePaneID, t.PaneID, t.SplitSize)
 }
 
 func (t *TmuxContext) Prepare() error {

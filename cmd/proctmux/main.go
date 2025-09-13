@@ -87,7 +87,7 @@ func main() {
 	log.Printf("Loaded config: %+v", cfg)
 
 	state := proctmux.NewAppState(cfg)
-	tmuxContext, err := proctmux.NewTmuxContext(cfg.General.DetachedSessionName, cfg.General.KillExistingSession)
+	tmuxContext, err := proctmux.NewTmuxContext(cfg.General.DetachedSessionName, cfg.General.KillExistingSession, cfg.Layout.ProcessesListWidth)
 	if err != nil {
 		log.Fatal("Failed to create TmuxContext:", err)
 	}

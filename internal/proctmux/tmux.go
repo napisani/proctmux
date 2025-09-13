@@ -18,29 +18,6 @@ const (
 	SessionTypeNone       = "NO_SESSION"
 )
 
-func TmuxNewPane(cmd string, args ...string) (string, error) {
-	fullCmd := strings.Join(append([]string{cmd}, args...), " ")
-	out, err := exec.Command("tmux", "split-window", "-P", "-F", "#{pane_id}", fullCmd).Output()
-	if err != nil {
-		return "", fmt.Errorf("tmux split-window: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func TmuxAttachPane(paneID string) error {
-	return exec.Command("tmux", "select-pane", "-t", paneID).Run()
-}
-
-func TmuxListPanes() ([]string, error) {
-	out, err := exec.Command("tmux", "list-panes", "-F", "#{pane_id}").Output()
-	if err != nil {
-		return nil, err
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	return lines, nil
-}
-
-// ListSessions returns a list of tmux session names
 func ListSessions() ([]string, error) {
 	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
 	if err != nil {
@@ -127,7 +104,7 @@ func BreakPane(paneID, destSession string, destWindow int, windowLabel string) e
 }
 
 // JoinPane joins a source pane into a destination pane
-func JoinPane(sourcePane, destPane string) error {
+func JoinPane(sourcePane, destPane string, splitSize string) error {
 	return exec.Command("tmux", "join-pane", "-d", "-h",
 		"-l", splitSize,
 		"-f",
@@ -145,7 +122,7 @@ func ToggleZoom(paneID string) error {
 }
 
 // CreatePane creates a new pane with env and working directory
-func CreatePane(parentPaneID, command, workingDir string, env map[string]string) (string, int, error) {
+func CreatePane(parentPaneID, command, workingDir string, env map[string]string, splitSize string) (string, int, error) {
 	SetGlobalRemainOnExit(true)
 	args := []string{"split-window", "-d", "-h", "-l", splitSize, "-t", parentPaneID, "-c", workingDir, "-P", "-F", "#{pane_id}:#{pane_pid}"}
 	for k, v := range env {
