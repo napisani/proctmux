@@ -86,6 +86,22 @@ type ProcessConfig struct {
 
 // Ensure all config structs are properly tagged for YAML unmarshalling
 func LoadConfig(path string) (*ProcTmuxConfig, error) {
+	if path == "" {
+		// Try to load from default file paths in order
+		defaultPaths := []string{"proctmux.yaml", "proctmux.yml", "procmux.yaml", "procmux.yml"}
+		for _, defaultPath := range defaultPaths {
+			if _, err := os.Stat(defaultPath); err == nil {
+				path = defaultPath
+				break
+			}
+		}
+		
+		// If path is still empty, all defaults failed
+		if path == "" {
+			return nil, fmt.Errorf("config file not found in default locations")
+		}
+	}
+	
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

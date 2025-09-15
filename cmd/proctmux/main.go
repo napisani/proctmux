@@ -31,7 +31,8 @@ func setupLogger(logPath string) (*os.File, error) {
 }
 
 func main() {
-	cfg, cfgLoadErr := proctmux.LoadConfig("proctmux.yaml")
+	// TODO implement a --file flag to specify config path
+	cfg, cfgLoadErr := proctmux.LoadConfig("")
 
 	logFile, err := setupLogger(cfg.LogFile)
 	if err != nil {

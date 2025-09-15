@@ -50,16 +50,6 @@
           # Use Go 1.24
           inherit go;
           buildInputs = devDeps;
-
-          # # Ensure Go from buildInputs is available on PATH
-          # nativeBuildInputs = [ pkgs.go ];
-
-          # # Set Go-related environment variables
-          # shellHook = ''
-          #   export PATH=$PATH:$(go env GOPATH)/bin
-          #   export GOPATH=$(go env GOPATH)
-          #   export GOROOT=$(go env GOROOT)
-          # '';
         };
       });
 }
