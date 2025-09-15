@@ -12,6 +12,8 @@ layout:
 
   # whether to sort the process list with running processes first 
   sort_process_list_running_first: true
+  # whether to show debug infomration in the process list itself 
+  enable_debug_process_info: false 
 style:
   #foreground color of the process in the process list when it is selected
   selected_process_color: 'ansiblack'

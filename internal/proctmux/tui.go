@@ -246,6 +246,75 @@ func colorToAnsi(color string) (string, string) {
 	return "", ""
 }
 
+// returns ANSI background color codes and reset code for the given color
+func colorToBgAnsi(color string) (string, string) {
+	c := strings.TrimSpace(strings.ToLower(color))
+	if c == "" || c == "none" {
+		return "", ""
+	}
+
+	// Normalize common config styles like "ansired", "ansi-red", "ansi red",
+	// and collapse separators so we end up with e.g. "brightmagenta".
+	c = strings.TrimPrefix(c, "ansi")
+	c = strings.ReplaceAll(c, " ", "")
+	c = strings.ReplaceAll(c, "-", "")
+	c = strings.ReplaceAll(c, "_", "")
+
+	// Standard reset code
+	const resetCode = "\u001b[0m"
+
+	// 24-bit hex colors: #rrggbb
+	if strings.HasPrefix(c, "#") && len(c) == 7 {
+		r := c[1:3]
+		g := c[3:5]
+		b := c[5:7]
+		return fmt.Sprintf("\u001b[48;2;%d;%d;%dm", hexToDec(r), hexToDec(g), hexToDec(b)), resetCode
+	}
+
+	// Map common greys to brightblack
+	if c == "grey" || c == "gray" || c == "lightgrey" || c == "lightgray" {
+		c = "brightblack"
+	}
+
+	// Standard color names (background)
+	colors := map[string]int{
+		"black":         40,
+		"red":           41,
+		"green":         42,
+		"yellow":        43,
+		"blue":          44,
+		"magenta":       45,
+		"cyan":          46,
+		"white":         47,
+		"brightblack":   100,
+		"brightred":     101,
+		"brightgreen":   102,
+		"brightyellow":  103,
+		"brightblue":    104,
+		"brightmagenta": 105,
+		"brightcyan":    106,
+		"brightwhite":   107,
+	}
+	if code, ok := colors[c]; ok {
+		return fmt.Sprintf("\u001b[%dm", code), resetCode
+	}
+
+	// Fallback: 6-digit hex without '#'
+	if len(c) == 6 {
+		return fmt.Sprintf("\u001b[48;2;%d;%d;%dm", hexToDec(c[0:2]), hexToDec(c[2:4]), hexToDec(c[4:6])), resetCode
+	}
+	// Fallback: 3-digit hex without '#'
+	if len(c) == 3 {
+		rr := string([]byte{c[0], c[0]})
+		gg := string([]byte{c[1], c[1]})
+		bb := string([]byte{c[2], c[2]})
+		return fmt.Sprintf("\u001b[48;2;%d;%d;%dm", hexToDec(rr), hexToDec(gg), hexToDec(bb)), resetCode
+	}
+
+	// Not recognized
+	return "", ""
+}
+
 func contains(slice []string, s string) bool {
 	return slices.Contains(slice, s)
 }
@@ -259,20 +328,41 @@ func (m Model) appendProcess(p *Process, s string) string {
 	}
 	styleStart, styleEnd := colorToAnsi(statusColor)
 
-	if p.ID == m.state.CurrentProcID {
+	var processColorStart, processColorEnd string
+	var bgColorStart, bgColorEnd string
+
+	isSelected := p.ID == m.state.CurrentProcID
+
+	if isSelected {
 		char := m.state.Config.Style.PointerChar
 		cursor = styleStart + char + " " + styleEnd
-	} else if p.Status == StatusRunning {
-		cursor = styleStart + "● " + styleEnd
+		processColorStart, processColorEnd = colorToAnsi(m.state.Config.Style.SelectedProcessColor)
+		bgColorStart, bgColorEnd = colorToBgAnsi(m.state.Config.Style.SelectedProcessBgColor)
 	} else {
-		cursor = styleStart + "■ " + styleEnd
+		if p.Status == StatusRunning {
+			cursor = styleStart + "● " + styleEnd
+		} else {
+			cursor = styleStart + "■ " + styleEnd
+		}
+		processColorStart, processColorEnd = colorToAnsi(m.state.Config.Style.UnselectedProcessColor)
 	}
 
 	cat := ""
 	if p.Config != nil && len(p.Config.Categories) > 0 && m.state.Config.Layout.EnableDebugProcessInfo {
 		cat = " [" + strings.Join(p.Config.Categories, ",") + "]"
 	}
-	s += fmt.Sprintf("%s%s [%s] PID:%d%s (Pane: %s)\n", cursor, p.Label, p.Status.String(), p.PID, cat, p.PaneID)
+
+	processText := ""
+	if m.state.Config.Layout.EnableDebugProcessInfo {
+		processText = fmt.Sprintf("%s [%s] PID:%d%s (Pane: %s)", p.Label, p.Status.String(), p.PID, cat, p.PaneID)
+	} else {
+		processText = p.Label
+	}
+
+	// Apply combined styling
+	styledText := bgColorStart + processColorStart + processText + processColorEnd + bgColorEnd
+	s += fmt.Sprintf("%s%s\n", cursor, styledText)
+
 	return s
 }
 
