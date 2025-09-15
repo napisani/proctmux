@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -14,6 +16,12 @@ import (
 // setupLogger configures the logger to write to the specified file path.
 // It returns an error if the log file cannot be opened.
 func setupLogger(logPath string) (*os.File, error) {
+	if logPath == "" {
+		// Silence all logging when logPath is empty
+		log.SetOutput(io.Discard)
+		return nil, nil
+	}
+
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		return nil, err
@@ -23,18 +31,27 @@ func setupLogger(logPath string) (*os.File, error) {
 }
 
 func main() {
-	// Set up logging to file
-	logFile, err := setupLogger("/tmp/proctmux.log")
-	if err != nil {
-		log.Fatal("Failed to set up logger:", err)
-	}
-	defer logFile.Close()
+	cfg, cfgLoadErr := proctmux.LoadConfig("proctmux.yaml")
 
-	cfg, err := proctmux.LoadConfig("proctmux.yaml")
+	logFile, err := setupLogger(cfg.LogFile)
 	if err != nil {
-		log.Printf("Config load warning: %v", err)
+		fmt.Println("Failed to open log file:", cfgLoadErr)
+		panic(cfgLoadErr)
+	}
+	defer func() {
+		if logFile != nil {
+			logFile.Close()
+		}
+	}()
+
+	if cfg != nil {
+		log.Printf("Config loaded: %+v", cfg)
+	}
+	if cfgLoadErr != nil {
+		log.Printf("Error loading config: %v", cfgLoadErr)
 	}
 
+	// Determine subcommand
 	args := os.Args
 	subcmd := "start"
 	if len(args) > 1 {
@@ -87,9 +104,9 @@ func main() {
 	log.Printf("Loaded config: %+v", cfg)
 
 	state := proctmux.NewAppState(cfg)
-	tmuxContext, err := proctmux.NewTmuxContext(cfg.General.DetachedSessionName, cfg.General.KillExistingSession, cfg.Layout.ProcessesListWidth)
-	if err != nil {
-		log.Fatal("Failed to create TmuxContext:", err)
+	tmuxContext, cfgLoadErr := proctmux.NewTmuxContext(cfg.General.DetachedSessionName, cfg.General.KillExistingSession, cfg.Layout.ProcessesListWidth)
+	if cfgLoadErr != nil {
+		log.Fatal("Failed to create TmuxContext:", cfgLoadErr)
 	}
 	running := new(atomic.Bool)
 	running.Store(true)
@@ -113,7 +130,7 @@ func main() {
 	}
 	defer stopServer()
 
-	p := tea.NewProgram(proctmux.NewModel(&state, controller))
+	p := tea.NewProgram(proctmux.NewModel(&state, controller), tea.WithAltScreen())
 	if err := p.Start(); err != nil {
 		log.Fatal(err)
 	}

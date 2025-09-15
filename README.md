@@ -2,7 +2,7 @@
 
 A Go TUI for managing long‑running processes and scripts, built on top of tmux. It provides a searchable list of defined processes, starts them in real tmux panes/windows, and exposes an optional HTTP signal server and CLI for remote control.
 
-Inspired by https://github.com/napisani/procmux, but using tmux as the terminal engine so you get native tmux features (split panes, zoom, remain‑on‑exit, etc.).
+Inspired by https://github.com/napisani/procmux, but using tmux as the terminal engine so you get native tmux features (split panes, remain‑on‑exit, etc.).
 
 
 ## Requirements
@@ -17,18 +17,11 @@ Inspired by https://github.com/napisani/procmux, but using tmux as the terminal 
 ```bash
 # Build a local binary
 make build
+# or
+go build -o bin/proctmux ./cmd/proctmux
 
-# Run
-./bin/proctmux
-```
-
-Tip: Start tmux first, then run proctmux from a pane:
-
-```bash
-tmux new -s work
-
-# inside existing tmux session
-proctmux     
+# Run (inside an existing tmux session)
+./bin/proctmux        # same as: proctmux start
 ```
 
 
@@ -38,42 +31,40 @@ Create `proctmux.yaml` in your project directory:
 
 ```yaml
 general:
-  # Detached tmux session name used to host background panes
-  detached_session_name: _proctmux
-  # If a detached session with the same name exists, kill and recreate it
-  kill_existing_session: true
+  detached_session_name: _proctmux   # Detached tmux session hosting background panes
+  kill_existing_session: true        # Replace existing detached session if present
 
 layout:
-  # Left list width as a percentage of the screen (1-99)
-  processes_list_width: 31
-  # Hide the help footer
-  hide_help: false
-  # Sort options
-  sort_process_list_alpha: false
+  processes_list_width: 31           # Left list width (percentage 1–99)
+  hide_help: false                   # Hide the help footer
+  sort_process_list_alpha: false     # Alpha sort
   sort_process_list_running_first: true
-  # Optional: change the category filter prefix
-  category_search_prefix: "cat:"
+  category_search_prefix: "cat:"     # Prefix for category filtering
+  enable_debug_process_info: false   # Show extra info (e.g. categories) in the list
 
 style:
-  # Character indicating the current selection in the list
-  pointer_char: "▶"
+  pointer_char: "▶"                   # Selection indicator in the list
+  status_running_color: ansigreen    # Colors for list icons (see color notes below)
+  status_stopped_color: ansired
 
 keybinding:
   quit: ["q", "ctrl+c"]
   up: ["k", "up"]
   down: ["j", "down"]
-  start: ["s", "enter"]
+  start: ["s", "enter"]            # Enter will start if halted (and also attach)
   stop: ["x"]
   filter: ["/"]
   submit_filter: ["enter"]
-  switch_focus: ["tab"]
-  zoom: ["z"]
   docs: ["?"]
+  # Note: switch_focus/zoom/focus are currently not used by the TUI
 
 signal_server:
   enable: true
   host: localhost
   port: 9792
+
+# Write logs here. Leave empty to disable logging entirely.
+log_file: "/tmp/proctmux.log"
 
 procs:
   "tail log":
@@ -107,18 +98,30 @@ Run proctmux inside tmux and use the keybindings below to start/stop and filter.
 - Up/Down: `k`/`up`, `j`/`down`
 - Filter: `/` (type text; `enter` to apply)
 - Quit: `q` or `ctrl+c`
-- Switch Focus: `tab` (move focus to joined pane)
-- Zoom: `z` (toggles tmux zoom of the main pane)
 - Docs: `?` (opens a popup with the process docs text)
+- Enter also attaches focus to the selected process pane after starting (if halted)
 
-All bindings are configurable; see the config reference below.
+Notes:
+- `switch_focus`, `zoom`, and `focus` keybindings exist in config for future parity but are not used by the current TUI.
+
+
+## What’s New (since last commit)
+
+- Logging control: `log_file` now controls logging at runtime. If empty, logging is disabled; otherwise logs are written to the given path (e.g. `/tmp/proctmux.log`).
+- Colored status indicators: the process list renders a colored icon/pointer using:
+  - `style.status_running_color` for running processes (default `ansigreen`)
+  - `style.status_stopped_color` for halted processes (default `ansired`)
+  - Colors accept names like `red`, `brightblue`, `ansigreen`, or full hex `#rrggbb`.
+- Enhanced color parsing: `ansired`/`ansi-red`/`ansi red` and short/long hex forms are recognized.
+- Debug info in list: `layout.enable_debug_process_info: true` shows extra details (e.g., categories) alongside each process.
+- Enter behavior: pressing `enter` both triggers Start (if halted) and attaches focus to the pane.
 
 
 ## How It Works (tmux‑first)
 
 - proctmux runs inside your current tmux session and creates a separate detached tmux session (name from `general.detached_session_name`).
 - Autostart processes are started in the detached session so they run in the background immediately.
-- When you start a process from the UI, its pane is created and can be joined into your main tmux window. Switching selection breaks/join panes to keep the view consistent.
+- When you start a process from the UI, its pane is created and can be joined into your main tmux window. Switching selection breaks/joins panes to keep the view consistent.
 - Panes use tmux’s global `remain-on-exit on` while proctmux runs (restored on exit).
 
 
@@ -134,24 +137,25 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
 - `layout`:
   - `processes_list_width` (int): Percent width of the left process list (1-99). The right pane uses the remainder.
   - `hide_help` (bool): Hide the help/footer text in the UI.
-  - `hide_process_description_panel` (bool): Placeholder; not currently rendered by the UI.
+  - `hide_process_description_panel` (bool): Placeholder in current UI.
   - `sort_process_list_alpha` (bool): Sort the list alphabetically.
   - `sort_process_list_running_first` (bool): When sorting, place running processes first.
   - `category_search_prefix` (string): Prefix to activate category filtering. Default `cat:`.
   - `placeholder_banner` (string): Optional ASCII banner for the right pane before any pane joins.
+  - `enable_debug_process_info` (bool): Show extra details (e.g., categories) in the process list.
 - `style`:
-  - `pointer_char` (string): Selection indicator in the list (default `>`). Other style fields exist for future parity but are not yet applied by the current TUI renderer:
-    - `selected_process_color`, `selected_process_bg_color`, `unselected_process_color`, `status_running_color`, `status_stopped_color`, `placeholder_terminal_bg_color`, `style_classes`, `color_level`.
+  - `pointer_char` (string): Selection indicator in the list (default `>`).
+  - `status_running_color`, `status_stopped_color` (string): Colors for list icons/pointer. Accepts names like `red`, `brightmagenta`, `ansiblue`, or hex `#ff00ff`.
+  - Other fields exist for future parity and may not currently affect the UI: `selected_process_color`, `selected_process_bg_color`, `unselected_process_color`, `placeholder_terminal_bg_color`, `style_classes`, `color_level`.
 - `keybinding` (each value is a list of keys):
-  - `quit`, `up`, `down`, `start`, `stop`, `filter`, `submit_filter`, `switch_focus`, `zoom`, `docs`.
-  - Keys are strings like `q`, `enter`, `up`, `down`, `ctrl+c`, etc.
+  - `quit`, `up`, `down`, `start`, `stop`, `filter`, `submit_filter`, `docs`. Unused (for now): `switch_focus`, `zoom`, `focus`.
 - `signal_server`:
   - `enable` (bool): Start the HTTP server alongside the UI.
   - `host` (string): Bind host (e.g. `localhost`). Default `localhost` when enabled.
   - `port` (int): Bind port. Default `9792` when enabled.
-- `shell_cmd` (string list): Reserved for parity with procmux; currently unused by proctmux (each process specifies its own command).
-- `log_file` (string): Reserved; the current build logs to `/tmp/proctmux.log`.
-- `enable_mouse` (bool): Reserved; mouse support is not currently wired.
+- `log_file` (string): Path to write logs. Leave empty to disable logging entirely.
+- `shell_cmd` (string list): Present for config parity; currently unused by proctmux.
+- `enable_mouse` (bool): Present for config parity; not wired in current TUI.
 - `procs` (map[string]Process): Your defined processes (see below).
 
 ### Process definition (`procs.<name>`) fields
@@ -166,7 +170,7 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
 - `autostart` (bool): Start automatically when proctmux launches (runs in the detached session).
 - `autofocus` (bool): After starting via keybinding, focus the process pane.
 - `description` (string): Short description shown in the UI footer.
-- `docs` (string): Free‑form text displayed in a tmux popup (`less -R`). Plain text and ANSI escapes work; HTML/markup tags are not interpreted.
+- `docs` (string): Free‑form text displayed in a tmux popup (`less -R`). Plain text and ANSI escapes work.
 - `categories` (string list): Tags for category filtering. Filter with `cat:<tag>` (comma‑separate for AND matching, e.g. `cat:build,backend`).
 - `meta_tags` (string list): Present for parity; not currently used by filtering logic.
 
@@ -236,14 +240,7 @@ Notes:
 - Run inside tmux: proctmux requires a current tmux pane and session (it calls `tmux display-message -p`).
 - Remain‑on‑exit: proctmux enables tmux `remain-on-exit` globally while running; it restores the previous setting on exit.
 - Stop behavior: `stop` uses a numeric signal (default SIGTERM=15). Use `2` for Ctrl‑C‑like behavior.
-- Styling: only `pointer_char` is currently applied by the UI; other style fields are reserved for future parity.
-
-
-## Differences vs procmux
-
-- tmux‑native: processes run in real tmux panes/windows (join/break between your current session and a dedicated detached session).
-- Config compatibility: overall structure and field names mirror procmux, but some fields are currently placeholders (`style` colors, `meta_tags`, `shell_cmd`, `enable_mouse`).
-- Docs rendering: plain text; `less -R` supports ANSI escapes, not HTML‑like tags.
+- Colors: `status_*_color` accepts common names (`red`, `brightblue`, `ansigreen`) and hex (`#rrggbb`).
 
 
 ## License

@@ -67,7 +67,6 @@ shell_cmd:
   - '-c'
 
 # if this property is defined, the app will log all debug, info, error level logs to the designated file
-log_file: /tmp/term.log
 enable_mouse: true
 procs:
   # each key will show up as its own process/script in the process list
@@ -135,3 +134,4 @@ procs:
 
 signal_server:
   enable: true
+log_file: "/tmp/proctmux.log"

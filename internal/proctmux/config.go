@@ -1,7 +1,6 @@
 package proctmux
 
 import (
-	"log"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -15,10 +14,12 @@ type KeybindingConfig struct {
 	Stop         []string `yaml:"stop"`
 	Filter       []string `yaml:"filter"`
 	FilterSubmit []string `yaml:"submit_filter"`
-	SwitchFocus  []string `yaml:"switch_focus"`
-	Zoom         []string `yaml:"zoom"`
-	Focus        []string `yaml:"focus"`
 	Docs         []string `yaml:"docs"`
+
+	// TODO not used in the tmux implementation
+	Zoom        []string `yaml:"zoom"`
+	SwitchFocus []string `yaml:"switch_focus"`
+	Focus       []string `yaml:"focus"`
 }
 
 type LayoutConfig struct {
@@ -32,6 +33,7 @@ type LayoutConfig struct {
 	SortProcessListAlpha        bool   `yaml:"sort_process_list_alpha"`
 	SortProcessListRunningFirst bool   `yaml:"sort_process_list_running_first"`
 	PlaceholderBanner           string `yaml:"placeholder_banner"`
+	EnableDebugProcessInfo      bool   `yaml:"enable_debug_process_info"`
 }
 
 type StyleConfig struct {
@@ -93,7 +95,6 @@ func LoadConfig(path string) (*ProcTmuxConfig, error) {
 	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
 		return nil, err
 	}
-	log.Printf("Loaded config %+v", cfg)
 
 	cfg = applyDefaults(cfg)
 	return &cfg, nil
@@ -146,7 +147,6 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	}
 
 	if cfg.Layout.ProcessesListWidth <= 0 || cfg.Layout.ProcessesListWidth > 100 {
-		log.Println("Invalid or missing processes_list_width in config, defaulting to 30%. provided value: %d", cfg.Layout.ProcessesListWidth)
 		cfg.Layout.ProcessesListWidth = 30
 	}
 
@@ -163,9 +163,27 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 		if cfg.SignalServer.Host == "" {
 			cfg.SignalServer.Host = "localhost"
 		}
-	}
 
-	log.Println(cfg.General.KillExistingSession)
+		if cfg.Style.SelectedProcessColor == "" {
+			cfg.Style.SelectedProcessColor = "white"
+		}
+		if cfg.Style.SelectedProcessBgColor == "" {
+			cfg.Style.SelectedProcessBgColor = "magenta"
+		}
+		if cfg.Style.StatusRunningColor == "" {
+			cfg.Style.StatusRunningColor = "green"
+		}
+		if cfg.Style.StatusStoppedColor == "" {
+			cfg.Style.StatusStoppedColor = "red"
+		}
+		if cfg.Style.PlaceholderTerminalBgColor == "" {
+			cfg.Style.PlaceholderTerminalBgColor = "black"
+		}
+		if cfg.Style.ColorLevel == "" {
+			cfg.Style.ColorLevel = "256"
+		}
+
+	}
 
 	return cfg
 }

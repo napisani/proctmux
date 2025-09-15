@@ -17,6 +17,11 @@ func (c *Controller) OnKeypressStart() error {
 			return state, nil
 		}
 
+		if currentProcess.Status != StatusHalted {
+			log.Printf("Process %s is already running", currentProcess.Label)
+			return state, nil
+		}
+
 		newState, err := killPane(state, currentProcess)
 		if err != nil {
 			log.Printf("Error killing existing pane for %s: %v", currentProcess.Label, err)

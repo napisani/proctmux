@@ -6,6 +6,13 @@ import (
 
 func (c *Controller) handleMove(directionNum int) error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
+
+		numProcesses := len(state.GetFilteredProcesses())
+		if numProcesses == 0 {
+			log.Printf("No processes available to move selection")
+			return state, nil
+		}
+
 		// Break current pane out to detached session (if any)
 		c.breakCurrentPane(state, true)
 

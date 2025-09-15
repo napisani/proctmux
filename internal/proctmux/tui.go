@@ -38,8 +38,6 @@ func (m Model) subscribeToStateUpdates() tea.Cmd {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		tea.EnterAltScreen,
-		tea.ClearScreen,
 		m.subscribeToStateUpdates(),
 	)
 }
@@ -67,21 +65,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
 					gui := NewGUIStateMutation(&state.GUIState).
 						SetMode(NormalMode).
-						SetInfo("Filter applied: " + state.GUIState.FilterText).
 						Commit()
 					newState := NewStateMutation(state).SetGUIState(gui).Commit()
 					return newState, nil
 				})
 			} else if contains(kb.Filter, key) {
 				m.controller.OnFilterDone()
-				_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-					gui := NewGUIStateMutation(&state.GUIState).
-						SetMode(NormalMode).
-						SetInfo("Filter cancelled").
-						Commit()
-					newState := NewStateMutation(state).SetGUIState(gui).Commit()
-					return newState, nil
-				})
 			} else if key == "backspace" || key == "ctrl+h" {
 				if len(m.state.GUIState.FilterText) > 0 {
 					m.controller.OnFilterSet(m.state.GUIState.FilterText[:len(m.state.GUIState.FilterText)-1])
@@ -113,24 +102,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
 				gui := NewGUIStateMutation(&state.GUIState).
 					SetMode(FilterMode).
-					SetInfo("Enter filter text:").
 					Commit()
-				newState := NewStateMutation(state).SetGUIState(gui).Commit()
-				return newState, nil
-			})
-		}
-		if contains(kb.SwitchFocus, key) {
-			m.controller.OnKeypressSwitchFocus()
-			_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-				gui := NewGUIStateMutation(&state.GUIState).SetInfo("Switched focus (not implemented)").Commit()
-				newState := NewStateMutation(state).SetGUIState(gui).Commit()
-				return newState, nil
-			})
-		}
-		if contains(kb.Zoom, key) {
-			// m.controller.OnKeypressZoom() // TODO: implement or remove
-			_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-				gui := NewGUIStateMutation(&state.GUIState).SetInfo("Toggled zoom for active pane").Commit()
 				newState := NewStateMutation(state).SetGUIState(gui).Commit()
 				return newState, nil
 			})
@@ -138,32 +110,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if contains(kb.Docs, key) {
 			_ = m.controller.OnKeypressDocs()
 		}
-		if contains(kb.Focus, key) {
-			// m.controller.OnKeypressFocus() // TODO: implement or remove
-			_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-				gui := NewGUIStateMutation(&state.GUIState).SetInfo("Focused active pane").Commit()
-				newState := NewStateMutation(state).SetGUIState(gui).Commit()
-				return newState, nil
-			})
-		}
 		if key == "enter" {
-			if len(m.state.Processes) > 0 {
-				_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-					var pane string
-					for i := range state.Processes {
-						if state.Processes[i].ID == state.CurrentProcID {
-							pane = state.Processes[i].PaneID
-							break
-						}
-					}
-					gui := NewGUIStateMutation(&state.GUIState).SetInfo("Attach to pane: " + pane).Commit()
-					newState := NewStateMutation(state).SetGUIState(gui).Commit()
-					return newState, nil
-				})
-			}
+			m.controller.OnKeypressSwitchFocus()
 		}
 	}
 	return m, nil
+}
+
+func (m Model) appendFilterInput(s string) string {
+	if m.state.GUIState.EnteringFilterText {
+		s += "\nFilter: " + m.state.GUIState.FilterText + "_\n"
+	} else {
+		s += "\n\n"
+	}
+	return s
 }
 
 func (m Model) appendHelpPanel(s string) string {
@@ -197,43 +157,134 @@ func (m Model) appendMessages(s string) string {
 	return s
 }
 
-func (m Model) View() string {
-	procs := m.state.GetFilteredProcesses()
-	// an ANSI terminal control sequence that clears
-	// the screen and repositions the cursor to the home position (top-left corner)
-	clear := "\x1b[2J\x1b[H"
-	s := clear + "\nProctmux\n"
-	for _, p := range procs {
-		cursor := "  "
-		if p.ID == m.state.CurrentProcID {
-			cursor = m.state.Config.Style.PointerChar + " "
-		}
-		cat := ""
-		if p.Config != nil && len(p.Config.Categories) > 0 {
-			cat = " [" + strings.Join(p.Config.Categories, ",") + "]"
-		}
-		zoom := ""
-		if m.controller.tmuxContext.IsZoomedIn() && p.PaneID == m.controller.tmuxContext.PaneID {
-			zoom = " (zoomed)"
-		}
-		s += fmt.Sprintf("%s%s [%s] PID:%d%s%s (Pane: %s)\n", cursor, p.Label, p.Status.String(), p.PID, cat, zoom, p.PaneID)
+func (m Model) appendProcessDescription(s string) string {
+	if m.state.Config.Layout.HideProcessDescriptionPanel {
+		return s
 	}
-	if m.state.GUIState.EnteringFilterText {
-		s += "\nFilter: " + m.state.GUIState.FilterText + "_\n"
+	proc := m.state.GetCurrentProcess()
+	if proc == nil || proc.Config == nil || len(strings.TrimSpace(proc.Config.Description)) == 0 {
+		return s
 	}
-	s = m.appendHelpPanel(s)
-	s = m.appendMessages(s)
-	// Pad to full terminal height so the panel fills the screen
-	if m.termHeight > 0 {
-		lines := strings.Count(s, "\n")
-		missing := m.termHeight - lines
-		for i := 0; i < missing; i++ {
-			s += "\n"
-		}
-	}
+	s += strings.TrimSpace(proc.Config.Description) + "\n"
 	return s
+
+}
+
+func hexToDec(hex string) int {
+	var dec int
+	fmt.Sscanf(hex, "%x", &dec)
+	return dec
+}
+
+// returns ANSI color codes and reset code for the given color
+// colors can be provided in hex (e.g. #ff0000) or as standard color names (e.g. red)
+func colorToAnsi(color string) (string, string) {
+	c := strings.TrimSpace(strings.ToLower(color))
+	if c == "" || c == "none" {
+		return "", ""
+	}
+
+	// Normalize common config styles like "ansired", "ansi-red", "ansi red",
+	// and collapse separators so we end up with e.g. "brightmagenta".
+	c = strings.TrimPrefix(c, "ansi")
+	c = strings.ReplaceAll(c, " ", "")
+	c = strings.ReplaceAll(c, "-", "")
+	c = strings.ReplaceAll(c, "_", "")
+
+	// Standard reset code
+	const resetCode = "\u001b[0m"
+
+	// 24-bit hex colors: #rrggbb
+	if strings.HasPrefix(c, "#") && len(c) == 7 {
+		r := c[1:3]
+		g := c[3:5]
+		b := c[5:7]
+		return fmt.Sprintf("\u001b[38;2;%d;%d;%dm", hexToDec(r), hexToDec(g), hexToDec(b)), resetCode
+	}
+
+	// Map common greys to brightblack
+	if c == "grey" || c == "gray" || c == "lightgrey" || c == "lightgray" {
+		c = "brightblack"
+	}
+
+	// Standard color names (foreground)
+	colors := map[string]int{
+		"black":         30,
+		"red":           31,
+		"green":         32,
+		"yellow":        33,
+		"blue":          34,
+		"magenta":       35,
+		"cyan":          36,
+		"white":         37,
+		"brightblack":   90,
+		"brightred":     91,
+		"brightgreen":   92,
+		"brightyellow":  93,
+		"brightblue":    94,
+		"brightmagenta": 95,
+		"brightcyan":    96,
+		"brightwhite":   97,
+	}
+	if code, ok := colors[c]; ok {
+		return fmt.Sprintf("\u001b[%dm", code), resetCode
+	}
+
+	// Fallback: 6-digit hex without '#'
+	if len(c) == 6 {
+		return fmt.Sprintf("\u001b[38;2;%d;%d;%dm", hexToDec(c[0:2]), hexToDec(c[2:4]), hexToDec(c[4:6])), resetCode
+	}
+	// Fallback: 3-digit hex without '#'
+	if len(c) == 3 {
+		rr := string([]byte{c[0], c[0]})
+		gg := string([]byte{c[1], c[1]})
+		bb := string([]byte{c[2], c[2]})
+		return fmt.Sprintf("\u001b[38;2;%d;%d;%dm", hexToDec(rr), hexToDec(gg), hexToDec(bb)), resetCode
+	}
+
+	// Not recognized
+	return "", ""
 }
 
 func contains(slice []string, s string) bool {
 	return slices.Contains(slice, s)
+}
+
+func (m Model) appendProcess(p *Process, s string) string {
+	cursor := "  "
+
+	statusColor := m.state.Config.Style.StatusStoppedColor
+	if p.Status == StatusRunning {
+		statusColor = m.state.Config.Style.StatusRunningColor
+	}
+	styleStart, styleEnd := colorToAnsi(statusColor)
+
+	if p.ID == m.state.CurrentProcID {
+		char := m.state.Config.Style.PointerChar
+		cursor = styleStart + char + " " + styleEnd
+	} else if p.Status == StatusRunning {
+		cursor = styleStart + "● " + styleEnd
+	} else {
+		cursor = styleStart + "■ " + styleEnd
+	}
+
+	cat := ""
+	if p.Config != nil && len(p.Config.Categories) > 0 && m.state.Config.Layout.EnableDebugProcessInfo {
+		cat = " [" + strings.Join(p.Config.Categories, ",") + "]"
+	}
+	s += fmt.Sprintf("%s%s [%s] PID:%d%s (Pane: %s)\n", cursor, p.Label, p.Status.String(), p.PID, cat, p.PaneID)
+	return s
+}
+
+func (m Model) View() string {
+	procs := m.state.GetFilteredProcesses()
+	s := ""
+	s = m.appendHelpPanel(s)
+	s = m.appendProcessDescription(s)
+	s = m.appendMessages(s)
+	s = m.appendFilterInput(s)
+	for _, p := range procs {
+		s = m.appendProcess(p, s)
+	}
+	return s
 }
