@@ -1,6 +1,7 @@
 package proctmux
 
 import (
+	"fmt"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -95,13 +96,13 @@ func LoadConfig(path string) (*ProcTmuxConfig, error) {
 				break
 			}
 		}
-		
+
 		// If path is still empty, all defaults failed
 		if path == "" {
 			return nil, fmt.Errorf("config file not found in default locations")
 		}
 	}
-	
+
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
