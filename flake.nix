@@ -15,6 +15,8 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
+        # Use go_1_24 instead of the default go package
+        go = pkgs.go_1_24;
         buildDeps = with pkgs; [ git go gnumake ];
         devDeps = with pkgs; buildDeps ++ [ gotools goreleaser ];
 
@@ -25,6 +27,8 @@
         packages.default = pkgs.buildGoModule {
           pname = "proctmux";
           inherit version;
+          # Use Go 1.24 instead of default Go
+          go = go;
           # In 'nix develop', we don't need a copy of the source tree
           # in the Nix store.
           src = ./.;
@@ -43,6 +47,8 @@
         };
 
         devShells.default = pkgs.mkShell {
+          # Use Go 1.24
+          inherit go;
           buildInputs = devDeps;
 
           # # Ensure Go from buildInputs is available on PATH
