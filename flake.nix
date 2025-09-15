@@ -4,7 +4,7 @@
   # Nixpkgs / NixOS version to use.
   inputs = {
     nixpkgs.url =
-      "github:NixOS/nixpkgs/10b813040df67c4039086db0f6eaf65c536886c6";
+      "github:NixOS/nixpkgs/648f70160c03151bc2121d179291337ad6bc564b";
     flake-utils.url = "github:numtide/flake-utils";
     goflake.url = "github:sagikazarmark/go-flake";
     goflake.inputs.nixpkgs.follows = "nixpkgs";
@@ -42,6 +42,18 @@
           vendorHash = "sha256-5xyEKZG1fogU7M2y+W6UH5pztscu77ZwIyLdGwMjrdU=";
         };
 
-        devShells.default = pkgs.mkShell { buildInputs = devDeps; };
+        devShells.default = pkgs.mkShell {
+          buildInputs = devDeps;
+
+          # # Ensure Go from buildInputs is available on PATH
+          # nativeBuildInputs = [ pkgs.go ];
+
+          # # Set Go-related environment variables
+          # shellHook = ''
+          #   export PATH=$PATH:$(go env GOPATH)/bin
+          #   export GOPATH=$(go env GOPATH)
+          #   export GOROOT=$(go env GOROOT)
+          # '';
+        };
       });
 }

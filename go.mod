@@ -2,7 +2,7 @@ module github.com/nick/proctmux
 
 go 1.23.0
 
-toolchain go1.23.11
+toolchain go1.24.7
 
 require (
 	github.com/charmbracelet/bubbletea v0.25.0
