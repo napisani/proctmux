@@ -15,14 +15,14 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        buildDeps = with pkgs; [ git go_1_22 gnumake ];
+        buildDeps = with pkgs; [ git go gnumake ];
         devDeps = with pkgs; buildDeps ++ [ gotools goreleaser ];
 
         # Generate a user-friendly version number.
         version = builtins.substring 0 8 self.lastModifiedDate;
 
       in {
-        packages.default = pkgs.buildGo122Module {
+        packages.default = pkgs.buildGoModule {
           pname = "proctmux";
           inherit version;
           # In 'nix develop', we don't need a copy of the source tree
