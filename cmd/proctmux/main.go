@@ -34,7 +34,12 @@ func main() {
 	// TODO implement a --file flag to specify config path
 	cfg, cfgLoadErr := proctmux.LoadConfig("")
 
-	logFile, err := setupLogger(cfg.LogFile)
+	logPath := ""
+	if cfg != nil && cfg.LogFile != "" {
+		logPath = cfg.LogFile
+	}
+
+	logFile, err := setupLogger(logPath)
 	if err != nil {
 		fmt.Println("Failed to open log file:", cfgLoadErr)
 		panic(cfgLoadErr)
@@ -45,11 +50,13 @@ func main() {
 		}
 	}()
 
-	if cfg != nil {
-		log.Printf("Config loaded: %+v", cfg)
-	}
 	if cfgLoadErr != nil {
 		log.Printf("Error loading config: %v", cfgLoadErr)
+	}
+	if cfg != nil {
+		log.Printf("Config loaded: %+v", cfg)
+	} else {
+		panic(cfgLoadErr)
 	}
 
 	// Determine subcommand

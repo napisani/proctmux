@@ -27,6 +27,11 @@ func (m *StateMutation) SelectFirstProcess() *StateMutation {
 	return m
 }
 
+func (m *StateMutation) ClearProcessSelection() *StateMutation {
+	m.initState.CurrentProcID = 0
+	return m
+}
+
 // MoveProcessSelection moves the process selection by the given direction
 func (m *StateMutation) MoveProcessSelection(direction int) *StateMutation {
 	filteredProcs := m.initState.GetFilteredProcesses()

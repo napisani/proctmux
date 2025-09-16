@@ -168,7 +168,7 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	}
 
 	if cfg.Style.PointerChar == "" {
-		cfg.Style.PointerChar = ">"
+		cfg.Style.PointerChar = "▶"
 	}
 	if cfg.General.DetachedSessionName == "" {
 		cfg.General.DetachedSessionName = "_proctmux"

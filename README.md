@@ -17,11 +17,13 @@ Inspired by https://github.com/napisani/procmux, but using tmux as the terminal 
 ```bash
 # Build a local binary
 make build
-# or
-go build -o bin/proctmux ./cmd/proctmux
 
 # Run (inside an existing tmux session)
 ./bin/proctmux        # same as: proctmux start
+
+
+# Or use nix to run 
+nix run github:napisani/proctmux
 ```
 
 
@@ -242,6 +244,12 @@ Notes:
 - Stop behavior: `stop` uses a numeric signal (default SIGTERM=15). Use `2` for Ctrl‑C‑like behavior.
 - Colors: `status_*_color` accepts common names (`red`, `brightblue`, `ansigreen`) and hex (`#rrggbb`).
 
+## Feature wishlist
+- [ ] -f flag for passing a specific config file
+- [ ] support for using proctmux in an already split pane (currently proctmux works best in a full tmux window) 
+- [ ] better tui ui placement of help text, process description, etc.
+- [ ] support for templated processes 
+- [ ] tighten up error handling and logging 
 
 ## License
 
