@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -31,8 +33,25 @@ func setupLogger(logPath string) (*os.File, error) {
 }
 
 func main() {
-	// TODO implement a --file flag to specify config path
-	cfg, cfgLoadErr := proctmux.LoadConfig("")
+	// Parse command-line flags
+	var configFile string
+	flag.StringVar(&configFile, "f", "", "path to config file (default: searches for proctmux.yaml in current directory)")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [options] [command]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nCommands:\n")
+		fmt.Fprintf(os.Stderr, "  start                    Start the TUI (default)\n")
+		fmt.Fprintf(os.Stderr, "  signal-list              List all processes and their statuses (tab-delimited)\n")
+		fmt.Fprintf(os.Stderr, "  signal-start <name>      Start a process via signal server\n")
+		fmt.Fprintf(os.Stderr, "  signal-stop <name>       Stop a process via signal server\n")
+		fmt.Fprintf(os.Stderr, "  signal-restart <name>    Restart a process via signal server\n")
+		fmt.Fprintf(os.Stderr, "  signal-restart-running   Restart all running processes\n")
+		fmt.Fprintf(os.Stderr, "  signal-stop-running      Stop all running processes\n")
+	}
+	flag.Parse()
+
+	cfg, cfgLoadErr := proctmux.LoadConfig(configFile)
 
 	logPath := ""
 	if cfg != nil && cfg.LogFile != "" {
@@ -59,11 +78,11 @@ func main() {
 		panic(cfgLoadErr)
 	}
 
-	// Determine subcommand
-	args := os.Args
+	// Determine subcommand from remaining args after flag parsing
+	args := flag.Args()
 	subcmd := "start"
-	if len(args) > 1 {
-		subcmd = args[1]
+	if len(args) > 0 {
+		subcmd = args[0]
 	}
 
 	// Client mode
@@ -74,24 +93,24 @@ func main() {
 		}
 		switch subcmd {
 		case "signal-start":
-			if len(args) < 3 {
+			if len(args) < 2 {
 				log.Fatal("missing name for signal-start")
 			}
-			if err := client.StartProcess(args[2]); err != nil {
+			if err := client.StartProcess(args[1]); err != nil {
 				log.Fatal(err)
 			}
 		case "signal-stop":
-			if len(args) < 3 {
+			if len(args) < 2 {
 				log.Fatal("missing name for signal-stop")
 			}
-			if err := client.StopProcess(args[2]); err != nil {
+			if err := client.StopProcess(args[1]); err != nil {
 				log.Fatal(err)
 			}
 		case "signal-restart":
-			if len(args) < 3 {
+			if len(args) < 2 {
 				log.Fatal("missing name for signal-restart")
 			}
-			if err := client.RestartProcess(args[2]); err != nil {
+			if err := client.RestartProcess(args[1]); err != nil {
 				log.Fatal(err)
 			}
 		case "signal-restart-running":
@@ -101,6 +120,29 @@ func main() {
 		case "signal-stop-running":
 			if err := client.StopRunning(); err != nil {
 				log.Fatal(err)
+			}
+		case "signal-list":
+			data, err := client.GetProcessList()
+			if err != nil {
+				log.Fatal(err)
+			}
+			var resp struct {
+				ProcessList []map[string]interface{} `json:"process_list"`
+			}
+			if err := json.Unmarshal(data, &resp); err != nil {
+				log.Fatal("failed to parse process list:", err)
+			}
+			// Output tab-delimited header
+			fmt.Println("NAME\tSTATUS")
+			// Output each process
+			for _, proc := range resp.ProcessList {
+				name, _ := proc["name"].(string)
+				running, _ := proc["running"].(bool)
+				status := "stopped"
+				if running {
+					status = "running"
+				}
+				fmt.Printf("%s\t%s\n", name, status)
 			}
 		default:
 			log.Fatal("unknown subcommand: ", subcmd)

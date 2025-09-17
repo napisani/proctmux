@@ -245,11 +245,14 @@ Notes:
 - Colors: `status_*_color` accepts common names (`red`, `brightblue`, `ansigreen`) and hex (`#rrggbb`).
 
 ## Feature wishlist
-- [ ] -f flag for passing a specific config file
 - [ ] support for using proctmux in an already split pane (currently proctmux works best in a full tmux window) 
 - [ ] better tui ui placement of help text, process description, etc.
 - [ ] support for templated processes 
 - [ ] tighten up error handling and logging 
+- [ ] tests 
+- [ ] fix duplication between tmux.go and controller_tmux.go 
+- [ ] mouse support 
+
 
 ## License
 
