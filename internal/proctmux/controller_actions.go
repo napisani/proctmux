@@ -71,7 +71,7 @@ func (c *Controller) OnFilterStart() error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		newState := state
 		c.breakCurrentPane(newState, true)
-		guiState := NewGUIStateMutation(&state.GUIState).StartEnteringFilter().Commit()
+		guiState := NewGUIStateMutation(&state.GUIState).StartEnteringFilter().SetFilterText("").Commit()
 		newState = NewStateMutation(state).SetGUIState(guiState).ClearProcessSelection().Commit()
 		return newState, nil
 	})
