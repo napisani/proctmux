@@ -53,6 +53,11 @@ test:
 	@echo "Running tests..."
 	go test ./... -v
 
+.PHONY: test-race
+test-race:
+	@echo "Running race detector tests..."
+	go test -race ./... -v
+
 .PHONY: watch-test 
 watch-test:
 	@echo "Watching for test changes..."
@@ -71,14 +76,16 @@ watch-test:
 .PHONY: help
 help:
 	@echo "Makefile commands:"
-	@echo "  make build   - Build the application"
-	@echo "  make run     - Build and run the application"
-	@echo "  make clean   - Clean up build artifacts"
-	@echo "  make dist    - Create a distribution archive"
-	@echo "  make watch   - Watch for changes and rebuild"
-	@echo "  make inspect - Inspect the application with Model Context Protocol"
-	@echo "  make tidy - Tidy up dependencies"
-	@echo "  make help    - Show this help message"
+	@echo "  make build      - Build the application"
+	@echo "  make run        - Build and run the application"
+	@echo "  make clean      - Clean up build artifacts"
+	@echo "  make dist       - Create a distribution archive"
+	@echo "  make watch      - Watch for changes and rebuild"
+	@echo "  make inspect    - Inspect the application with Model Context Protocol"
+	@echo "  make tidy       - Tidy up dependencies"
+	@echo "  make test       - Run tests"
+	@echo "  make test-race  - Run tests with race detector"
+	@echo "  make help       - Show this help message"
 
 
 
