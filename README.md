@@ -55,6 +55,7 @@ keybinding:
   down: ["j", "down"]
   start: ["s", "enter"]            # Enter will start if halted (and also attach)
   stop: ["x"]
+  restart: ["r"]
   filter: ["/"]
   submit_filter: ["enter"]
   docs: ["?"]
@@ -97,6 +98,7 @@ Run proctmux inside tmux and use the keybindings below to start/stop and filter.
 
 - Start: `s` or `enter`
 - Stop: `x`
+- Restart: `r`
 - Up/Down: `k`/`up`, `j`/`down`
 - Filter: `/` (type text; `enter` to apply)
 - Quit: `q` or `ctrl+c`
@@ -115,8 +117,10 @@ Notes:
   - `style.status_stopped_color` for halted processes (default `ansired`)
   - Colors accept names like `red`, `brightblue`, `ansigreen`, or full hex `#rrggbb`.
 - Enhanced color parsing: `ansired`/`ansi-red`/`ansi red` and short/long hex forms are recognized.
-- Debug info in list: `layout.enable_debug_process_info: true` shows extra details (e.g., categories) alongside each process.
+- Debug info in list: `layout.enable_debug_process_info: true` shows extra details (e.g., categories) in the process list.
 - Enter behavior: pressing `enter` both triggers Start (if halted) and attaches focus to the pane.
+- New keybinding: `restart` (default `r`) stops then starts the selected process.
+- Default stop escalation: when `stop` is omitted, SIGTERM is sent first; if still running after ~3s, proctmux sends SIGKILL.
 
 
 ## How It Works (tmux‑first)
@@ -150,7 +154,7 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
   - `status_running_color`, `status_stopped_color` (string): Colors for list icons/pointer. Accepts names like `red`, `brightmagenta`, `ansiblue`, or hex `#ff00ff`.
   - Other fields exist for future parity and may not currently affect the UI: `selected_process_color`, `selected_process_bg_color`, `unselected_process_color`, `placeholder_terminal_bg_color`, `style_classes`, `color_level`.
 - `keybinding` (each value is a list of keys):
-  - `quit`, `up`, `down`, `start`, `stop`, `filter`, `submit_filter`, `docs`. Unused (for now): `switch_focus`, `zoom`, `focus`.
+  - `quit`, `up`, `down`, `start`, `stop`, `restart`, `filter`, `submit_filter`, `docs`. Unused (for now): `switch_focus`, `zoom`, `focus`.
 - `signal_server`:
   - `enable` (bool): Start the HTTP server alongside the UI.
   - `host` (string): Bind host (e.g. `localhost`). Default `localhost` when enabled.
@@ -241,7 +245,7 @@ Notes:
 - Session already exists: if the detached session name is already in use and `kill_existing_session` is false, startup fails. Set it to true to replace the session.
 - Run inside tmux: proctmux requires a current tmux pane and session (it calls `tmux display-message -p`).
 - Remain‑on‑exit: proctmux enables tmux `remain-on-exit` globally while running; it restores the previous setting on exit.
-- Stop behavior: `stop` uses a numeric signal (default SIGTERM=15). Use `2` for Ctrl‑C‑like behavior.
+- Stop behavior: `stop` uses a numeric signal. If not specified, proctmux sends SIGTERM (15) and, if the process is still running after ~3s, escalates to SIGKILL (9). Set `stop: 2` for Ctrl‑C‑like behavior and no auto-escalation.
 - Colors: `status_*_color` accepts common names (`red`, `brightblue`, `ansigreen`) and hex (`#rrggbb`).
 
 ## Feature wishlist

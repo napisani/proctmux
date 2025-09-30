@@ -13,6 +13,7 @@ type KeybindingConfig struct {
 	Down         []string `yaml:"down"`
 	Start        []string `yaml:"start"`
 	Stop         []string `yaml:"stop"`
+	Restart      []string `yaml:"restart"`
 	Filter       []string `yaml:"filter"`
 	FilterSubmit []string `yaml:"submit_filter"`
 	Docs         []string `yaml:"docs"`
@@ -139,6 +140,9 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	}
 	if len(cfg.Keybinding.Stop) == 0 {
 		cfg.Keybinding.Stop = []string{"x"}
+	}
+	if len(cfg.Keybinding.Restart) == 0 {
+		cfg.Keybinding.Restart = []string{"r"}
 	}
 	if len(cfg.Keybinding.Filter) == 0 {
 		cfg.Keybinding.Filter = []string{"/"}

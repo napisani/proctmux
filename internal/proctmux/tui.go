@@ -97,6 +97,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if contains(kb.Stop, key) {
 			m.controller.OnKeypressStop()
 		}
+		if contains(kb.Restart, key) {
+			m.controller.OnKeypressRestart()
+		}
 		if contains(kb.Filter, key) {
 			m.controller.OnFilterStart()
 			_ = m.controller.LockAndLoad(func(state *AppState) (*AppState, error) {

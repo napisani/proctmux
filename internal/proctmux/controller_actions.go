@@ -1,8 +1,10 @@
 package proctmux
 
 import (
+	"fmt"
 	"log"
 	"strings"
+	"time"
 )
 
 func (c *Controller) OnKeypressStart() error {
@@ -128,4 +130,56 @@ func (c *Controller) OnKeypressDocs() error {
 		return c.tmuxContext.ShowTextPopup(doc)
 	}
 	return nil
+}
+
+func (c *Controller) OnKeypressRestart() error {
+	log.Println("Restarting current process...")
+	var currentProcessLabel string
+	err := c.LockAndLoad(func(state *AppState) (*AppState, error) {
+		currentProcess := state.GetCurrentProcess()
+		if currentProcess == nil {
+			log.Println("No current process selected")
+			return state, nil
+		}
+		currentProcessLabel = currentProcess.Label
+		return state, nil
+	})
+
+	if err != nil {
+		log.Printf("Error current process identification: %v", err)
+		return err
+	}
+	err = c.OnKeypressStop()
+
+	log.Printf("Waiting for process %s to stop...", currentProcessLabel)
+	err = c.WaitUntilStopped(currentProcessLabel)
+	if err != nil {
+		log.Printf("Error waiting for process %s to stop: %v", currentProcessLabel, err)
+		return err
+	}
+
+	return c.OnKeypressStart()
+}
+
+func (c *Controller) WaitUntilStopped(label string) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var stopped bool
+		err := c.LockAndLoad(func(state *AppState) (*AppState, error) {
+			p := state.GetProcessByLabel(label)
+			log.Printf("Waiting for process %s to stop, current status: %v PID: %v", label, p.Status, p.PID)
+			if p == nil || p.Status == StatusHalted {
+				stopped = true
+			}
+			return state, nil
+		})
+		if err != nil {
+			return err
+		}
+		if stopped {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout waiting for process to stop")
 }
