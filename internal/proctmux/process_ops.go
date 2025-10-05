@@ -127,11 +127,12 @@ func haltProcess(state *AppState, process *Process) (*AppState, error) {
 	// If we sent SIGTERM (15), wait for process to die and send SIGKILL (9) if needed
 	if useDefaultKillRoutine {
 		go func() {
+			killPid := osProcess.Pid
 			// Wait for 3 seconds
 			time.Sleep(3 * time.Second)
 
 			// Check if process still exists
-			osProcess, err := os.FindProcess(process.PID)
+			osProcess, err := os.FindProcess(killPid)
 			if err != nil {
 				// Process probably doesn't exist anymore
 				return
@@ -145,7 +146,7 @@ func haltProcess(state *AppState, process *Process) (*AppState, error) {
 			}
 
 			// Process still running, send SIGKILL
-			log.Printf("Process %s with PID %d did not terminate after 3 seconds, sending SIGKILL", process.Label, process.PID)
+			log.Printf("Process %s with PID %d did not terminate after 3 seconds, sending SIGKILL", process.Label, killPid)
 			err = osProcess.Signal(syscall.SIGKILL)
 			if err != nil {
 				log.Printf("Failed to send SIGKILL to process %s: %v", process.Label, err)
