@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 )
@@ -60,6 +61,7 @@ func (c *SignalClient) StopProcess(name string) error {
 }
 
 func (c *SignalClient) StartProcess(name string) error {
+	log.Printf("Client Requesting Starting process: %s", name)
 	q := url.PathEscape(name)
 	_, err := c.do(http.MethodPost, "/start-by-name/"+q)
 	return err

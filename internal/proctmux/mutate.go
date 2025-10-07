@@ -1,5 +1,7 @@
 package proctmux
 
+import "fmt"
+
 // StateMutation represents a series of mutations to apply to an AppState
 type StateMutation struct {
 	initState *AppState
@@ -72,6 +74,32 @@ func (m *StateMutation) MoveProcessSelection(direction int) *StateMutation {
 	m.initState.CurrentProcID = availableProcIDs[newIdx]
 
 	return m
+}
+
+// SelectProcessByID attempts to select a process by its ID
+// Returns error if the process ID is not found in the filtered processes
+func (m *StateMutation) SelectProcessByID(processID int) (*StateMutation, error) {
+	filteredProcs := m.initState.GetFilteredProcesses()
+	if len(filteredProcs) == 0 {
+		return m, fmt.Errorf("the process is not available in the filtered processes %d", processID)
+	}
+
+	// Check if the process ID exists in the filtered processes
+	found := false
+	for _, p := range filteredProcs {
+		if p.ID == processID {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return m, fmt.Errorf("process ID %d not found in filtered processes", processID)
+	}
+
+	// Process found, update the current process ID
+	m.initState.CurrentProcID = processID
+	return m, nil
 }
 
 // NextProcess moves to the next process in the list

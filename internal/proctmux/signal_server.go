@@ -2,12 +2,10 @@ package proctmux
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // StartSignalServer starts an HTTP signal server if enabled in cfg.
@@ -55,29 +53,9 @@ func StartSignalServer(cfg *ProcTmuxConfig, controller *Controller) (func(), err
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Path, "/stop-by-name/")
-		var found bool
-		err := controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-			for i := range state.Processes {
-				if state.Processes[i].Label == name {
-					newState, err2 := haltProcess(state, &state.Processes[i])
-					if err2 != nil {
-						return nil, err2
-					}
-					if newState != nil {
-						state = newState
-					}
-					found = true
-					break
-				}
-			}
-			return state, nil
-		})
-		if err != nil {
+		log.Printf("Received request to stop process with label %s", name)
+		if err := controller.OnKeypressStopWithLabel(name); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if !found {
-			http.Error(w, `{"error":"Process not found"}`, http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -91,63 +69,14 @@ func StartSignalServer(cfg *ProcTmuxConfig, controller *Controller) (func(), err
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Path, "/start-by-name/")
-		var found bool
-		err := controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-			for i := range state.Processes {
-				if state.Processes[i].Label == name {
-					// Kill existing pane if present, then start in detached session (background)
-					var err error
-					newState, err2 := killPane(state, &state.Processes[i])
-					if err2 != nil {
-						return nil, err2
-					}
-					if newState != nil {
-						state = newState
-					}
-					proc := state.GetProcessByID(state.Processes[i].ID)
-					newState, err = startProcess(state, controller.tmuxContext, proc, true)
-					if err != nil {
-						return nil, err
-					}
-					if newState != nil {
-						state = newState
-					}
-					found = true
-					break
-				}
-			}
-			return state, nil
-		})
-		if err != nil {
+		log.Printf("Received request to start process with name: %s", name)
+		if err := controller.OnKeypressStartWithLabel(name); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if !found {
-			http.Error(w, `{"error":"Process not found"}`, http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 	})
-
-	waitUntilStopped := func(label string) error {
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			stopped := false
-			_ = controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-				p := state.GetProcessByLabel(label)
-				if p == nil || p.Status == StatusHalted {
-					stopped = true
-				}
-				return state, nil
-			})
-			if stopped {
-				return nil
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		return fmt.Errorf("timeout waiting for process to stop")
-	}
 
 	// POST /restart-by-name/{name}
 	mux.HandleFunc("/restart-by-name/", func(w http.ResponseWriter, r *http.Request) {
@@ -156,51 +85,7 @@ func StartSignalServer(cfg *ProcTmuxConfig, controller *Controller) (func(), err
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Path, "/restart-by-name/")
-		var found bool
-		err := controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-			for i := range state.Processes {
-				if state.Processes[i].Label == name {
-					newState, err2 := haltProcess(state, &state.Processes[i])
-					if err2 != nil {
-						return nil, err2
-					}
-					if newState != nil {
-						state = newState
-					}
-					found = true
-					break
-				}
-			}
-			return state, nil
-		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if !found {
-			http.Error(w, `{"error":"Process not found"}`, http.StatusNotFound)
-			return
-		}
-		if err := waitUntilStopped(name); err != nil {
-			http.Error(w, `{"error":"Failed to stop process"}`, http.StatusInternalServerError)
-			return
-		}
-		// start again
-		err = controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-			p := state.GetProcessByLabel(name)
-			if p == nil {
-				return state, nil
-			}
-			newState, err := startProcess(state, controller.tmuxContext, p, true)
-			if err != nil {
-				return nil, err
-			}
-			if newState != nil {
-				state = newState
-			}
-			return state, nil
-		})
-		if err != nil {
+		if err := controller.OnKeypressRestartWithLabel(name); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -225,29 +110,7 @@ func StartSignalServer(cfg *ProcTmuxConfig, controller *Controller) (func(), err
 			return state, nil
 		})
 		for _, name := range runningLabels {
-			_ = controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-				p := state.GetProcessByLabel(name)
-				if p == nil {
-					return state, nil
-				}
-				newState, _ := haltProcess(state, p)
-				if newState != nil {
-					state = newState
-				}
-				return state, nil
-			})
-			_ = waitUntilStopped(name)
-			_ = controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-				p := state.GetProcessByLabel(name)
-				if p == nil {
-					return state, nil
-				}
-				newState, _ := startProcess(state, controller.tmuxContext, p, true)
-				if newState != nil {
-					state = newState
-				}
-				return state, nil
-			})
+			_ = controller.OnKeypressRestartWithLabel(name)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
@@ -259,18 +122,19 @@ func StartSignalServer(cfg *ProcTmuxConfig, controller *Controller) (func(), err
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		var runningLabels []string
 		_ = controller.LockAndLoad(func(state *AppState) (*AppState, error) {
 			for i := range state.Processes {
 				p := state.Processes[i]
 				if p.Status == StatusRunning && p.ID != DummyProcessID {
-					newState, _ := haltProcess(state, &state.Processes[i])
-					if newState != nil {
-						state = newState
-					}
+					runningLabels = append(runningLabels, p.Label)
 				}
 			}
 			return state, nil
 		})
+		for _, name := range runningLabels {
+			_ = controller.OnKeypressStopWithLabel(name)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 	})

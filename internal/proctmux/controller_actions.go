@@ -183,3 +183,27 @@ func (c *Controller) WaitUntilStopped(label string) error {
 	}
 	return fmt.Errorf("timeout waiting for process to stop")
 }
+
+func (c *Controller) OnKeypressStartWithLabel(label string) error {
+	err := c.handleMoveToProcessByLabel(label)
+	if err != nil {
+		return err
+	}
+	return c.OnKeypressStart()
+}
+
+func (c *Controller) OnKeypressStopWithLabel(label string) error {
+	err := c.handleMoveToProcessByLabel(label)
+	if err != nil {
+		return err
+	}
+	return c.OnKeypressStop()
+}
+
+func (c *Controller) OnKeypressRestartWithLabel(label string) error {
+	err := c.handleMoveToProcessByLabel(label)
+	if err != nil {
+		return err
+	}
+	return c.OnKeypressRestart()
+}

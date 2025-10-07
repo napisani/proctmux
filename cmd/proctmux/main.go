@@ -80,6 +80,7 @@ func main() {
 
 	// Determine subcommand from remaining args after flag parsing
 	args := flag.Args()
+	log.Printf("Command-line args: %+v", args)
 	subcmd := "start"
 	if len(args) > 0 {
 		subcmd = args[0]

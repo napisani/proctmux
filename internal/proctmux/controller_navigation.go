@@ -1,6 +1,7 @@
 package proctmux
 
 import (
+	"errors"
 	"log"
 )
 
@@ -24,6 +25,64 @@ func (c *Controller) handleMove(directionNum int) error {
 			mut = mut.PreviousProcess()
 		}
 		newState := mut.Commit()
+
+		// Join newly selected pane into main pane (if any)
+		c.joinSelectedPane(newState)
+		return newState, nil
+	})
+}
+
+func (c *Controller) handleMoveToProcessByLabel(processLabel string) error {
+	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
+
+		numProcesses := len(state.GetFilteredProcesses())
+		if numProcesses == 0 {
+			log.Printf("No processes available to move selection")
+			return state, nil
+		}
+		proc := state.GetProcessByLabel(processLabel)
+		if proc == nil {
+			log.Printf("No process found with label %s", processLabel)
+			return state, errors.New("process not found")
+		}
+		processID := proc.ID
+		log.Printf("Moving selection to process with label %s and ID %d", processLabel, processID)
+
+		if state.CurrentProcID == processID {
+			log.Printf("Process ID %d is already selected", processID)
+			return state, nil
+		}
+
+		isVisible := false
+
+		// Check if process is visible with current filter
+		for _, p := range state.GetFilteredProcesses() {
+			if p.ID == processID {
+				isVisible = true
+				break
+			}
+		}
+
+		newState := state
+
+		if !isVisible {
+			state.UpdateFilterText("")
+			guiState := NewGUIStateMutation(&state.GUIState).SetFilterText("").Commit()
+			newState = NewStateMutation(state).SetGUIState(guiState).Commit()
+		}
+
+		// Break current pane out to detached session (if any)
+		c.breakCurrentPane(newState, true)
+
+		// Move selection
+		mut := NewStateMutation(newState)
+		var err error
+		mut, err = mut.SelectProcessByID(processID)
+		if err != nil {
+			log.Printf("Error selecting process by ID %d: %v", processID, err)
+			return newState, err
+		}
+		newState = mut.Commit()
 
 		// Join newly selected pane into main pane (if any)
 		c.joinSelectedPane(newState)
