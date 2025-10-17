@@ -28,7 +28,7 @@ type TmuxDaemon struct {
 }
 
 func NewTmuxDaemon(sessionID string) (*TmuxDaemon, error) {
-	cmd := exec.Command("tmux", "-C", "attach-session", "-t", sessionID)
+	cmd := exec.Command(tmuxBin(), "-C", "attach-session", "-t", sessionID)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stdin: %w", err)

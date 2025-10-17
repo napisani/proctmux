@@ -153,7 +153,7 @@ func (t *TmuxContext) ToggleZoom(paneID string) error {
 
 func (t *TmuxContext) PaneVariables(paneID, format string) (string, error) {
 	args := []string{"list-panes", "-t", paneID, "-F", format}
-	out, err := exec.Command("tmux", args...).Output()
+	out, err := exec.Command(tmuxBin(), args...).Output()
 	if err != nil {
 		return "", err
 	}
@@ -183,7 +183,7 @@ func (t *TmuxContext) ZoomOut() error {
 }
 
 func (t *TmuxContext) GetPanePID(paneID string) (int, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{pane_pid}").Output()
+	out, err := exec.Command(tmuxBin(), "display-message", "-p", "-t", paneID, "#{pane_pid}").Output()
 	if err != nil {
 		return 0, err
 	}

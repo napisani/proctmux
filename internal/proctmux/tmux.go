@@ -19,7 +19,7 @@ const (
 )
 
 func ListSessions() ([]string, error) {
-	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+	out, err := exec.Command(tmuxBin(), "list-sessions", "-F", "#{session_name}").Output()
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func ListSessions() ([]string, error) {
 
 // CurrentSession returns the current tmux session id
 func CurrentSession() (string, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{session_id}").Output()
+	out, err := exec.Command(tmuxBin(), "display-message", "-p", "#{session_id}").Output()
 	if err != nil {
 		return "", err
 	}
@@ -38,7 +38,7 @@ func CurrentSession() (string, error) {
 
 // CurrentPane returns the current tmux pane id
 func CurrentPane() (string, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{pane_id}").Output()
+	out, err := exec.Command(tmuxBin(), "display-message", "-p", "#{pane_id}").Output()
 	if err != nil {
 		return "", err
 	}
@@ -47,7 +47,7 @@ func CurrentPane() (string, error) {
 
 // StartDetachedSession creates a new detached tmux session and returns its id
 func StartDetachedSession(sessionName string) (string, error) {
-	out, err := exec.Command("tmux", "new-session", "-d", "-s", sessionName, "-P", "-F", "#{session_id}").Output()
+	out, err := exec.Command(tmuxBin(), "new-session", "-d", "-s", sessionName, "-P", "-F", "#{session_id}").Output()
 	if err != nil {
 		return "", err
 	}
@@ -60,7 +60,7 @@ func SetGlobalRemainOnExit(enabled bool) error {
 		value = "on"
 	}
 
-	cmd := exec.Command("tmux", "set-option", "-g", "remain-on-exit", value)
+	cmd := exec.Command(tmuxBin(), "set-option", "-g", "remain-on-exit", value)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to set global remain-on-exit option to %s: %w", value, err)
 	}
@@ -70,7 +70,7 @@ func SetGlobalRemainOnExit(enabled bool) error {
 
 // KillSession kills a tmux session by id
 func KillSession(sessionID string) error {
-	return exec.Command("tmux", "kill-session", "-t", sessionID).Run()
+	return exec.Command(tmuxBin(), "kill-session", "-t", sessionID).Run()
 }
 
 // KillPane kills a tmux pane by id
@@ -82,13 +82,13 @@ func KillPane(paneID string) error {
 
 	// Optional: Check if the pane exists before trying to kill it
 	// This adds safety but requires additional command execution
-	checkCmd := exec.Command("tmux", "has-session", "-t", paneID)
+	checkCmd := exec.Command(tmuxBin(), "has-session", "-t", paneID)
 	if err := checkCmd.Run(); err != nil {
 		return fmt.Errorf("pane %s does not exist or is invalid: %w", paneID, err)
 	}
 
 	// Execute the kill command with the validated pane ID
-	killCmd := exec.Command("tmux", "kill-pane", "-t", paneID)
+	killCmd := exec.Command(tmuxBin(), "kill-pane", "-t", paneID)
 	if err := killCmd.Run(); err != nil {
 		return fmt.Errorf("failed to kill pane %s: %w", paneID, err)
 	}
@@ -100,12 +100,12 @@ func KillPane(paneID string) error {
 func BreakPane(paneID, destSession string, destWindow int, windowLabel string) error {
 	target := fmt.Sprintf("%s:%d", destSession, destWindow)
 	log.Printf("running command: tmux break-pane -d -s %s -t %s -n %s", paneID, target, windowLabel)
-	return exec.Command("tmux", "break-pane", "-d", "-s", paneID, "-t", target, "-n", windowLabel).Run()
+	return exec.Command(tmuxBin(), "break-pane", "-d", "-s", paneID, "-t", target, "-n", windowLabel).Run()
 }
 
 // JoinPane joins a source pane into a destination pane
 func JoinPane(sourcePane, destPane string, splitSize string) error {
-	return exec.Command("tmux", "join-pane", "-d", "-h",
+	return exec.Command(tmuxBin(), "join-pane", "-d", "-h",
 		"-l", splitSize,
 		"-f",
 		"-s", sourcePane, "-t", destPane).Run()
@@ -113,12 +113,12 @@ func JoinPane(sourcePane, destPane string, splitSize string) error {
 
 // SelectPane selects a pane by id
 func SelectPane(paneID string) error {
-	return exec.Command("tmux", "select-pane", "-t", paneID).Run()
+	return exec.Command(tmuxBin(), "select-pane", "-t", paneID).Run()
 }
 
 // ToggleZoom toggles zoom for a pane
 func ToggleZoom(paneID string) error {
-	return exec.Command("tmux", "resize-pane", "-Z", "-t", paneID).Run()
+	return exec.Command(tmuxBin(), "resize-pane", "-Z", "-t", paneID).Run()
 }
 
 // CreatePane creates a new pane with env and working directory
@@ -129,7 +129,7 @@ func CreatePane(parentPaneID, command, workingDir string, env map[string]string,
 		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
 	}
 	args = append(args, command)
-	out, err := exec.Command("tmux", args...).Output()
+	out, err := exec.Command(tmuxBin(), args...).Output()
 	if err != nil {
 		return "", 0, err
 	}
@@ -156,7 +156,7 @@ func CreateDetachedPane(destSession string, destWindow int, windowLabel, command
 		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
 	}
 	args = append(args, command)
-	out, err := exec.Command("tmux", args...).Output()
+	out, err := exec.Command(tmuxBin(), args...).Output()
 	if err != nil {
 		return "", 0, err
 	}
@@ -178,7 +178,7 @@ func CreateDetachedPane(destSession string, destWindow int, windowLabel, command
 // PaneVariables returns formatted variables for a pane
 func PaneVariables(paneID, format string) (string, error) {
 	args := []string{"list-panes", "-t", paneID, "-f", fmt.Sprintf("#{m:%s,#{pane_id}}", paneID), "-F", format}
-	out, err := exec.Command("tmux", args...).Output()
+	out, err := exec.Command(tmuxBin(), args...).Output()
 	if err != nil {
 		return "", err
 	}
@@ -189,7 +189,7 @@ func PaneVariables(paneID, format string) (string, error) {
 // for the given pane by comparing its session_id via tmux.
 // It compares to the provided foreground and detached session IDs.
 func GetPaneSessionType(paneID, foregroundSessionID, detachedSessionID string) (string, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{session_id}").Output()
+	out, err := exec.Command(tmuxBin(), "display-message", "-p", "-t", paneID, "#{session_id}").Output()
 	if err != nil {
 		// If the pane doesn't exist or tmux errors, treat as no session.
 		return SessionTypeNone, nil
@@ -206,7 +206,7 @@ func GetPaneSessionType(paneID, foregroundSessionID, detachedSessionID string) (
 
 // ControlMode attaches to a session in control mode
 func ControlMode(sessionID string) (*exec.Cmd, error) {
-	cmd := exec.Command("tmux", "-C", "attach-session", "-t", sessionID)
+	cmd := exec.Command(tmuxBin(), "-C", "attach-session", "-t", sessionID)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	return cmd, nil
@@ -225,6 +225,6 @@ func (t *TmuxContext) ShowTextPopup(content string) error {
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		return err
 	}
-	cmd := exec.Command("tmux", "display-popup", "-E", "sh", "-lc", fmt.Sprintf("less -R %q", path))
+	cmd := exec.Command(tmuxBin(), "display-popup", "-E", "sh", "-lc", fmt.Sprintf("less -R %q", path))
 	return cmd.Run()
 }
