@@ -59,3 +59,28 @@ func (c *Controller) EmitStateChangeNotification() {
 		}
 	}
 }
+
+// ApplySelection reflects a UI-selected process into the domain and tmux panes.
+// procID==0 clears selection and breaks current/dummy to detached if needed.
+func (c *Controller) ApplySelection(procID int) error {
+	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
+		if procID == 0 {
+			c.breakCurrentPane(state, true)
+			state.CurrentProcID = 0
+			return state, nil
+		}
+		if state.CurrentProcID == procID {
+			c.joinSelectedPane(state)
+			return state, nil
+		}
+		c.breakCurrentPane(state, true)
+		mut := NewStateMutation(state)
+		mut, err := mut.SelectProcessByID(procID)
+		if err != nil {
+			return state, err
+		}
+		newState := mut.Commit()
+		c.joinSelectedPane(newState)
+		return newState, nil
+	})
+}

@@ -7,8 +7,13 @@ import (
 
 func (c *Controller) handleMove(directionNum int) error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
-
-		numProcesses := len(state.GetFilteredProcesses())
+		// Count non-dummy processes
+		numProcesses := 0
+		for _, p := range state.Processes {
+			if p.ID != DummyProcessID {
+				numProcesses++
+			}
+		}
 		if numProcesses == 0 {
 			log.Printf("No processes available to move selection")
 			return state, nil
@@ -17,7 +22,7 @@ func (c *Controller) handleMove(directionNum int) error {
 		// Break current pane out to detached session (if any)
 		c.breakCurrentPane(state, true)
 
-		// Move selection
+		// Move selection across all processes
 		mut := NewStateMutation(state)
 		if directionNum > 0 {
 			mut = mut.NextProcess()
@@ -34,9 +39,15 @@ func (c *Controller) handleMove(directionNum int) error {
 
 func (c *Controller) handleMoveToProcessByLabel(processLabel string) error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
-
-		numProcesses := len(state.GetFilteredProcesses())
-		if numProcesses == 0 {
+		// Ensure there is at least one non-dummy process
+		foundAny := false
+		for _, p := range state.Processes {
+			if p.ID != DummyProcessID {
+				foundAny = true
+				break
+			}
+		}
+		if !foundAny {
 			log.Printf("No processes available to move selection")
 			return state, nil
 		}
@@ -53,36 +64,18 @@ func (c *Controller) handleMoveToProcessByLabel(processLabel string) error {
 			return state, nil
 		}
 
-		isVisible := false
-
-		// Check if process is visible with current filter
-		for _, p := range state.GetFilteredProcesses() {
-			if p.ID == processID {
-				isVisible = true
-				break
-			}
-		}
-
-		newState := state
-
-		if !isVisible {
-			state.UpdateFilterText("")
-			guiState := NewGUIStateMutation(&state.GUIState).SetFilterText("").Commit()
-			newState = NewStateMutation(state).SetGUIState(guiState).Commit()
-		}
-
 		// Break current pane out to detached session (if any)
-		c.breakCurrentPane(newState, true)
+		c.breakCurrentPane(state, true)
 
 		// Move selection
-		mut := NewStateMutation(newState)
+		mut := NewStateMutation(state)
 		var err error
 		mut, err = mut.SelectProcessByID(processID)
 		if err != nil {
 			log.Printf("Error selecting process by ID %d: %v", processID, err)
-			return newState, err
+			return state, err
 		}
-		newState = mut.Commit()
+		newState := mut.Commit()
 
 		// Join newly selected pane into main pane (if any)
 		c.joinSelectedPane(newState)
@@ -130,7 +123,6 @@ func (c *Controller) joinSelectedPane(state *AppState) {
 		if err != nil {
 			log.Printf("Error getting session type for pane %s: %v", paneID, err)
 			return false
-
 		}
 		if sessionType != SessionTypeDetached {
 			log.Printf("Selected pane %s is not in detached session, skipping join", paneID)
@@ -149,7 +141,6 @@ func (c *Controller) joinSelectedPane(state *AppState) {
 	foundJoinablePane := false
 	if shouldJoin {
 		foundJoinablePane = joinPaneFn(sel.PaneID, sel.Label)
-
 	}
 	if !foundJoinablePane || !shouldJoin {
 		dummyProc := state.GetDummyProcess()

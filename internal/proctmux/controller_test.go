@@ -47,14 +47,11 @@ func TestController_StateSubscriptionEmitsUpdates(t *testing.T) {
 	ch := make(chan StateUpdateMsg, 1)
 	c.SubscribeToStateChanges(ch)
 	_ = c.LockAndLoad(func(s *AppState) (*AppState, error) {
-		gui := NewGUIStateMutation(&s.GUIState).AddMessage("hi").Commit()
-		return NewStateMutation(s).SetGUIState(gui).Commit(), nil
+		return NewStateMutation(s).SetExiting().Commit(), nil
 	})
 	select {
-	case msg := <-ch:
-		if len(msg.State.GUIState.Messages) == 0 {
-			t.Fatalf("expected at least one message in state update")
-		}
+	case <-ch:
+		// received update
 	default:
 		t.Fatalf("did not receive state update on subscription")
 	}
@@ -83,7 +80,7 @@ func TestController_OnKeypressStart_StartsCurrent(t *testing.T) {
 	}
 }
 
-func TestController_OnFilterStart_SetsGUIStateAndClearsSelection(t *testing.T) {
+func TestController_OnFilterStart_ClearsSelection(t *testing.T) {
 	cfg := &ProcTmuxConfig{Procs: map[string]ProcessConfig{"A": {Cmd: []string{"echo"}}}}
 	c, _, _ := newTestController(t, cfg)
 	_ = c.LockAndLoad(func(s *AppState) (*AppState, error) {
@@ -93,12 +90,6 @@ func TestController_OnFilterStart_SetsGUIStateAndClearsSelection(t *testing.T) {
 		t.Fatalf("OnFilterStart error: %v", err)
 	}
 	_ = c.LockAndLoad(func(s *AppState) (*AppState, error) {
-		if !s.GUIState.EnteringFilterText {
-			t.Fatalf("expected entering filter text true")
-		}
-		if s.GUIState.FilterText != "" {
-			t.Fatalf("expected filter text cleared")
-		}
 		if s.CurrentProcID != 0 {
 			t.Fatalf("expected selection cleared; got %d", s.CurrentProcID)
 		}

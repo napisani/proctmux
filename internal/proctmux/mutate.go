@@ -10,21 +10,19 @@ type StateMutation struct {
 // NewStateMutation creates a new mutation from the current state
 func NewStateMutation(state *AppState) *StateMutation {
 	// Mutate the provided state in-place so model and controller stay in sync
-	return &StateMutation{
-		initState: state,
-	}
+	return &StateMutation{initState: state}
 }
 
 // Commit returns the modified state
-func (m *StateMutation) Commit() *AppState {
-	return m.initState
-}
+func (m *StateMutation) Commit() *AppState { return m.initState }
 
-// SelectFirstProcess selects the first process in the filtered list
+// SelectFirstProcess selects the first non-dummy process
 func (m *StateMutation) SelectFirstProcess() *StateMutation {
-	filteredProcs := m.initState.GetFilteredProcesses()
-	if len(filteredProcs) > 0 {
-		m.initState.CurrentProcID = filteredProcs[0].ID
+	for i := range m.initState.Processes {
+		if m.initState.Processes[i].ID != DummyProcessID {
+			m.initState.CurrentProcID = m.initState.Processes[i].ID
+			break
+		}
 	}
 	return m
 }
@@ -34,180 +32,84 @@ func (m *StateMutation) ClearProcessSelection() *StateMutation {
 	return m
 }
 
-// MoveProcessSelection moves the process selection by the given direction
+// MoveProcessSelection moves the process selection by the given direction across all non-dummy processes.
 func (m *StateMutation) MoveProcessSelection(direction int) *StateMutation {
-	filteredProcs := m.initState.GetFilteredProcesses()
-	if len(filteredProcs) == 0 {
-		return m
-	}
-	if len(filteredProcs) < 2 {
-		return m.SelectFirstProcess()
-	}
-
-	// Build a slice of available process IDs
-	availableProcIDs := make([]int, len(filteredProcs))
-	for i, p := range filteredProcs {
-		availableProcIDs[i] = p.ID
-	}
-
-	// Find the current index
-	currentIdx := -1
-	for i, id := range availableProcIDs {
-		if id == m.initState.CurrentProcID {
-			currentIdx = i
-			break
+	var procs []*Process
+	for i := range m.initState.Processes {
+		if m.initState.Processes[i].ID != DummyProcessID {
+			procs = append(procs, &m.initState.Processes[i])
 		}
 	}
-
-	if currentIdx == -1 {
+	if len(procs) == 0 {
+		return m
+	}
+	if len(procs) < 2 {
 		return m.SelectFirstProcess()
 	}
-
-	// Calculate the new index with wrapping
-	newIdx := currentIdx + direction
-	if newIdx < 0 {
-		newIdx = len(filteredProcs) - 1
-	} else {
-		newIdx = newIdx % len(filteredProcs)
+	ids := make([]int, len(procs))
+	curIdx := -1
+	for i, p := range procs {
+		ids[i] = p.ID
+		if p.ID == m.initState.CurrentProcID {
+			curIdx = i
+		}
 	}
-
-	m.initState.CurrentProcID = availableProcIDs[newIdx]
-
+	if curIdx == -1 {
+		return m.SelectFirstProcess()
+	}
+	newIdx := curIdx + direction
+	if newIdx < 0 {
+		newIdx = len(procs) - 1
+	} else {
+		newIdx = newIdx % len(procs)
+	}
+	m.initState.CurrentProcID = ids[newIdx]
 	return m
 }
 
-// SelectProcessByID attempts to select a process by its ID
-// Returns error if the process ID is not found in the filtered processes
+// SelectProcessByID attempts to select a process by its ID among all processes
 func (m *StateMutation) SelectProcessByID(processID int) (*StateMutation, error) {
-	filteredProcs := m.initState.GetFilteredProcesses()
-	if len(filteredProcs) == 0 {
-		return m, fmt.Errorf("the process is not available in the filtered processes %d", processID)
-	}
-
-	// Check if the process ID exists in the filtered processes
-	found := false
-	for _, p := range filteredProcs {
-		if p.ID == processID {
-			found = true
-			break
+	for i := range m.initState.Processes {
+		if m.initState.Processes[i].ID == processID {
+			m.initState.CurrentProcID = processID
+			return m, nil
 		}
 	}
-
-	if !found {
-		return m, fmt.Errorf("process ID %d not found in filtered processes", processID)
-	}
-
-	// Process found, update the current process ID
-	m.initState.CurrentProcID = processID
-	return m, nil
+	return m, fmt.Errorf("process ID %d not found", processID)
 }
 
 // NextProcess moves to the next process in the list
-func (m *StateMutation) NextProcess() *StateMutation {
-	return m.MoveProcessSelection(1)
-}
+func (m *StateMutation) NextProcess() *StateMutation { return m.MoveProcessSelection(1) }
 
 // PreviousProcess moves to the previous process in the list
-func (m *StateMutation) PreviousProcess() *StateMutation {
-	return m.MoveProcessSelection(-1)
-}
+func (m *StateMutation) PreviousProcess() *StateMutation { return m.MoveProcessSelection(-1) }
 
 // SetProcessStatus sets the status for a specific process
 func (m *StateMutation) SetProcessStatus(status ProcessStatus, processID int) *StateMutation {
-	proc := m.initState.GetProcessByID(processID)
-	proc.Status = status
+	if proc := m.initState.GetProcessByID(processID); proc != nil {
+		proc.Status = status
+	}
 	return m
 }
 
 // SetProcessPaneID sets the pane ID for a specific process
 func (m *StateMutation) SetProcessPaneID(paneID string, processID int) *StateMutation {
-	proc := m.initState.GetProcessByID(processID)
-	proc.PaneID = paneID
+	if proc := m.initState.GetProcessByID(processID); proc != nil {
+		proc.PaneID = paneID
+	}
 	return m
 }
 
 // SetProcessPID sets the PID for a specific process
 func (m *StateMutation) SetProcessPID(pid int, processID int) *StateMutation {
-	proc := m.initState.GetProcessByID(processID)
-	proc.PID = pid
-	return m
-}
-
-// SetGUIState sets the GUI state
-func (m *StateMutation) SetGUIState(guiState *GUIState) *StateMutation {
-	m.initState.GUIState = *guiState
+	if proc := m.initState.GetProcessByID(processID); proc != nil {
+		proc.PID = pid
+	}
 	return m
 }
 
 // SetExiting marks the state as exiting
 func (m *StateMutation) SetExiting() *StateMutation {
 	m.initState.Exiting = true
-	return m
-}
-
-// GUIStateMutation represents a series of mutations to apply to a GUIState
-type GUIStateMutation struct {
-	initState *GUIState
-}
-
-// NewGUIStateMutation creates a new mutation from the current GUI state
-func NewGUIStateMutation(state *GUIState) *GUIStateMutation {
-	// Create a shallow copy of the GUIState
-	stateCopy := *state
-
-	// Create a deep copy of the messages slice
-	messagesCopy := make([]string, len(state.Messages))
-	copy(messagesCopy, state.Messages)
-	stateCopy.Messages = messagesCopy
-
-	return &GUIStateMutation{
-		initState: &stateCopy,
-	}
-}
-
-// Commit returns the modified GUI state
-func (m *GUIStateMutation) Commit() *GUIState {
-	return m.initState
-}
-
-// SetFilterText updates the filter text
-func (m *GUIStateMutation) SetFilterText(text string) *GUIStateMutation {
-	m.initState.FilterText = text
-	return m
-}
-
-// StartEnteringFilter sets the entering filter text state to true
-func (m *GUIStateMutation) StartEnteringFilter() *GUIStateMutation {
-	m.initState.EnteringFilterText = true
-	return m
-}
-
-// StopEnteringFilter sets the entering filter text state to false
-func (m *GUIStateMutation) StopEnteringFilter() *GUIStateMutation {
-	m.initState.EnteringFilterText = false
-	return m
-}
-
-// AddMessage appends a message to the messages list
-func (m *GUIStateMutation) AddMessage(message string) *GUIStateMutation {
-	m.initState.Messages = append(m.initState.Messages, message)
-	return m
-}
-
-// ClearMessages empties the messages list
-func (m *GUIStateMutation) ClearMessages() *GUIStateMutation {
-	m.initState.Messages = []string{}
-	return m
-}
-
-// SetInfo updates the GUI info banner/message.
-func (m *GUIStateMutation) SetInfo(info string) *GUIStateMutation {
-	m.initState.Info = info
-	return m
-}
-
-// SetMode updates the GUI mode.
-func (m *GUIStateMutation) SetMode(mode Mode) *GUIStateMutation {
-	m.initState.Mode = mode
 	return m
 }

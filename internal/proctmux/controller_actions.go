@@ -70,37 +70,19 @@ func (c *Controller) OnKeypressQuit() error {
 }
 
 func (c *Controller) OnFilterStart() error {
+	// With UI-first filtering, controller only clears selection and breaks panes.
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
-		newState := state
-		c.breakCurrentPane(newState, true)
-		guiState := NewGUIStateMutation(&state.GUIState).StartEnteringFilter().SetFilterText("").Commit()
-		newState = NewStateMutation(state).SetGUIState(guiState).ClearProcessSelection().Commit()
+		c.breakCurrentPane(state, true)
+		newState := NewStateMutation(state).ClearProcessSelection().Commit()
 		return newState, nil
 	})
 }
 
-func (c *Controller) OnFilterSet(text string) error {
-	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
-		// Update filter text and reset selection
-		state.UpdateFilterText(text)
-		// Keep GUIState in sync for entering text flow
-		guiState := NewGUIStateMutation(&state.GUIState).SetFilterText(text).Commit()
-		newState := NewStateMutation(state).SetGUIState(guiState).Commit()
-		return newState, nil
-	})
-}
+// Deprecated: UI manages filter text; keep as no-op for compatibility.
+func (c *Controller) OnFilterSet(text string) error { return nil }
 
-func (c *Controller) OnFilterDone() error {
-	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
-		guiState := NewGUIStateMutation(&state.GUIState).
-			StopEnteringFilter().
-			Commit()
-		newState := NewStateMutation(state).
-			SetGUIState(guiState).
-			Commit()
-		return newState, nil
-	})
-}
+// Deprecated: UI manages filter lifecycle; keep as no-op for compatibility.
+func (c *Controller) OnFilterDone() error { return nil }
 
 func (c *Controller) OnKeypressSwitchFocus() error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
@@ -117,9 +99,7 @@ func (c *Controller) OnKeypressDocs() error {
 	if err := c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		current := state.GetCurrentProcess()
 		if current == nil || current.Config == nil || len(strings.TrimSpace(current.Config.Docs)) == 0 {
-			gui := NewGUIStateMutation(&state.GUIState).SetInfo("no documentation for process").Commit()
-			newState := NewStateMutation(state).SetGUIState(gui).Commit()
-			return newState, nil
+			return state, nil
 		}
 		doc = current.Config.Docs
 		return state, nil
