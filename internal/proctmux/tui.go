@@ -3,25 +3,9 @@ package proctmux
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-type UIState struct {
-	Messages           []string
-	FilterText         string
-	EnteringFilterText bool
-	Info               string
-	Mode               Mode
-	ActiveProcID       int
-}
-
-type applyFilterMsg struct{ seq int }
-type applySelectionMsg struct {
-	seq    int
-	procID int
-}
 
 type Model struct {
 	controller     *Controller
@@ -52,13 +36,6 @@ func (m Model) subscribeToStateUpdates() tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd { return tea.Batch(m.subscribeToStateUpdates()) }
-
-func debounceFilter(seq int) tea.Cmd {
-	return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return applyFilterMsg{seq: seq} })
-}
-func debounceSelection(seq, procID int) tea.Cmd {
-	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return applySelectionMsg{seq: seq, procID: procID} })
-}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -361,13 +338,4 @@ func (m Model) View() string {
 		s = m.appendProcess(p, s)
 	}
 	return s
-}
-
-func contains(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
