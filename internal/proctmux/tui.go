@@ -31,9 +31,7 @@ func NewModel(state *AppState, controller *Controller) Model {
 }
 
 // subscribeToStateUpdates returns a command that listens for state updates
-func (m Model) subscribeToStateUpdates() tea.Cmd {
-	return func() tea.Msg { return <-m.stateUpdateSub }
-}
+func (m Model) subscribeToStateUpdates() tea.Cmd { return func() tea.Msg { return <-m.stateUpdateSub } }
 
 func (m Model) Init() tea.Cmd { return tea.Batch(m.subscribeToStateUpdates()) }
 
@@ -44,6 +42,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.subscribeToStateUpdates()
 	case tea.WindowSizeMsg:
 		m.termWidth, m.termHeight = msg.Width, msg.Height
+		return m, nil
+	case errMsg:
+		m.ui.Messages = append(m.ui.Messages, msg.Error())
 		return m, nil
 	case tea.KeyMsg:
 		key := msg.String()
@@ -79,7 +80,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch {
 		case contains(kb.Quit, key):
-			_ = m.controller.OnKeypressQuit()
 			return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
 		case contains(kb.Filter, key):
 			m.ui.EnteringFilterText = true
@@ -97,15 +97,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectSeq++
 			return m, debounceSelection(m.selectSeq, m.ui.ActiveProcID)
 		case contains(kb.Start, key):
-			_ = m.controller.OnKeypressStart()
+			return m, startCmd(m.controller)
 		case contains(kb.Stop, key):
-			_ = m.controller.OnKeypressStop()
+			return m, stopCmd(m.controller)
 		case contains(kb.Restart, key):
-			_ = m.controller.OnKeypressRestart()
+			return m, restartCmd(m.controller)
 		case contains(kb.Docs, key):
-			_ = m.controller.OnKeypressDocs()
+			return m, docsCmd(m.controller)
 		case key == "enter":
-			_ = m.controller.OnKeypressSwitchFocus()
+			return m, focusCmd(m.controller)
 		}
 		return m, nil
 
@@ -127,8 +127,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq != m.selectSeq {
 			return m, nil
 		}
-		_ = m.controller.ApplySelection(msg.procID)
-		return m, nil
+		return m, applySelectionCmd(m.controller, msg.procID)
 	}
 	return m, nil
 }
@@ -216,8 +215,6 @@ func (m Model) appendProcessDescription(s string) string {
 }
 
 func hexToDec(hex string) int { var dec int; fmt.Sscanf(hex, "%x", &dec); return dec }
-
-// color helpers and appendProcess remain largely unchanged
 
 func colorToAnsi(color string) (string, string) {
 	c := strings.TrimSpace(strings.ToLower(color))
