@@ -62,6 +62,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.ui.EnteringFilterText = false
 				m.ui.Mode = NormalMode
 				return m, nil
+			case key == "esc":
+				m.ui.EnteringFilterText = false
+				m.ui.Mode = NormalMode
+				m.ui.FilterText = ""
+				m.filterSeq++
+				return m, debounceFilter(m.filterSeq)
 			case key == "backspace" || key == "ctrl+h":
 				if len(m.ui.FilterText) > 0 {
 					m.ui.FilterText = m.ui.FilterText[:len(m.ui.FilterText)-1]
