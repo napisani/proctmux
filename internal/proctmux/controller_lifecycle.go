@@ -14,7 +14,7 @@ func (c *Controller) OnStartup() error {
 			proc := newState.Processes[idx]
 			if proc.Config.Autostart {
 				log.Printf("Auto-starting process %s", proc.Label)
-				newState, err = startProcess(newState, c.tmuxContext, &proc, true)
+				newState, err = startProcess(newState, c.processServer, &proc, true)
 				if err != nil {
 					log.Printf("Error auto-starting process %s: %v", proc.Label, err)
 				}
@@ -45,7 +45,7 @@ func (c *Controller) Destroy() error {
 		}
 
 		for _, process := range state.Processes {
-			newState, err = killPane(newState, &process)
+			newState, err = killPane(newState, c.processServer, &process)
 			if err != nil {
 				log.Printf("Error killing pane on exit for label: %s: %v", process.Label, err)
 			}

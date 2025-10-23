@@ -6,6 +6,7 @@ toolchain go1.24.7
 
 require (
 	github.com/charmbracelet/bubbletea v0.25.0
+	github.com/creack/pty v1.1.24
 	gopkg.in/yaml.v3 v3.0.1
 )
 

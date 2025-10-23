@@ -7,14 +7,13 @@ import (
 	"time"
 )
 
-func killPane(state *AppState, process *Process) (*AppState, error) {
-	if process == nil || process.PaneID == "" {
+func killPane(state *AppState, server *ProcessServer, process *Process) (*AppState, error) {
+	if process == nil {
 		return state, nil
 	}
 
-	if err := KillPane(process.PaneID); err != nil {
-		// if there is an error, log it but continue because it's likely because the pane is already dead
-		log.Printf("Error killing pane %s for process %s: %v", process.PaneID, process.Label, err)
+	if err := server.StopProcess(process.ID); err != nil {
+		log.Printf("Error stopping process %s: %v", process.Label, err)
 	}
 
 	newState := NewStateMutation(state).
@@ -23,39 +22,35 @@ func killPane(state *AppState, process *Process) (*AppState, error) {
 	return newState, nil
 }
 
-func startProcess(state *AppState, tmuxContext *TmuxContext, process *Process, inDetachedSession bool) (*AppState, error) {
+func startProcess(state *AppState, server *ProcessServer, process *Process, inDetachedSession bool) (*AppState, error) {
 	if process.Status != StatusHalted {
 		return state, nil
 	}
 
-	log.Printf("current process log before start: %+v", process)
+	log.Printf("Starting process %s with pipe-based execution, process id %d", process.Label, process.ID)
 
-	log.Printf("Starting process %s in new detached pane, current process id %d", process.Label, process.ID)
-	var newPane string
-	var pid int
-	var errPane error
-
-	if inDetachedSession {
-		newPane, pid, errPane = tmuxContext.CreateDetachedPane(process)
-	} else {
-		newPane, pid, errPane = tmuxContext.CreatePane(process)
+	instance, err := server.StartProcess(process.ID, process.Config)
+	if err != nil {
+		log.Printf("Error starting process %s: %v", process.Label, err)
+		return state, err
 	}
 
-	if errPane != nil {
-		log.Printf("Error creating pane for process %s: %v", process.Label, errPane)
-		return state, errPane
-	}
-
-	log.Printf("Created new pane %s for process %s, process id %d", newPane, process.Label, process.ID)
-	log.Printf("Started process %s with PID %d in pane %s", process.Label, pid, newPane)
+	pid := instance.GetPID()
+	log.Printf("Started process %s with PID %d", process.Label, pid)
 
 	newState := NewStateMutation(state).
 		SetProcessStatus(StatusRunning, process.ID).
-		SetProcessPaneID(newPane, process.ID).
+		SetProcessPaneID("", process.ID).
 		SetProcessPID(pid, process.ID).
 		Commit()
-	return newState, nil
 
+	go func() {
+		<-instance.WaitForExit()
+		log.Printf("Process %s (PID: %d) exited", process.Label, pid)
+		server.RemoveProcess(process.ID)
+	}()
+
+	return newState, nil
 }
 
 func focusActivePane(state *AppState, tmuxContext *TmuxContext) error {

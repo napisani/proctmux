@@ -19,10 +19,21 @@ type Controller struct {
 	pidCh         chan int
 	daemons       []*TmuxDaemon
 	uiSubscribers []chan<- StateUpdateMsg
+	processServer *ProcessServer
+	ttyViewer     *TTYViewer
 }
 
 func NewController(state *AppState, tmuxContext *TmuxContext, running *atomic.Bool) *Controller {
-	return &Controller{state: state, tmuxContext: tmuxContext, running: running, pidCh: make(chan int, 64)}
+	server := NewProcessServer()
+	viewer := NewTTYViewer(server)
+	return &Controller{
+		state:         state,
+		tmuxContext:   tmuxContext,
+		running:       running,
+		pidCh:         make(chan int, 64),
+		processServer: server,
+		ttyViewer:     viewer,
+	}
 }
 
 func (c *Controller) LockAndLoad(f func(*AppState) (*AppState, error)) error {
@@ -60,27 +71,31 @@ func (c *Controller) EmitStateChangeNotification() {
 	}
 }
 
-// ApplySelection reflects a UI-selected process into the domain and tmux panes.
-// procID==0 clears selection and breaks current/dummy to detached if needed.
+// ApplySelection reflects a UI-selected process into the domain and switches TTY viewer.
+// procID==0 clears selection.
 func (c *Controller) ApplySelection(procID int) error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		if procID == 0 {
-			c.breakCurrentPane(state, true)
 			state.CurrentProcID = 0
 			return state, nil
 		}
 		if state.CurrentProcID == procID {
-			c.joinSelectedPane(state)
 			return state, nil
 		}
-		c.breakCurrentPane(state, true)
 		mut := NewStateMutation(state)
 		mut, err := mut.SelectProcessByID(procID)
 		if err != nil {
 			return state, err
 		}
 		newState := mut.Commit()
-		c.joinSelectedPane(newState)
+
+		proc := newState.GetProcessByID(procID)
+		if proc != nil && proc.Status == StatusRunning {
+			if err := c.ttyViewer.SwitchToProcess(proc.ID); err != nil {
+				log.Printf("Error switching TTY viewer to %s: %v", proc.Label, err)
+			}
+		}
+
 		return newState, nil
 	})
 }

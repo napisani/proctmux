@@ -24,18 +24,12 @@ func (c *Controller) OnKeypressStart() error {
 			return state, nil
 		}
 
-		newState, err := killPane(state, currentProcess)
+		newState, err := killPane(state, c.processServer, currentProcess)
 		if err != nil {
 			log.Printf("Error killing existing pane for %s: %v", currentProcess.Label, err)
 		}
-		c.breakCurrentPane(newState, true)
 		currentProcess = newState.GetProcessByID(state.CurrentProcID)
-		newState, err = startProcess(newState, c.tmuxContext, currentProcess, false)
-		if err == nil && currentProcess.Config.Autofocus {
-			if err2 := focusActivePane(newState, c.tmuxContext); err2 != nil {
-				log.Printf("Error auto-focusing %s: %v", currentProcess.Label, err2)
-			}
-		}
+		newState, err = startProcess(newState, c.processServer, currentProcess, false)
 		return newState, err
 	})
 }
@@ -70,9 +64,7 @@ func (c *Controller) OnKeypressQuit() error {
 }
 
 func (c *Controller) OnFilterStart() error {
-	// With UI-first filtering, controller only clears selection and breaks panes.
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
-		c.breakCurrentPane(state, true)
 		newState := NewStateMutation(state).ClearProcessSelection().Commit()
 		return newState, nil
 	})
@@ -86,11 +78,7 @@ func (c *Controller) OnFilterDone() error { return nil }
 
 func (c *Controller) OnKeypressSwitchFocus() error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
-		err := focusActivePane(state, c.tmuxContext)
-		if err != nil {
-			log.Printf("Error focusing active pane: %v", err)
-		}
-		return state, err
+		return state, nil
 	})
 }
 

@@ -36,7 +36,7 @@ func TestController_OnStartup_AutostartsProcesses(t *testing.T) {
 		got = *p
 		return s, nil
 	})
-	if got.Status != StatusRunning || got.PID <= 0 || got.PaneID == "" {
+	if got.Status != StatusRunning || got.PID <= 0 {
 		t.Fatalf("autostarted process not running as expected: %+v", got)
 	}
 }
@@ -75,7 +75,7 @@ func TestController_OnKeypressStart_StartsCurrent(t *testing.T) {
 		p = s.GetCurrentProcess()
 		return s, nil
 	})
-	if p == nil || p.Status != StatusRunning || p.PID <= 0 || p.PaneID == "" {
+	if p == nil || p.Status != StatusRunning || p.PID <= 0 {
 		t.Fatalf("current process not running as expected: %+v", p)
 	}
 }
