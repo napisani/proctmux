@@ -95,7 +95,7 @@ func (c *Controller) OnKeypressDocs() error {
 		return err
 	}
 	if len(strings.TrimSpace(doc)) > 0 {
-		return c.tmuxContext.ShowTextPopup(doc)
+		log.Printf("Documentation for current process:\n%s", doc)
 	}
 	return nil
 }

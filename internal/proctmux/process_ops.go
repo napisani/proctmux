@@ -17,7 +17,6 @@ func killPane(state *AppState, server *ProcessServer, process *Process) (*AppSta
 	}
 
 	newState := NewStateMutation(state).
-		SetProcessPaneID("", process.ID).
 		Commit()
 	return newState, nil
 }
@@ -40,7 +39,6 @@ func startProcess(state *AppState, server *ProcessServer, process *Process, inDe
 
 	newState := NewStateMutation(state).
 		SetProcessStatus(StatusRunning, process.ID).
-		SetProcessPaneID("", process.ID).
 		SetProcessPID(pid, process.ID).
 		Commit()
 
@@ -53,13 +51,13 @@ func startProcess(state *AppState, server *ProcessServer, process *Process, inDe
 	return newState, nil
 }
 
-func focusActivePane(state *AppState, tmuxContext *TmuxContext) error {
+func focusActivePane(state *AppState) error {
 	currentProcess := state.GetCurrentProcess()
 	if currentProcess == nil {
 		log.Println("No current process to focus")
 		return nil
 	}
-	return tmuxContext.FocusPane(currentProcess.PaneID)
+	return nil
 }
 
 func haltAllProcesses(state *AppState) (*AppState, error) {

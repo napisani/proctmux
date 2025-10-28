@@ -72,18 +72,20 @@ type ProcTmuxConfig struct {
 }
 
 type ProcessConfig struct {
-	Shell       string            `yaml:"shell"`
-	Cmd         []string          `yaml:"cmd"`
-	Cwd         string            `yaml:"cwd"`
-	Env         map[string]string `yaml:"env"`
-	Stop        int               `yaml:"stop"`
-	Autostart   bool              `yaml:"autostart"`
-	Autofocus   bool              `yaml:"autofocus"`
-	Description string            `yaml:"description"`
-	Docs        string            `yaml:"docs"`
-	MetaTags    []string          `yaml:"meta_tags"`
-	Categories  []string          `yaml:"categories"`
-	AddPath     []string          `yaml:"add_path"`
+	Shell        string            `yaml:"shell"`
+	Cmd          []string          `yaml:"cmd"`
+	Cwd          string            `yaml:"cwd"`
+	Env          map[string]string `yaml:"env"`
+	Stop         int               `yaml:"stop"`
+	Autostart    bool              `yaml:"autostart"`
+	Autofocus    bool              `yaml:"autofocus"`
+	Description  string            `yaml:"description"`
+	Docs         string            `yaml:"docs"`
+	MetaTags     []string          `yaml:"meta_tags"`
+	Categories   []string          `yaml:"categories"`
+	AddPath      []string          `yaml:"add_path"`
+	TerminalRows int               `yaml:"terminal_rows"`
+	TerminalCols int               `yaml:"terminal_cols"`
 }
 
 // Ensure all config structs are properly tagged for YAML unmarshalling

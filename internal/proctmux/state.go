@@ -106,11 +106,6 @@ func (s *AppState) SetProcessStatus(id int, status ProcessStatus) {
 		p.Status = status
 	}
 }
-func (s *AppState) SetProcessPaneID(id int, paneID string) {
-	if p := s.GetProcessByID(id); p != nil {
-		p.PaneID = paneID
-	}
-}
 
 // SelectFirstProcess selects the first non-dummy process by current ordering.
 func (s *AppState) SelectFirstProcess() *AppState {

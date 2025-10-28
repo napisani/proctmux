@@ -71,13 +71,15 @@ shell_cmd:
 # if this property is defined, the app will log all debug, info, error level logs to the designated file
 enable_mouse: true
 procs:
-  # each key will show up as its own process/script in the process list
-  "tail log":
-    # the shell command to run when this process is started
-    shell: "tail -f /tmp/proctmux.log"
-    # whether to start this process when ProcMux starts
+  "test ansi":
+    shell: "while true; do echo -e '\\033[31mRed\\033[0m \\033[32mGreen\\033[0m \\033[33mYellow\\033[0m \\033[34mBlue\\033[0m'; sleep 1; done"
     autostart: true
-    # a short description of what this process/command does - will be displayed at the bottom of the screen when selected
+    description: 'Test ANSI color codes'
+    terminal_rows: 24
+    terminal_cols: 80
+  "tail log":
+    shell: "tail -f /tmp/proctmux.log"
+    autostart: false
     description: 'tail the app log'
     meta_tags:
       - 'follow'

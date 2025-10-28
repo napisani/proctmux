@@ -17,9 +17,9 @@ type TTYViewer struct {
 }
 
 type OutputBuffer struct {
-	lines    []string
+	data     []byte
 	mu       sync.RWMutex
-	maxLines int
+	maxBytes int
 }
 
 type InputBuffer struct {
@@ -31,15 +31,15 @@ func NewTTYViewer(server *ProcessServer) *TTYViewer {
 	return &TTYViewer{
 		currentProcessID: 0,
 		server:           server,
-		outputBuffer:     NewOutputBuffer(10000),
+		outputBuffer:     NewOutputBuffer(1024 * 1024),
 		inputBuffer:      &InputBuffer{data: []byte{}},
 	}
 }
 
-func NewOutputBuffer(maxLines int) *OutputBuffer {
+func NewOutputBuffer(maxBytes int) *OutputBuffer {
 	return &OutputBuffer{
-		lines:    []string{},
-		maxLines: maxLines,
+		data:     []byte{},
+		maxBytes: maxBytes,
 	}
 }
 
@@ -141,10 +141,10 @@ func (ob *OutputBuffer) Append(text string) {
 	ob.mu.Lock()
 	defer ob.mu.Unlock()
 
-	ob.lines = append(ob.lines, text)
+	ob.data = append(ob.data, []byte(text)...)
 
-	if len(ob.lines) > ob.maxLines {
-		ob.lines = ob.lines[len(ob.lines)-ob.maxLines:]
+	if len(ob.data) > ob.maxBytes {
+		ob.data = ob.data[len(ob.data)-ob.maxBytes:]
 	}
 }
 
@@ -152,15 +152,11 @@ func (ob *OutputBuffer) GetAll() string {
 	ob.mu.RLock()
 	defer ob.mu.RUnlock()
 
-	result := ""
-	for _, line := range ob.lines {
-		result += line
-	}
-	return result
+	return string(ob.data)
 }
 
 func (ob *OutputBuffer) Clear() {
 	ob.mu.Lock()
 	defer ob.mu.Unlock()
-	ob.lines = []string{}
+	ob.data = []byte{}
 }

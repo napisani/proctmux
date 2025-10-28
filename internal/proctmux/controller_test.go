@@ -1,20 +1,16 @@
 package proctmux
 
 import (
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 )
 
-func newTestController(t *testing.T, cfg *ProcTmuxConfig) (*Controller, *AppState, *TmuxContext) {
+func newTestController(t *testing.T, cfg *ProcTmuxConfig) (*Controller, *AppState) {
 	t.Helper()
-	mock := filepath.Join("testdata", "tmux-mock.sh")
-	t.Setenv("PROCTMUX_TMUX_BIN", mock)
 	state := NewAppState(cfg)
-	ctx := NewTmuxContextWithIDs("%0", "$0", "$100", state.Config.Layout.ProcessesListWidth)
 	var running atomic.Bool
-	c := NewController(&state, ctx, &running)
-	return c, &state, ctx
+	c := NewController(&state, &running)
+	return c, &state
 }
 
 func TestController_OnStartup_AutostartsProcesses(t *testing.T) {
@@ -22,7 +18,7 @@ func TestController_OnStartup_AutostartsProcesses(t *testing.T) {
 		"A": {Cmd: []string{"echo", "A"}, Cwd: ".", Autostart: true},
 		"B": {Cmd: []string{"echo", "B"}, Cwd: "."},
 	}}
-	c, _, _ := newTestController(t, cfg)
+	c, _ := newTestController(t, cfg)
 	if err := c.OnStartup(); err != nil {
 		t.Fatalf("OnStartup error: %v", err)
 	}
@@ -43,7 +39,7 @@ func TestController_OnStartup_AutostartsProcesses(t *testing.T) {
 
 func TestController_StateSubscriptionEmitsUpdates(t *testing.T) {
 	cfg := &ProcTmuxConfig{Procs: map[string]ProcessConfig{"A": {Cmd: []string{"echo"}}}}
-	c, _, _ := newTestController(t, cfg)
+	c, _ := newTestController(t, cfg)
 	ch := make(chan StateUpdateMsg, 1)
 	c.SubscribeToStateChanges(ch)
 	_ = c.LockAndLoad(func(s *AppState) (*AppState, error) {
@@ -62,7 +58,7 @@ func TestController_OnKeypressStart_StartsCurrent(t *testing.T) {
 		"A": {Cmd: []string{"echo", "A"}, Cwd: "."},
 		"B": {Cmd: []string{"echo", "B"}, Cwd: "."},
 	}}
-	c, _, _ := newTestController(t, cfg)
+	c, _ := newTestController(t, cfg)
 	// Select first non-dummy process
 	_ = c.LockAndLoad(func(s *AppState) (*AppState, error) {
 		return NewStateMutation(s).SelectFirstProcess().Commit(), nil
@@ -82,7 +78,7 @@ func TestController_OnKeypressStart_StartsCurrent(t *testing.T) {
 
 func TestController_OnFilterStart_ClearsSelection(t *testing.T) {
 	cfg := &ProcTmuxConfig{Procs: map[string]ProcessConfig{"A": {Cmd: []string{"echo"}}}}
-	c, _, _ := newTestController(t, cfg)
+	c, _ := newTestController(t, cfg)
 	_ = c.LockAndLoad(func(s *AppState) (*AppState, error) {
 		return NewStateMutation(s).SelectFirstProcess().Commit(), nil
 	})
@@ -97,31 +93,9 @@ func TestController_OnFilterStart_ClearsSelection(t *testing.T) {
 	})
 }
 
-func TestController_OnPidTerminated_UpdatesState(t *testing.T) {
-	cfg := &ProcTmuxConfig{Procs: map[string]ProcessConfig{"A": {Cmd: []string{"echo"}}}}
-	c, _, _ := newTestController(t, cfg)
-	var pid int
-	_ = c.LockAndLoad(func(s *AppState) (*AppState, error) {
-		p := s.GetProcessByLabel("A")
-		p.Status = StatusRunning
-		p.PID = 12345
-		p.PaneID = "%100"
-		pid = p.PID
-		return s, nil
-	})
-	c.OnPidTerminated(pid)
-	_ = c.LockAndLoad(func(s *AppState) (*AppState, error) {
-		p := s.GetProcessByLabel("A")
-		if p.Status != StatusHalted || p.PID != -1 {
-			t.Fatalf("expected halted and pid=-1; got status=%v pid=%d", p.Status, p.PID)
-		}
-		return s, nil
-	})
-}
-
 func TestController_OnKeypressDocs_ShowsPopup(t *testing.T) {
 	cfg := &ProcTmuxConfig{Procs: map[string]ProcessConfig{"A": {Cmd: []string{"echo"}, Docs: "hello"}}}
-	c, _, _ := newTestController(t, cfg)
+	c, _ := newTestController(t, cfg)
 	_ = c.LockAndLoad(func(s *AppState) (*AppState, error) {
 		return NewStateMutation(s).SelectFirstProcess().Commit(), nil
 	})

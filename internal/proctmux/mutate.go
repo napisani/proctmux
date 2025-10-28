@@ -92,14 +92,6 @@ func (m *StateMutation) SetProcessStatus(status ProcessStatus, processID int) *S
 	return m
 }
 
-// SetProcessPaneID sets the pane ID for a specific process
-func (m *StateMutation) SetProcessPaneID(paneID string, processID int) *StateMutation {
-	if proc := m.initState.GetProcessByID(processID); proc != nil {
-		proc.PaneID = paneID
-	}
-	return m
-}
-
 // SetProcessPID sets the PID for a specific process
 func (m *StateMutation) SetProcessPID(pid int, processID int) *StateMutation {
 	if proc := m.initState.GetProcessByID(processID); proc != nil {

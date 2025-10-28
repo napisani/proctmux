@@ -54,6 +54,23 @@ func (ps *ProcessServer) StartProcess(id int, config *ProcessConfig) (*ProcessIn
 		return nil, fmt.Errorf("failed to start process with pty: %w", err)
 	}
 
+	rows := uint16(24)
+	cols := uint16(80)
+	if config.TerminalRows > 0 {
+		rows = uint16(config.TerminalRows)
+	}
+	if config.TerminalCols > 0 {
+		cols = uint16(config.TerminalCols)
+	}
+
+	size := &pty.Winsize{
+		Rows: rows,
+		Cols: cols,
+	}
+	if err := pty.Setsize(ptmx, size); err != nil {
+		log.Printf("Warning: failed to set PTY size: %v", err)
+	}
+
 	instance := &ProcessInstance{
 		ID:       id,
 		cmd:      cmd,

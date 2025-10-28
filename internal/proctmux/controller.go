@@ -14,21 +14,18 @@ type StateUpdateMsg struct {
 type Controller struct {
 	state         *AppState
 	stateMu       sync.Mutex
-	tmuxContext   *TmuxContext
 	running       *atomic.Bool
 	pidCh         chan int
-	daemons       []*TmuxDaemon
 	uiSubscribers []chan<- StateUpdateMsg
 	processServer *ProcessServer
 	ttyViewer     *TTYViewer
 }
 
-func NewController(state *AppState, tmuxContext *TmuxContext, running *atomic.Bool) *Controller {
+func NewController(state *AppState, running *atomic.Bool) *Controller {
 	server := NewProcessServer()
 	viewer := NewTTYViewer(server)
 	return &Controller{
 		state:         state,
-		tmuxContext:   tmuxContext,
 		running:       running,
 		pidCh:         make(chan int, 64),
 		processServer: server,

@@ -321,7 +321,7 @@ func (m Model) appendProcess(p *Process, s string) string {
 	}
 	processText := ""
 	if m.domain.Config.Layout.EnableDebugProcessInfo {
-		processText = fmt.Sprintf("%s [%s] PID:%d%s (Pane: %s)", p.Label, p.Status.String(), p.PID, cat, p.PaneID)
+		processText = fmt.Sprintf("%s [%s] PID:%d%s", p.Label, p.Status.String(), p.PID, cat)
 	} else {
 		processText = p.Label
 	}

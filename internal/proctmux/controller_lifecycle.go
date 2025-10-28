@@ -3,9 +3,6 @@ package proctmux
 import "log"
 
 func (c *Controller) OnStartup() error {
-	if err := c.tmuxContext.Prepare(); err != nil {
-		return err
-	}
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		newState := state
 		var err error
@@ -28,10 +25,6 @@ func (c *Controller) OnStartup() error {
 func (c *Controller) Destroy() error {
 	log.Println("Controller destroying, cleaning up...")
 	close(c.pidCh)
-	for _, d := range c.daemons {
-		log.Printf("Destroying daemon for session %s", d.SessionID)
-		d.Destroy()
-	}
 	c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		accState := state
 		var err error
@@ -52,9 +45,6 @@ func (c *Controller) Destroy() error {
 			if newState != nil {
 				accState = newState
 			}
-		}
-		if err := c.tmuxContext.Cleanup(); err != nil {
-			log.Printf("Error cleaning up tmux context: %v", err)
 		}
 		return accState, nil
 	})

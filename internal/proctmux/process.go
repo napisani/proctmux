@@ -31,7 +31,6 @@ type Process struct {
 	ID     int
 	Label  string
 	Status ProcessStatus
-	PaneID string
 	PID    int
 	Config *ProcessConfig
 }
@@ -41,7 +40,6 @@ func NewFromProcessConfig(id int, label string, cfg *ProcessConfig) Process {
 		ID:     id,
 		Label:  label,
 		Status: StatusHalted,
-		PaneID: "",
 		PID:    -1,
 		Config: cfg,
 	}

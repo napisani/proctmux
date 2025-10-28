@@ -155,20 +155,10 @@ func main() {
 	log.Printf("Loaded config: %+v", cfg)
 
 	state := proctmux.NewAppState(cfg)
-	tmuxContext, cfgLoadErr := proctmux.NewTmuxContext(cfg.General.DetachedSessionName, cfg.General.KillExistingSession, cfg.Layout.ProcessesListWidth)
-	if cfgLoadErr != nil {
-		log.Fatal("Failed to create TmuxContext:", cfgLoadErr)
-	}
 	running := new(atomic.Bool)
 	running.Store(true)
-	controller := proctmux.NewController(&state, tmuxContext, running)
+	controller := proctmux.NewController(&state, running)
 	defer controller.Destroy()
-
-	// --- TmuxDaemon logic moved into controller ---
-	if err := controller.RegisterTmuxDaemons(tmuxContext.SessionID, tmuxContext.DetachedSessionID); err != nil {
-		log.Fatal("Failed to register tmux daemons:", err)
-	}
-	// --- End TmuxDaemon logic ---
 
 	if err := controller.OnStartup(); err != nil {
 		log.Fatal("Controller startup failed:", err)
