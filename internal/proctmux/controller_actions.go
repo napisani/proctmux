@@ -24,20 +24,36 @@ func (c *Controller) OnKeypressStart() error {
 			return state, nil
 		}
 
-		newState, err := killPane(state, c.processServer, currentProcess)
+		err := c.SendCommand("start", currentProcess.ID, currentProcess.Config)
 		if err != nil {
-			log.Printf("Error killing existing pane for %s: %v", currentProcess.Label, err)
+			log.Printf("Error sending start command for %s: %v", currentProcess.Label, err)
+			return state, err
 		}
-		currentProcess = newState.GetProcessByID(state.CurrentProcID)
-		newState, err = startProcess(newState, c.processServer, currentProcess, false)
-		return newState, err
+
+		return state, nil
 	})
 }
 
 func (c *Controller) OnKeypressStop() error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		currentProcess := state.GetCurrentProcess()
-		return haltProcess(state, currentProcess)
+		if currentProcess == nil {
+			log.Println("No current process selected")
+			return state, nil
+		}
+
+		if currentProcess.Status != StatusRunning {
+			log.Printf("Process %s is not running", currentProcess.Label)
+			return state, nil
+		}
+
+		err := c.SendCommand("stop", currentProcess.ID, nil)
+		if err != nil {
+			log.Printf("Error sending stop command for %s: %v", currentProcess.Label, err)
+			return state, err
+		}
+
+		return state, nil
 	})
 }
 
@@ -48,18 +64,17 @@ func (c *Controller) OnKeypressQuit() error {
 		}
 
 		newState := NewStateMutation(state).SetExiting().Commit()
-		var err error
+
 		for _, p := range newState.Processes {
-			if p.Status != StatusHalted {
-				newState, err = haltProcess(newState, &p)
+			if p.Status == StatusRunning {
+				err := c.SendCommand("stop", p.ID, nil)
 				if err != nil {
-					log.Printf("Error halting process %s: %v", p.Label, err)
-					return nil, err
+					log.Printf("Error sending stop command for %s: %v", p.Label, err)
 				}
 			}
 		}
 
-		return state, nil
+		return newState, nil
 	})
 }
 

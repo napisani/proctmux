@@ -35,7 +35,11 @@ func setupLogger(logPath string) (*os.File, error) {
 func main() {
 	// Parse command-line flags
 	var configFile string
+	var mode string
+	var socketPath string
 	flag.StringVar(&configFile, "f", "", "path to config file (default: searches for proctmux.yaml in current directory)")
+	flag.StringVar(&mode, "mode", "list", "mode: list (process list UI) or viewer (output viewer)")
+	flag.StringVar(&socketPath, "socket", "", "unix socket path (required for viewer mode)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] [command]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Options:\n")
@@ -48,6 +52,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  signal-restart <name>    Restart a process via signal server\n")
 		fmt.Fprintf(os.Stderr, "  signal-restart-running   Restart all running processes\n")
 		fmt.Fprintf(os.Stderr, "  signal-stop-running      Stop all running processes\n")
+		fmt.Fprintf(os.Stderr, "\nViewer Mode:\n")
+		fmt.Fprintf(os.Stderr, "  --mode viewer --socket <path>    View process output in separate terminal\n")
 	}
 	flag.Parse()
 
@@ -84,6 +90,24 @@ func main() {
 	subcmd := "start"
 	if len(args) > 0 {
 		subcmd = args[0]
+	}
+
+	// Viewer mode
+	if mode == "viewer" {
+		if socketPath == "" {
+			log.Fatal("--socket required for viewer mode")
+		}
+		client, err := proctmux.NewIPCClient(socketPath)
+		if err != nil {
+			log.Fatal("Failed to connect to IPC server:", err)
+		}
+		processServer := proctmux.NewProcessServer()
+		viewerModel := proctmux.NewViewerModel(client, processServer)
+		p := tea.NewProgram(viewerModel, tea.WithAltScreen())
+		if err := p.Start(); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 
 	// Client mode
@@ -171,7 +195,20 @@ func main() {
 	}
 	defer stopServer()
 
-	p := tea.NewProgram(proctmux.NewModel(&state, controller), tea.WithAltScreen())
+	// Start IPC server for viewer mode
+	var ipcServer *proctmux.IPCServer
+	ipcSocketPath := fmt.Sprintf("/tmp/proctmux-%d.sock", os.Getpid())
+	ipcServer = proctmux.NewIPCServer()
+	if err := ipcServer.Start(ipcSocketPath); err != nil {
+		log.Printf("Warning: Failed to start IPC server: %v", err)
+		ipcSocketPath = ""
+	} else {
+		controller.SetIPCServer(ipcServer)
+		log.Printf("IPC server started on %s", ipcSocketPath)
+		defer ipcServer.Stop()
+	}
+
+	p := tea.NewProgram(proctmux.NewModel(&state, controller, ipcSocketPath), tea.WithAltScreen())
 	if err := p.Start(); err != nil {
 		log.Fatal(err)
 	}

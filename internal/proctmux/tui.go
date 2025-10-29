@@ -14,17 +14,19 @@ type Model struct {
 	termWidth      int
 	termHeight     int
 	stateUpdateSub chan StateUpdateMsg
+	socketPath     string
 
 	filterSeq int
 	selectSeq int
 }
 
-func NewModel(state *AppState, controller *Controller) Model {
+func NewModel(state *AppState, controller *Controller, socketPath string) Model {
 	model := Model{
 		domain:         state,
 		controller:     controller,
 		stateUpdateSub: make(chan StateUpdateMsg),
 		ui:             UIState{Messages: []string{}, ActiveProcID: state.CurrentProcID},
+		socketPath:     socketPath,
 	}
 	controller.SubscribeToStateChanges(model.stateUpdateSub)
 	return model
@@ -188,6 +190,9 @@ func (m Model) appendHelpPanel(s string) string {
 		strings.Join(m.domain.Config.Keybinding.Down, "/") + "] Down  [" +
 		strings.Join(m.domain.Config.Keybinding.Filter, "/") + "] Filter  [" +
 		strings.Join(m.domain.Config.Keybinding.Quit, "/") + "] Quit\n"
+	if m.socketPath != "" {
+		s += "\nViewer mode: ./proctmux --mode viewer --socket " + m.socketPath + "\n"
+	}
 	return s
 }
 
@@ -330,25 +335,6 @@ func (m Model) appendProcess(p *Process, s string) string {
 	return s
 }
 
-func (m Model) appendProcessOutput(s string) string {
-	if m.domain.CurrentProcID == 0 || m.domain.CurrentProcID == DummyProcessID {
-		return s
-	}
-
-	proc := m.domain.GetProcessByID(m.domain.CurrentProcID)
-	if proc == nil || proc.Status != StatusRunning {
-		return s
-	}
-
-	output := m.controller.ttyViewer.GetOutput()
-	if len(output) > 0 {
-		s += "\n--- Process Output: " + proc.Label + " ---\n"
-		s += output
-	}
-
-	return s
-}
-
 func (m Model) View() string {
 	procs := FilterProcesses(m.domain.Config, m.domain.Processes, m.ui.FilterText)
 	s := ""
@@ -359,6 +345,5 @@ func (m Model) View() string {
 	for _, p := range procs {
 		s = m.appendProcess(p, s)
 	}
-	s = m.appendProcessOutput(s)
 	return s
 }

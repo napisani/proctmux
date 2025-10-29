@@ -26,8 +26,11 @@ func (c *Controller) handleMove(directionNum int) error {
 		}
 		newState := mut.Commit()
 
-		if err := c.ttyViewer.SwitchToProcess(newState.CurrentProcID); err != nil {
-			log.Printf("Error switching viewer to process %d: %v", newState.CurrentProcID, err)
+		if c.ipcServer != nil {
+			proc := newState.GetProcessByID(newState.CurrentProcID)
+			if proc != nil {
+				c.ipcServer.BroadcastSelection(proc.ID, proc.Label)
+			}
 		}
 
 		return newState, nil
@@ -69,8 +72,11 @@ func (c *Controller) handleMoveToProcessByLabel(processLabel string) error {
 		}
 		newState := mut.Commit()
 
-		if err := c.ttyViewer.SwitchToProcess(newState.CurrentProcID); err != nil {
-			log.Printf("Error switching viewer to process %d: %v", newState.CurrentProcID, err)
+		if c.ipcServer != nil {
+			proc := newState.GetProcessByID(newState.CurrentProcID)
+			if proc != nil {
+				c.ipcServer.BroadcastSelection(proc.ID, proc.Label)
+			}
 		}
 
 		return newState, nil

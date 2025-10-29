@@ -17,20 +17,22 @@ type Controller struct {
 	running       *atomic.Bool
 	pidCh         chan int
 	uiSubscribers []chan<- StateUpdateMsg
-	processServer *ProcessServer
-	ttyViewer     *TTYViewer
+	ipcServer     *IPCServer
 }
 
 func NewController(state *AppState, running *atomic.Bool) *Controller {
-	server := NewProcessServer()
-	viewer := NewTTYViewer(server)
 	return &Controller{
-		state:         state,
-		running:       running,
-		pidCh:         make(chan int, 64),
-		processServer: server,
-		ttyViewer:     viewer,
+		state:   state,
+		running: running,
+		pidCh:   make(chan int, 64),
 	}
+}
+
+func (c *Controller) SetIPCServer(server *IPCServer) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.ipcServer = server
+	server.SetController(c)
 }
 
 func (c *Controller) LockAndLoad(f func(*AppState) (*AppState, error)) error {
@@ -68,7 +70,7 @@ func (c *Controller) EmitStateChangeNotification() {
 	}
 }
 
-// ApplySelection reflects a UI-selected process into the domain and switches TTY viewer.
+// ApplySelection reflects a UI-selected process into the domain and broadcasts to viewers.
 // procID==0 clears selection.
 func (c *Controller) ApplySelection(procID int) error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
@@ -87,12 +89,50 @@ func (c *Controller) ApplySelection(procID int) error {
 		newState := mut.Commit()
 
 		proc := newState.GetProcessByID(procID)
-		if proc != nil && proc.Status == StatusRunning {
-			if err := c.ttyViewer.SwitchToProcess(proc.ID); err != nil {
-				log.Printf("Error switching TTY viewer to %s: %v", proc.Label, err)
-			}
+		if proc != nil && c.ipcServer != nil {
+			c.ipcServer.BroadcastSelection(proc.ID, proc.Label)
 		}
 
 		return newState, nil
 	})
+}
+
+// OnStatusUpdate handles status updates from viewers
+func (c *Controller) OnStatusUpdate(procID int, status string, pid int, exitCode int) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+
+	proc := c.state.GetProcessByID(procID)
+	if proc == nil {
+		log.Printf("Received status update for unknown process ID: %d", procID)
+		return
+	}
+
+	log.Printf("Status update for %s (ID: %d): status=%s pid=%d exit_code=%d",
+		proc.Label, procID, status, pid, exitCode)
+
+	mut := NewStateMutation(c.state)
+
+	switch status {
+	case "running":
+		proc.Status = StatusRunning
+		proc.PID = pid
+	case "stopped":
+		proc.Status = StatusHalted
+		proc.PID = 0
+	default:
+		log.Printf("Unknown status: %s", status)
+		return
+	}
+
+	c.state = mut.Commit()
+	c.EmitStateChangeNotification()
+}
+
+// SendCommand sends a command to viewers via IPC
+func (c *Controller) SendCommand(action string, procID int, config *ProcessConfig) error {
+	if c.ipcServer == nil {
+		return nil
+	}
+	return c.ipcServer.SendCommand(action, procID, config)
 }
