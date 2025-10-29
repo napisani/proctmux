@@ -12,23 +12,17 @@ type ViewerModel struct {
 	ipcClient     *IPCClient
 	processServer *ProcessServer
 	ttyViewer     *TTYViewer
-	currentProcID int
-	currentLabel  string
+	state         *AppState
 	termWidth     int
 	termHeight    int
 	errorMsg      string
 	connected     bool
-	processes     map[int]*Process
 }
 
-type selectionMsg struct {
-	procID int
-	label  string
-}
-
-type commandMsg struct {
+type userActionMsg struct {
 	action string
 	procID int
+	label  string
 	config *ProcessConfig
 }
 
@@ -38,20 +32,20 @@ type connectionErrorMsg struct {
 
 type tickMsg time.Time
 
-func NewViewerModel(client *IPCClient, server *ProcessServer) ViewerModel {
+func NewViewerModel(client *IPCClient, server *ProcessServer, cfg *ProcTmuxConfig) ViewerModel {
 	viewer := NewTTYViewer(server)
+	state := NewAppState(cfg)
 	return ViewerModel{
 		ipcClient:     client,
 		processServer: server,
 		ttyViewer:     viewer,
-		currentProcID: 0,
-		currentLabel:  "",
+		state:         &state,
 		connected:     client.IsConnected(),
-		processes:     make(map[int]*Process),
 	}
 }
 
 func (m ViewerModel) Init() tea.Cmd {
+	m.broadcastState()
 	return tea.Batch(
 		m.pollSelection(),
 		tickCmd(),
@@ -70,21 +64,17 @@ func (m ViewerModel) pollSelection() tea.Cmd {
 			return connectionErrorMsg{err: fmt.Errorf("not connected to IPC server")}
 		}
 
-		msg, err := m.ipcClient.ReadSelection()
+		msg, err := m.ipcClient.ReadMessage()
 		if err != nil {
 			return connectionErrorMsg{err: err}
 		}
 
 		switch msg.Type {
-		case "selection":
-			return selectionMsg{
-				procID: msg.ProcessID,
-				label:  msg.Label,
-			}
-		case "command":
-			return commandMsg{
+		case "user_action":
+			return userActionMsg{
 				action: msg.Action,
 				procID: msg.ProcessID,
+				label:  msg.Label,
 				config: msg.Config,
 			}
 		default:
@@ -107,32 +97,15 @@ func (m ViewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case selectionMsg:
+	case userActionMsg:
 		m.errorMsg = ""
 		m.connected = true
 
-		if msg.procID != m.currentProcID {
-			m.currentProcID = msg.procID
-			m.currentLabel = msg.label
-			log.Printf("Viewer switched to process: %s (ID: %d)", msg.label, msg.procID)
-
-			if msg.procID != 0 && msg.procID != DummyProcessID {
-				if err := m.ttyViewer.SwitchToProcess(msg.procID); err != nil {
-					log.Printf("Failed to switch TTY viewer: %v", err)
-					m.errorMsg = fmt.Sprintf("Error: %v", err)
-				}
-			}
-		}
-
-		return m, m.pollSelection()
-
-	case commandMsg:
-		m.errorMsg = ""
-		m.connected = true
-
-		log.Printf("Received command: action=%s procID=%d", msg.action, msg.procID)
+		log.Printf("Received user action: action=%s procID=%d", msg.action, msg.procID)
 
 		switch msg.action {
+		case "select":
+			m.handleSelect(msg.procID, msg.label)
 		case "start":
 			m.handleStart(msg.procID, msg.config)
 		case "stop":
@@ -142,9 +115,10 @@ func (m ViewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			time.Sleep(500 * time.Millisecond)
 			m.handleStart(msg.procID, msg.config)
 		default:
-			log.Printf("Unknown command action: %s", msg.action)
+			log.Printf("Unknown user action: %s", msg.action)
 		}
 
+		m.broadcastState()
 		return m, m.pollSelection()
 
 	case connectionErrorMsg:
@@ -156,11 +130,12 @@ func (m ViewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err := m.ipcClient.Connect(); err != nil {
 					return connectionErrorMsg{err: err}
 				}
-				return selectionMsg{}
+				return userActionMsg{}
 			}),
 		)
 
 	case tickMsg:
+		m.broadcastState()
 		return m, tickCmd()
 
 	case errMsg:
@@ -176,16 +151,17 @@ func (m ViewerModel) View() string {
 		return fmt.Sprintf("❌ Disconnected from master process\n\n%s\n\nRetrying connection...\n\nPress 'q' or Ctrl+C to quit.", m.errorMsg)
 	}
 
-	if m.currentProcID == 0 {
+	currentProc := m.state.GetCurrentProcess()
+	if currentProc == nil {
 		return "⏸  No process selected\n\nWaiting for selection from master terminal...\n\nPress 'q' or Ctrl+C to quit."
 	}
 
-	if m.currentProcID == DummyProcessID {
+	if currentProc.ID == DummyProcessID {
 		return "⏸  Dummy process selected\n\nSelect a real process in the master terminal.\n\nPress 'q' or Ctrl+C to quit."
 	}
 
 	output := m.ttyViewer.GetOutput()
-	header := fmt.Sprintf("👁  Viewing: %s (Process ID: %d)\n", m.currentLabel, m.currentProcID)
+	header := fmt.Sprintf("👁  Viewing: %s (Process ID: %d)\n", currentProc.Label, currentProc.ID)
 	separator := "─────────────────────────────────────────────────────────────────────────────\n"
 
 	if output == "" {
@@ -195,53 +171,82 @@ func (m ViewerModel) View() string {
 	return header + separator + "\n" + output
 }
 
+func (m *ViewerModel) broadcastState() {
+	if err := m.ipcClient.SendState(m.state); err != nil {
+		log.Printf("Failed to broadcast state: %v", err)
+		m.errorMsg = fmt.Sprintf("State broadcast error: %v", err)
+	}
+}
+
+func (m *ViewerModel) handleSelect(procID int, label string) {
+	if m.state.CurrentProcID == procID {
+		return
+	}
+
+	m.state.CurrentProcID = procID
+	log.Printf("Viewer switched to process: %s (ID: %d)", label, procID)
+
+	if procID != 0 && procID != DummyProcessID {
+		if err := m.ttyViewer.SwitchToProcess(procID); err != nil {
+			log.Printf("Failed to switch TTY viewer: %v", err)
+			m.errorMsg = fmt.Sprintf("Error: %v", err)
+		}
+	}
+}
+
 func (m *ViewerModel) handleStart(procID int, config *ProcessConfig) {
 	log.Printf("Starting process ID %d", procID)
 
 	instance, err := m.processServer.StartProcess(procID, config)
 	if err != nil {
 		log.Printf("Error starting process %d: %v", procID, err)
-		m.ipcClient.SendStatus(procID, "stopped", 0, 1)
+		proc := m.state.GetProcessByID(procID)
+		if proc != nil {
+			proc.Status = StatusHalted
+			proc.PID = 0
+		}
 		return
 	}
 
 	pid := instance.GetPID()
 	log.Printf("Started process %d with PID %d", procID, pid)
 
-	proc := &Process{
-		ID:     procID,
-		Status: StatusRunning,
-		PID:    pid,
-		Config: config,
+	proc := m.state.GetProcessByID(procID)
+	if proc != nil {
+		proc.Status = StatusRunning
+		proc.PID = pid
 	}
-	m.processes[procID] = proc
-
-	m.ipcClient.SendStatus(procID, "running", pid, 0)
 
 	go func() {
 		<-instance.WaitForExit()
 		log.Printf("Process %d (PID: %d) exited", procID, pid)
 		m.processServer.RemoveProcess(procID)
-		delete(m.processes, procID)
-		m.ipcClient.SendStatus(procID, "stopped", 0, 0)
+
+		proc := m.state.GetProcessByID(procID)
+		if proc != nil {
+			proc.Status = StatusHalted
+			proc.PID = 0
+		}
+		m.broadcastState()
 	}()
 }
 
 func (m *ViewerModel) handleStop(procID int) {
 	log.Printf("Stopping process ID %d", procID)
 
-	proc, exists := m.processes[procID]
-	if !exists {
-		log.Printf("Process %d not found in viewer", procID)
-		m.ipcClient.SendStatus(procID, "stopped", 0, 0)
+	proc := m.state.GetProcessByID(procID)
+	if proc == nil {
+		log.Printf("Process %d not found in state", procID)
 		return
 	}
+
+	oldPID := proc.PID
 
 	if err := m.processServer.StopProcess(procID); err != nil {
 		log.Printf("Error stopping process %d: %v", procID, err)
 	}
 
-	delete(m.processes, procID)
-	m.ipcClient.SendStatus(procID, "stopped", 0, 0)
-	log.Printf("Stopped process %d (was PID %d)", procID, proc.PID)
+	proc.Status = StatusHalted
+	proc.PID = 0
+	log.Printf("Stopped process %d (was PID %d)", procID, oldPID)
 }

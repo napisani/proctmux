@@ -102,7 +102,7 @@ func main() {
 			log.Fatal("Failed to connect to IPC server:", err)
 		}
 		processServer := proctmux.NewProcessServer()
-		viewerModel := proctmux.NewViewerModel(client, processServer)
+		viewerModel := proctmux.NewViewerModel(client, processServer, cfg)
 		p := tea.NewProgram(viewerModel, tea.WithAltScreen())
 		if err := p.Start(); err != nil {
 			log.Fatal(err)

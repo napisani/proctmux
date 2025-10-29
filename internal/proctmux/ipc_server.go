@@ -29,6 +29,7 @@ type IPCMessage struct {
 	Status    string         `json:"status,omitempty"`
 	PID       int            `json:"pid,omitempty"`
 	ExitCode  int            `json:"exit_code,omitempty"`
+	State     *AppState      `json:"state,omitempty"`
 }
 
 func NewIPCServer() *IPCServer {
@@ -115,9 +116,9 @@ func (s *IPCServer) handleClient(conn net.Conn) {
 
 func (s *IPCServer) handleMessage(msg IPCMessage) {
 	switch msg.Type {
-	case "status":
+	case "state":
 		if s.controller != nil {
-			s.controller.OnStatusUpdate(msg.ProcessID, msg.Status, msg.PID, msg.ExitCode)
+			s.controller.OnStateUpdate(msg.State)
 		}
 	default:
 		log.Printf("Unknown IPC message type: %s", msg.Type)
@@ -150,7 +151,8 @@ func (s *IPCServer) BroadcastSelection(procID int, label string) {
 	}
 
 	msg := IPCMessage{
-		Type:      "selection",
+		Type:      "user_action",
+		Action:    "select",
 		ProcessID: procID,
 		Label:     label,
 	}
@@ -181,7 +183,7 @@ func (s *IPCServer) SendCommand(action string, procID int, config *ProcessConfig
 	}
 
 	msg := IPCMessage{
-		Type:      "command",
+		Type:      "user_action",
 		Action:    action,
 		ProcessID: procID,
 		Config:    config,

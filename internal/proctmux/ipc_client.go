@@ -75,7 +75,11 @@ func (c *IPCClient) ReadSelection() (*IPCMessage, error) {
 	return &msg, nil
 }
 
-func (c *IPCClient) SendStatus(procID int, status string, pid int, exitCode int) error {
+func (c *IPCClient) ReadMessage() (*IPCMessage, error) {
+	return c.ReadSelection()
+}
+
+func (c *IPCClient) SendState(state *AppState) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -84,25 +88,22 @@ func (c *IPCClient) SendStatus(procID int, status string, pid int, exitCode int)
 	}
 
 	msg := IPCMessage{
-		Type:      "status",
-		ProcessID: procID,
-		Status:    status,
-		PID:       pid,
-		ExitCode:  exitCode,
+		Type:  "state",
+		State: state,
 	}
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal status message: %w", err)
+		return fmt.Errorf("failed to marshal state message: %w", err)
 	}
 
 	data = append(data, '\n')
 
 	if _, err := c.conn.Write(data); err != nil {
-		return fmt.Errorf("failed to send status message: %w", err)
+		return fmt.Errorf("failed to send state message: %w", err)
 	}
 
-	log.Printf("Sent status update: process_id=%d status=%s pid=%d exit_code=%d", procID, status, pid, exitCode)
+	log.Printf("Sent state update with %d processes", len(state.Processes))
 	return nil
 }
 

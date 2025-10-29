@@ -97,36 +97,20 @@ func (c *Controller) ApplySelection(procID int) error {
 	})
 }
 
-// OnStatusUpdate handles status updates from viewers
-func (c *Controller) OnStatusUpdate(procID int, status string, pid int, exitCode int) {
+// OnStateUpdate handles full state updates from viewers
+func (c *Controller) OnStateUpdate(newState *AppState) {
+	if newState == nil {
+		log.Printf("Received nil state update")
+		return
+	}
+
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
 
-	proc := c.state.GetProcessByID(procID)
-	if proc == nil {
-		log.Printf("Received status update for unknown process ID: %d", procID)
-		return
-	}
-
-	log.Printf("Status update for %s (ID: %d): status=%s pid=%d exit_code=%d",
-		proc.Label, procID, status, pid, exitCode)
-
-	mut := NewStateMutation(c.state)
-
-	switch status {
-	case "running":
-		proc.Status = StatusRunning
-		proc.PID = pid
-	case "stopped":
-		proc.Status = StatusHalted
-		proc.PID = 0
-	default:
-		log.Printf("Unknown status: %s", status)
-		return
-	}
-
-	c.state = mut.Commit()
+	c.state = newState
 	c.EmitStateChangeNotification()
+
+	log.Printf("Applied state update with %d processes", len(newState.Processes))
 }
 
 // SendCommand sends a command to viewers via IPC
