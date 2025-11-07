@@ -21,15 +21,19 @@ type IPCServer struct {
 }
 
 type IPCMessage struct {
-	Type      string         `json:"type"`
-	ProcessID int            `json:"process_id,omitempty"`
-	Label     string         `json:"label,omitempty"`
-	Action    string         `json:"action,omitempty"`
-	Config    *ProcessConfig `json:"config,omitempty"`
-	Status    string         `json:"status,omitempty"`
-	PID       int            `json:"pid,omitempty"`
-	ExitCode  int            `json:"exit_code,omitempty"`
-	State     *AppState      `json:"state,omitempty"`
+	Type        string                   `json:"type"`
+	RequestID   string                   `json:"request_id,omitempty"`
+	ProcessID   int                      `json:"process_id,omitempty"`
+	Label       string                   `json:"label,omitempty"`
+	Action      string                   `json:"action,omitempty"`
+	Config      *ProcessConfig           `json:"config,omitempty"`
+	Status      string                   `json:"status,omitempty"`
+	PID         int                      `json:"pid,omitempty"`
+	ExitCode    int                      `json:"exit_code,omitempty"`
+	State       *AppState                `json:"state,omitempty"`
+	ProcessList []map[string]interface{} `json:"process_list,omitempty"`
+	Error       string                   `json:"error,omitempty"`
+	Success     bool                     `json:"success,omitempty"`
 }
 
 func NewIPCServer() *IPCServer {
@@ -105,7 +109,7 @@ func (s *IPCServer) handleClient(conn net.Conn) {
 				continue
 			}
 
-			s.handleMessage(msg)
+			s.handleMessage(conn, msg)
 		}
 	}
 
@@ -114,14 +118,121 @@ func (s *IPCServer) handleClient(conn net.Conn) {
 	}
 }
 
-func (s *IPCServer) handleMessage(msg IPCMessage) {
+func (s *IPCServer) handleMessage(conn net.Conn, msg IPCMessage) {
 	switch msg.Type {
 	case "state":
 		if s.controller != nil {
 			s.controller.OnStateUpdate(msg.State)
 		}
+	case "command":
+		s.handleCommand(conn, msg)
 	default:
 		log.Printf("Unknown IPC message type: %s", msg.Type)
+	}
+}
+
+func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
+	response := IPCMessage{
+		Type:      "response",
+		RequestID: msg.RequestID,
+		Success:   false,
+	}
+
+	if s.controller == nil {
+		response.Error = "controller not available"
+		s.sendResponse(conn, response)
+		return
+	}
+
+	switch msg.Action {
+	case "start":
+		if msg.Label == "" {
+			response.Error = "missing process name"
+		} else if err := s.controller.OnKeypressStartWithLabel(msg.Label); err != nil {
+			response.Error = err.Error()
+		} else {
+			response.Success = true
+		}
+	case "stop":
+		if msg.Label == "" {
+			response.Error = "missing process name"
+		} else if err := s.controller.OnKeypressStopWithLabel(msg.Label); err != nil {
+			response.Error = err.Error()
+		} else {
+			response.Success = true
+		}
+	case "restart":
+		if msg.Label == "" {
+			response.Error = "missing process name"
+		} else if err := s.controller.OnKeypressRestartWithLabel(msg.Label); err != nil {
+			response.Error = err.Error()
+		} else {
+			response.Success = true
+		}
+	case "list":
+		var processList []map[string]interface{}
+		_ = s.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
+			for i := range state.Processes {
+				p := state.Processes[i]
+				if p.ID == DummyProcessID {
+					continue
+				}
+				processList = append(processList, map[string]interface{}{
+					"name":    p.Label,
+					"running": p.Status == StatusRunning,
+					"index":   p.ID,
+				})
+			}
+			return state, nil
+		})
+		response.ProcessList = processList
+		response.Success = true
+	case "restart-running":
+		var runningLabels []string
+		_ = s.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
+			for i := range state.Processes {
+				p := state.Processes[i]
+				if p.Status == StatusRunning && p.ID != DummyProcessID {
+					runningLabels = append(runningLabels, p.Label)
+				}
+			}
+			return state, nil
+		})
+		for _, name := range runningLabels {
+			_ = s.controller.OnKeypressRestartWithLabel(name)
+		}
+		response.Success = true
+	case "stop-running":
+		var runningLabels []string
+		_ = s.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
+			for i := range state.Processes {
+				p := state.Processes[i]
+				if p.Status == StatusRunning && p.ID != DummyProcessID {
+					runningLabels = append(runningLabels, p.Label)
+				}
+			}
+			return state, nil
+		})
+		for _, name := range runningLabels {
+			_ = s.controller.OnKeypressStopWithLabel(name)
+		}
+		response.Success = true
+	default:
+		response.Error = fmt.Sprintf("unknown action: %s", msg.Action)
+	}
+
+	s.sendResponse(conn, response)
+}
+
+func (s *IPCServer) sendResponse(conn net.Conn, msg IPCMessage) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("Failed to marshal response: %v", err)
+		return
+	}
+	data = append(data, '\n')
+	if _, err := conn.Write(data); err != nil {
+		log.Printf("Failed to send response: %v", err)
 	}
 }
 

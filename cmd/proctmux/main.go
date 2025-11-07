@@ -47,9 +47,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\nCommands:\n")
 		fmt.Fprintf(os.Stderr, "  start                    Start the TUI (default)\n")
 		fmt.Fprintf(os.Stderr, "  signal-list              List all processes and their statuses (tab-delimited)\n")
-		fmt.Fprintf(os.Stderr, "  signal-start <name>      Start a process via signal server\n")
-		fmt.Fprintf(os.Stderr, "  signal-stop <name>       Stop a process via signal server\n")
-		fmt.Fprintf(os.Stderr, "  signal-restart <name>    Restart a process via signal server\n")
+		fmt.Fprintf(os.Stderr, "  signal-start <name>      Start a process\n")
+		fmt.Fprintf(os.Stderr, "  signal-stop <name>       Stop a process\n")
+		fmt.Fprintf(os.Stderr, "  signal-restart <name>    Restart a process\n")
 		fmt.Fprintf(os.Stderr, "  signal-restart-running   Restart all running processes\n")
 		fmt.Fprintf(os.Stderr, "  signal-stop-running      Stop all running processes\n")
 		fmt.Fprintf(os.Stderr, "\nViewer Mode:\n")
@@ -112,10 +112,22 @@ func main() {
 
 	// Client mode
 	if strings.HasPrefix(subcmd, "signal-") {
-		client, cerr := proctmux.NewSignalClient(cfg)
+		// Discover socket path
+		socketPath, cerr := proctmux.ReadSocketPathFile()
+		if cerr != nil {
+			// Fallback to finding most recent socket
+			socketPath, cerr = proctmux.FindIPCSocket()
+			if cerr != nil {
+				log.Fatal("Failed to find proctmux instance: ", cerr)
+			}
+		}
+
+		client, cerr := proctmux.NewIPCClient(socketPath)
 		if cerr != nil {
 			log.Fatal(cerr)
 		}
+		defer client.Close()
+
 		switch subcmd {
 		case "signal-start":
 			if len(args) < 2 {
@@ -188,14 +200,12 @@ func main() {
 		log.Fatal("Controller startup failed:", err)
 	}
 
-	// Start signal server if enabled
-	stopServer, serr := proctmux.StartSignalServer(cfg, controller)
-	if serr != nil {
-		log.Fatal(serr)
+	// Log deprecation warning if signal server is enabled in config
+	if cfg.SignalServer.Enable {
+		log.Printf("Warning: signal_server configuration is deprecated. Signal commands now use IPC automatically.")
 	}
-	defer stopServer()
 
-	// Start IPC server for viewer mode
+	// Start IPC server for viewer mode and signal commands
 	var ipcServer *proctmux.IPCServer
 	ipcSocketPath := fmt.Sprintf("/tmp/proctmux-%d.sock", os.Getpid())
 	ipcServer = proctmux.NewIPCServer()
@@ -205,7 +215,17 @@ func main() {
 	} else {
 		controller.SetIPCServer(ipcServer)
 		log.Printf("IPC server started on %s", ipcSocketPath)
-		defer ipcServer.Stop()
+
+		// Write socket path to well-known location for signal commands
+		if err := proctmux.WriteSocketPathFile(ipcSocketPath); err != nil {
+			log.Printf("Warning: Failed to write socket path file: %v", err)
+		}
+
+		defer func() {
+			ipcServer.Stop()
+			// Clean up socket path file
+			_ = os.Remove("/tmp/proctmux.socket")
+		}()
 	}
 
 	p := tea.NewProgram(proctmux.NewModel(&state, controller, ipcSocketPath), tea.WithAltScreen())
