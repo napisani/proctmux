@@ -79,7 +79,7 @@ func (v *TTYViewer) SwitchToProcess(id int) error {
 }
 
 func (v *TTYViewer) readProcessOutput(instance *ProcessInstance, cancel chan struct{}) {
-	reader := instance.pty
+	reader := instance.File
 	buf := make([]byte, 4096)
 
 	for {
