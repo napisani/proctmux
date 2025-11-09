@@ -12,6 +12,7 @@ import (
 type MasterServer struct {
 	processServer *ProcessServer
 	ipcServer     *IPCServer
+	viewer        *Viewer
 	state         *AppState
 	stateMu       sync.RWMutex
 	cfg           *ProcTmuxConfig
@@ -20,9 +21,11 @@ type MasterServer struct {
 
 func NewMasterServer(cfg *ProcTmuxConfig) *MasterServer {
 	state := NewAppState(cfg)
+	processServer := NewProcessServer()
 	return &MasterServer{
-		processServer: NewProcessServer(),
+		processServer: processServer,
 		ipcServer:     NewIPCServer(),
+		viewer:        NewViewer(processServer),
 		state:         &state,
 		cfg:           cfg,
 		done:          make(chan struct{}),
@@ -102,6 +105,12 @@ func (m *MasterServer) HandleCommand(action string, label string) error {
 		// Update selection
 		m.state.CurrentProcID = proc.ID
 		log.Printf("Switched to process %s (ID: %d)", label, proc.ID)
+		
+		// Switch the viewer to display this process
+		if err := m.viewer.SwitchToProcess(proc.ID); err != nil {
+			log.Printf("Warning: failed to switch viewer to process %d: %v", proc.ID, err)
+		}
+		
 		return nil
 	}
 
@@ -137,6 +146,11 @@ func (m *MasterServer) HandleSelection(procID int) {
 
 	m.state.CurrentProcID = procID
 	log.Printf("Selection changed to process ID %d", procID)
+	
+	// Switch the viewer to display this process
+	if err := m.viewer.SwitchToProcess(procID); err != nil {
+		log.Printf("Warning: failed to switch viewer to process %d: %v", procID, err)
+	}
 }
 
 func (m *MasterServer) GetState() *AppState {
@@ -147,6 +161,10 @@ func (m *MasterServer) GetState() *AppState {
 
 func (m *MasterServer) GetProcessServer() *ProcessServer {
 	return m.processServer
+}
+
+func (m *MasterServer) GetViewer() *Viewer {
+	return m.viewer
 }
 
 func (m *MasterServer) startProcessLocked(procID int, config *ProcessConfig) error {
