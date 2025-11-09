@@ -18,15 +18,15 @@ func (c *Controller) handleMove(directionNum int) error {
 			return state, nil
 		}
 
-	mut := NewStateMutation(state)
-	if directionNum > 0 {
-		mut = mut.NextProcess()
-	} else {
-		mut = mut.PreviousProcess()
-	}
-	newState := mut.Commit()
+		mut := NewStateMutation(state)
+		if directionNum > 0 {
+			mut = mut.NextProcess()
+		} else {
+			mut = mut.PreviousProcess()
+		}
+		newState := mut.Commit()
 
-	return newState, nil
+		return newState, nil
 	})
 }
 
@@ -56,16 +56,16 @@ func (c *Controller) handleMoveToProcessByLabel(processLabel string) error {
 			return state, nil
 		}
 
-	mut := NewStateMutation(state)
-	var err error
-	mut, err = mut.SelectProcessByID(processID)
-	if err != nil {
-		log.Printf("Error selecting process by ID %d: %v", processID, err)
-		return state, err
-	}
-	newState := mut.Commit()
+		mut := NewStateMutation(state)
+		var err error
+		mut, err = mut.SelectProcessByID(processID)
+		if err != nil {
+			log.Printf("Error selecting process by ID %d: %v", processID, err)
+			return state, err
+		}
+		newState := mut.Commit()
 
-	return newState, nil
+		return newState, nil
 	})
 }
 

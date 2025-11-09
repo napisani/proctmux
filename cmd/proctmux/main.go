@@ -227,7 +227,7 @@ func main() {
 	// Create and start master server
 	masterServer := proctmux.NewMasterServer(cfg)
 	ipcSocketPath := fmt.Sprintf("/tmp/proctmux-%d.sock", os.Getpid())
-	
+
 	if err := masterServer.Start(ipcSocketPath); err != nil {
 		log.Fatal("Failed to start master server:", err)
 	}

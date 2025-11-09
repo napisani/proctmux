@@ -108,10 +108,10 @@ func TestRingBuffer_Write_MultipleWritesWithOverflow(t *testing.T) {
 	rb := NewRingBuffer(10)
 
 	// Each write is small, but combined they overflow
-	rb.Write([]byte("abc"))   // Buffer: "abc"
-	rb.Write([]byte("defg"))  // Buffer: "abcdefg"
-	rb.Write([]byte("hijk"))  // Buffer: "bcdefghijk" (wraps, drops "a")
-	rb.Write([]byte("lmn"))   // Buffer: "defghijklmn" -> last 10: "efghijklmn"
+	rb.Write([]byte("abc"))  // Buffer: "abc"
+	rb.Write([]byte("defg")) // Buffer: "abcdefg"
+	rb.Write([]byte("hijk")) // Buffer: "bcdefghijk" (wraps, drops "a")
+	rb.Write([]byte("lmn"))  // Buffer: "defghijklmn" -> last 10: "efghijklmn"
 
 	expected := []byte("efghijklmn")
 	result := rb.Bytes()
@@ -234,7 +234,7 @@ func TestRingBuffer_WrapAround_Alignment(t *testing.T) {
 
 	// Fill buffer completely, then wrap around
 	rb.Write([]byte("0123456789")) // Full
-	rb.Write([]byte("ABC"))         // Wraps, oldest data is "3456789", newest is "ABC"
+	rb.Write([]byte("ABC"))        // Wraps, oldest data is "3456789", newest is "ABC"
 
 	// Result should be in chronological order (oldest first)
 	expected := []byte("3456789ABC")

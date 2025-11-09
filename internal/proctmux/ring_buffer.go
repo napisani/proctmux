@@ -25,7 +25,8 @@ type RingBuffer struct {
 // The size parameter determines how many bytes of scrollback to maintain.
 //
 // Example:
-//   rb := NewRingBuffer(1024 * 1024) // 1MB scrollback buffer
+//
+//	rb := NewRingBuffer(1024 * 1024) // 1MB scrollback buffer
 func NewRingBuffer(size int) *RingBuffer {
 	return &RingBuffer{
 		buf:  make([]byte, size),
@@ -68,8 +69,9 @@ func (rb *RingBuffer) Write(p []byte) (n int, err error) {
 // This is safe for concurrent access with Write operations.
 //
 // Example:
-//   buf := rb.Bytes()
-//   // buf contains the last N bytes written, in chronological order
+//
+//	buf := rb.Bytes()
+//	// buf contains the last N bytes written, in chronological order
 func (rb *RingBuffer) Bytes() []byte {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
@@ -83,7 +85,7 @@ func (rb *RingBuffer) Bytes() []byte {
 	// Data from write position to end is the oldest data
 	// Data from start to write position is the newest data
 	result := make([]byte, rb.size)
-	copy(result, rb.buf[rb.w:])           // Copy older data (from w to end)
+	copy(result, rb.buf[rb.w:])                // Copy older data (from w to end)
 	copy(result[rb.size-rb.w:], rb.buf[:rb.w]) // Copy newer data (from start to w)
 	return result
 }

@@ -10,13 +10,13 @@ import (
 
 // ClientModel is a UI-only model that connects to a master server
 type ClientModel struct {
-	client    *IPCClient
-	domain    *AppState
-	ui        UIState
-	termWidth int
+	client     *IPCClient
+	domain     *AppState
+	ui         UIState
+	termWidth  int
 	termHeight int
-	filterSeq int
-	selectSeq int
+	filterSeq  int
+	selectSeq  int
 }
 
 // clientStateUpdateMsg wraps state updates from master

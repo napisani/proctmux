@@ -38,6 +38,73 @@ func FnToWriter(w func(b []byte) (int, error)) io.Writer {
 	return &FnWriter{w: w}
 }
 
+// BroadcastWriter fans out writes to multiple readers via channels.
+// This allows multiple consumers to receive copies of PTY output without
+// competing for reads from the same file descriptor.
+//
+// Thread-safe: All operations are protected by a mutex.
+type BroadcastWriter struct {
+	subscribers map[int]chan []byte
+	nextID      int
+	mu          sync.RWMutex
+}
+
+func NewBroadcastWriter() *BroadcastWriter {
+	return &BroadcastWriter{
+		subscribers: make(map[int]chan []byte),
+	}
+}
+
+// Write implements io.Writer by sending data to all subscribers
+func (bw *BroadcastWriter) Write(p []byte) (n int, err error) {
+	bw.mu.RLock()
+	defer bw.mu.RUnlock()
+
+	// Make a copy since p might be reused by caller
+	data := make([]byte, len(p))
+	copy(data, p)
+
+	// Send to all subscribers (non-blocking)
+	for id, ch := range bw.subscribers {
+		select {
+		case ch <- data:
+			// Successfully sent
+		default:
+			// Channel full, subscriber is slow - skip this send to avoid blocking
+			log.Printf("Warning: broadcast subscriber %d channel full, dropping data", id)
+		}
+	}
+
+	return len(p), nil
+}
+
+// Subscribe returns a channel that receives copies of all data written
+// The caller must call Unsubscribe when done to avoid resource leaks
+func (bw *BroadcastWriter) Subscribe() (int, <-chan []byte) {
+	bw.mu.Lock()
+	defer bw.mu.Unlock()
+
+	id := bw.nextID
+	bw.nextID++
+
+	// Buffered channel to avoid blocking on slow readers
+	ch := make(chan []byte, 100)
+	bw.subscribers[id] = ch
+
+	return id, ch
+}
+
+// Unsubscribe removes a subscriber and closes its channel
+func (bw *BroadcastWriter) Unsubscribe(id int) {
+	bw.mu.Lock()
+	defer bw.mu.Unlock()
+
+	if ch, exists := bw.subscribers[id]; exists {
+		close(ch)
+		delete(bw.subscribers, id)
+	}
+}
+
 // Program represents a running program with a pseudo-terminal (PTY) attached
 // This is a higher-level abstraction than the server's pipe-based approach.
 //
@@ -102,6 +169,10 @@ type ProcessInstance struct {
 	// Scrollback is a ring buffer that stores the last N bytes of output
 	// This allows users to see recent output when switching between processes
 	Scrollback *RingBuffer
+
+	// Broadcast fans out PTY output to multiple subscribers
+	// This allows the viewer to receive live output without competing with the scrollback writer
+	Broadcast *BroadcastWriter
 }
 
 func NewProcessServer() *ProcessServer {
@@ -171,6 +242,7 @@ func (ps *ProcessServer) StartProcess(id int, config *ProcessConfig) (*ProcessIn
 		config:     config,
 		exitChan:   make(chan error, 1),
 		Scrollback: NewRingBuffer(1024 * 1024), // 1MB scrollback buffer per process
+		Broadcast:  NewBroadcastWriter(),       // Broadcast PTY output to subscribers
 	}
 
 	go func() {
@@ -194,6 +266,7 @@ func (ps *ProcessServer) StartProcess(id int, config *ProcessConfig) (*ProcessIn
 	i := instance.WithWriter(
 		io.MultiWriter(
 			instance.Scrollback, // Capture output in scrollback buffer
+			instance.Broadcast,  // Fan out to subscribers (viewer)
 			FnToWriter(func(b []byte) (int, error) {
 				// os.Stdout.Write(b)
 				// log.Printf("PTY Output: %s", string(b))

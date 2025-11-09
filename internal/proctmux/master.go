@@ -105,12 +105,12 @@ func (m *MasterServer) HandleCommand(action string, label string) error {
 		// Update selection
 		m.state.CurrentProcID = proc.ID
 		log.Printf("Switched to process %s (ID: %d)", label, proc.ID)
-		
+
 		// Switch the viewer to display this process
 		if err := m.viewer.SwitchToProcess(proc.ID); err != nil {
 			log.Printf("Warning: failed to switch viewer to process %d: %v", proc.ID, err)
 		}
-		
+
 		return nil
 	}
 
@@ -146,7 +146,7 @@ func (m *MasterServer) HandleSelection(procID int) {
 
 	m.state.CurrentProcID = procID
 	log.Printf("Selection changed to process ID %d", procID)
-	
+
 	// Switch the viewer to display this process
 	if err := m.viewer.SwitchToProcess(procID); err != nil {
 		log.Printf("Warning: failed to switch viewer to process %d: %v", procID, err)

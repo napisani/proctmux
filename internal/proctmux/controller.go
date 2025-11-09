@@ -81,14 +81,14 @@ func (c *Controller) ApplySelection(procID int) error {
 		if state.CurrentProcID == procID {
 			return state, nil
 		}
-	mut := NewStateMutation(state)
-	mut, err := mut.SelectProcessByID(procID)
-	if err != nil {
-		return state, err
-	}
-	newState := mut.Commit()
+		mut := NewStateMutation(state)
+		mut, err := mut.SelectProcessByID(procID)
+		if err != nil {
+			return state, err
+		}
+		newState := mut.Commit()
 
-	return newState, nil
+		return newState, nil
 	})
 }
 

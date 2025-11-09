@@ -2,7 +2,6 @@ package proctmux
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"sync"
@@ -21,6 +20,10 @@ import (
 // The viewer is integrated with MasterServer and automatically switches
 // when HandleSelection or HandleCommand("switch") is called.
 //
+// Architecture:
+// The viewer subscribes to the process's BroadcastWriter to receive live output.
+// This avoids competing with the ProcessServer's io.Copy for PTY reads.
+//
 // Example usage:
 //
 //	server := NewProcessServer()
@@ -37,6 +40,7 @@ type Viewer struct {
 	processServer        *ProcessServer
 	interruptOutputRelay chan struct{}
 	currentProcessID     int
+	currentSubscriberID  int           // ID for unsubscribing from broadcast
 	copyDone             chan struct{} // Signals when copyProcessOutput has fully exited
 	mu                   sync.Mutex
 }
@@ -75,6 +79,14 @@ func (v *Viewer) SwitchToProcess(processID int) error {
 		v.copyDone = nil
 	}
 
+	// Unsubscribe from the previous process's broadcast
+	if v.currentProcessID != 0 && v.currentSubscriberID != 0 {
+		if prevInstance, err := v.processServer.GetProcess(v.currentProcessID); err == nil && prevInstance != nil {
+			prevInstance.Broadcast.Unsubscribe(v.currentSubscriberID)
+		}
+		v.currentSubscriberID = 0
+	}
+
 	v.currentProcessID = processID
 
 	// Clear stdout before showing new process output
@@ -105,37 +117,41 @@ func (v *Viewer) SwitchToProcess(processID int) error {
 		}
 	}
 
+	// Subscribe to the process's broadcast to receive live output
+	subscriberID, outputChan := instance.Broadcast.Subscribe()
+	v.currentSubscriberID = subscriberID
+
 	// Start relaying output from the new process
 	v.interruptOutputRelay = make(chan struct{})
 	v.copyDone = make(chan struct{})
-	go v.copyProcessOutput(instance, v.interruptOutputRelay, v.copyDone)
+	go v.copyProcessOutput(outputChan, v.interruptOutputRelay, v.copyDone)
 
-	log.Printf("Switched viewer to process %d (PID: %d)", processID, instance.GetPID())
+	log.Printf("Switched viewer to process %d (PID: %d), subscriber ID: %d", processID, instance.GetPID(), subscriberID)
 	return nil
 }
 
-// copyProcessOutput copies output from a process PTY to stdout until cancelled
-func (v *Viewer) copyProcessOutput(instance *ProcessInstance, cancel chan struct{}, done chan struct{}) {
+// copyProcessOutput copies output from a process broadcast channel to stdout until cancelled
+func (v *Viewer) copyProcessOutput(outputChan <-chan []byte, cancel chan struct{}, done chan struct{}) {
 	defer close(done) // Signal that we've fully exited
 
-	// Create a cancelable reader that wraps the PTY file
-	reader := &cancelableReader{
-		reader: instance.File,
-		cancel: cancel,
-	}
+	processID := v.currentProcessID // Capture for logging
 
-	// Copy from PTY to stdout until cancelled or process exits
-	_, err := io.Copy(os.Stdout, reader)
-
-	// Check if we were cancelled or if there was an error
-	select {
-	case <-cancel:
-		log.Printf("Stopped output relay for process %d (switched away)", instance.ID)
-	default:
-		if err != nil && err != io.EOF {
-			log.Printf("Error copying output from process %d: %v", instance.ID, err)
-		} else {
-			log.Printf("Process %d output stream ended", instance.ID)
+	for {
+		select {
+		case <-cancel:
+			log.Printf("Stopped output relay for process %d (switched away)", processID)
+			return
+		case data, ok := <-outputChan:
+			if !ok {
+				// Channel closed, process exited
+				log.Printf("Process %d output stream ended (channel closed)", processID)
+				return
+			}
+			// Write to stdout
+			if _, err := os.Stdout.Write(data); err != nil {
+				log.Printf("Error writing output from process %d: %v", processID, err)
+				return
+			}
 		}
 	}
 }
@@ -144,34 +160,6 @@ func (v *Viewer) copyProcessOutput(instance *ProcessInstance, cancel chan struct
 func (v *Viewer) clearScreen() {
 	// ANSI escape sequence: ESC[2J clears screen, ESC[H moves cursor to home
 	fmt.Print("\033[2J\033[H")
-}
-
-// cancelableReader wraps an io.Reader and allows cancellation via a channel
-type cancelableReader struct {
-	reader io.Reader
-	cancel chan struct{}
-}
-
-func (r *cancelableReader) Read(p []byte) (n int, err error) {
-	// Check if cancelled before reading
-	select {
-	case <-r.cancel:
-		return 0, io.EOF
-	default:
-	}
-
-	// Read from underlying reader
-	n, err = r.reader.Read(p)
-
-	// Check if cancelled after reading
-	// If cancelled, discard the data we just read by returning 0 bytes
-	// This prevents io.Copy from writing stray data to stdout after cancellation
-	select {
-	case <-r.cancel:
-		return 0, io.EOF
-	default:
-		return n, err
-	}
 }
 
 // GetCurrentProcessID returns the ID of the process currently being viewed
