@@ -87,9 +87,9 @@ type ProcessInstance struct {
 	// These are set via TIOCSWINSZ ioctl and queryable by child via TIOCGWINSZ
 	rows uint16
 	cols uint16
-	// writer receives output from the PTY master
+	// Writer receives output from the PTY master
 	// This is where the program's stdout/stderr appears
-	writer io.Writer
+	Writer io.Writer
 	// args are command line arguments for the program
 	args []string
 
@@ -98,6 +98,10 @@ type ProcessInstance struct {
 
 	// exitChan is used to signal when the process has exited
 	exitChan chan error
+
+	// Scrollback is a ring buffer that stores the last N bytes of output
+	// This allows users to see recent output when switching between processes
+	Scrollback *RingBuffer
 }
 
 func NewProcessServer() *ProcessServer {
@@ -159,13 +163,14 @@ func (ps *ProcessServer) StartProcess(id int, config *ProcessConfig) (*ProcessIn
 	}
 
 	instance := &ProcessInstance{
-		ID:       id,
-		cmd:      cmd,
-		rows:     rows,
-		cols:     cols,
-		File:     ptmx,
-		config:   config,
-		exitChan: make(chan error, 1),
+		ID:         id,
+		cmd:        cmd,
+		rows:       rows,
+		cols:       cols,
+		File:       ptmx,
+		config:     config,
+		exitChan:   make(chan error, 1),
+		Scrollback: NewRingBuffer(1024 * 1024), // 1MB scrollback buffer per process
 	}
 
 	go func() {
@@ -185,12 +190,27 @@ func (ps *ProcessServer) StartProcess(id int, config *ProcessConfig) (*ProcessIn
 	}
 	// defer debug.Close()
 
-	return instance.WithWriter(FnToWriter(func(b []byte) (int, error) {
-		os.Stdout.Write(b)
-		log.Printf("PTY Output: %s", string(b))
-		debug.Write(b)
-		return len(b), nil
-	})), nil
+	log.Printf("Attaching PTY output logger for process %d", id)
+	i := instance.WithWriter(
+		io.MultiWriter(
+			instance.Scrollback, // Capture output in scrollback buffer
+			FnToWriter(func(b []byte) (int, error) {
+				// os.Stdout.Write(b)
+				// log.Printf("PTY Output: %s", string(b))
+				debug.Write(b)
+				return len(b), nil
+			}),
+		),
+	)
+
+	// Copy PTY output to configured writer (blocking operation)
+	// This reads from master PTY and forwards to a.writer
+	// Continues until PTY is closed (child exits or Close() called)
+	go func() {
+		_, err = io.Copy(i.Writer, ptmx)
+	}()
+	return i, err
+
 }
 
 func (ps *ProcessServer) GetProcess(id int) (*ProcessInstance, error) {
@@ -234,6 +254,22 @@ func (ps *ProcessServer) RemoveProcess(id int) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	delete(ps.processes, id)
+}
+
+func (ps *ProcessServer) GetScrollback(id int) ([]byte, error) {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+
+	instance, exists := ps.processes[id]
+	if !exists {
+		return nil, fmt.Errorf("process %d not found", id)
+	}
+
+	if instance.Scrollback == nil {
+		return []byte{}, nil
+	}
+
+	return instance.Scrollback.Bytes(), nil
 }
 
 func (ps *ProcessServer) GetReader(id int) (io.Reader, error) {
@@ -425,11 +461,11 @@ func (a *ProcessInstance) WithArgs(args []string) *ProcessInstance {
 // This allows the program's output to be sent to multiple destinations
 // (e.g., stdout and a log file simultaneously)
 func (a *ProcessInstance) WithWriter(writer io.Writer) *ProcessInstance {
-	if a.writer != nil {
+	if a.Writer != nil {
 		// If writer already exists, create a multi-writer to fan-out to both
-		a.writer = io.MultiWriter(a.writer, writer)
+		a.Writer = io.MultiWriter(a.Writer, writer)
 	} else {
-		a.writer = writer
+		a.Writer = writer
 	}
 	return a
 }

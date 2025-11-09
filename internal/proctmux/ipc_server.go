@@ -17,6 +17,7 @@ type IPCServer struct {
 	mu            sync.RWMutex
 	done          chan struct{}
 	controller    *Controller
+	masterServer  *MasterServer
 	currentProcID int
 }
 
@@ -126,6 +127,11 @@ func (s *IPCServer) handleMessage(conn net.Conn, msg IPCMessage) {
 		}
 	case "command":
 		s.handleCommand(conn, msg)
+	case "select":
+		// Handle selection from UI clients
+		if s.masterServer != nil {
+			s.masterServer.HandleSelection(msg.ProcessID)
+		}
 	default:
 		log.Printf("Unknown IPC message type: %s", msg.Type)
 	}
@@ -138,6 +144,67 @@ func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
 		Success:   false,
 	}
 
+	// If we have a master server, use it to handle commands
+	if s.masterServer != nil {
+		switch msg.Action {
+		case "start", "stop", "restart", "switch":
+			if msg.Label == "" {
+				response.Error = "missing process name"
+			} else if err := s.masterServer.HandleCommand(msg.Action, msg.Label); err != nil {
+				response.Error = err.Error()
+			} else {
+				response.Success = true
+			}
+		case "list":
+			state := s.masterServer.GetState()
+			var processList []map[string]interface{}
+			for i := range state.Processes {
+				p := state.Processes[i]
+				if p.ID == DummyProcessID {
+					continue
+				}
+				processList = append(processList, map[string]interface{}{
+					"name":    p.Label,
+					"running": p.Status == StatusRunning,
+					"index":   p.ID,
+				})
+			}
+			response.ProcessList = processList
+			response.Success = true
+		case "restart-running":
+			state := s.masterServer.GetState()
+			var runningLabels []string
+			for i := range state.Processes {
+				p := state.Processes[i]
+				if p.Status == StatusRunning && p.ID != DummyProcessID {
+					runningLabels = append(runningLabels, p.Label)
+				}
+			}
+			for _, name := range runningLabels {
+				_ = s.masterServer.HandleCommand("restart", name)
+			}
+			response.Success = true
+		case "stop-running":
+			state := s.masterServer.GetState()
+			var runningLabels []string
+			for i := range state.Processes {
+				p := state.Processes[i]
+				if p.Status == StatusRunning && p.ID != DummyProcessID {
+					runningLabels = append(runningLabels, p.Label)
+				}
+			}
+			for _, name := range runningLabels {
+				_ = s.masterServer.HandleCommand("stop", name)
+			}
+			response.Success = true
+		default:
+			response.Error = fmt.Sprintf("unknown action: %s", msg.Action)
+		}
+		s.sendResponse(conn, response)
+		return
+	}
+
+	// Fall back to controller if no master server
 	if s.controller == nil {
 		response.Error = "controller not available"
 		s.sendResponse(conn, response)
@@ -285,6 +352,34 @@ func (s *IPCServer) BroadcastSelection(procID int, label string) {
 	log.Printf("Broadcasted selection to %d clients: %s (ID: %d)", len(s.clients), label, procID)
 }
 
+func (s *IPCServer) BroadcastState(state *AppState) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if len(s.clients) == 0 {
+		return
+	}
+
+	msg := IPCMessage{
+		Type:  "state",
+		State: state,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("Failed to marshal state message: %v", err)
+		return
+	}
+
+	data = append(data, '\n')
+
+	for _, conn := range s.clients {
+		if _, err := conn.Write(data); err != nil {
+			log.Printf("Failed to broadcast state to IPC client: %v", err)
+		}
+	}
+}
+
 func (s *IPCServer) SendCommand(action string, procID int, config *ProcessConfig) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -321,6 +416,12 @@ func (s *IPCServer) SetController(controller *Controller) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.controller = controller
+}
+
+func (s *IPCServer) SetMasterServer(master *MasterServer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.masterServer = master
 }
 
 func (s *IPCServer) Stop() {

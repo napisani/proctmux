@@ -19,12 +19,14 @@ type IPCClient struct {
 	requestID     atomic.Uint64
 	pendingReqs   map[string]chan IPCMessage
 	pendingReqsMu sync.Mutex
+	stateCh       chan *AppState
 }
 
 func NewIPCClient(socketPath string) (*IPCClient, error) {
 	client := &IPCClient{
 		socketPath:  socketPath,
 		pendingReqs: make(map[string]chan IPCMessage),
+		stateCh:     make(chan *AppState, 10), // Buffered channel for state updates
 	}
 
 	if err := client.Connect(); err != nil {
@@ -155,6 +157,19 @@ func (c *IPCClient) readResponses() {
 			continue
 		}
 
+		// Handle state broadcast messages
+		if msg.Type == "state" && msg.State != nil {
+			select {
+			case c.stateCh <- msg.State:
+				// State sent to channel
+			default:
+				// Channel full, skip this update
+				// todo comeback to this -- is this right
+				// log.Printf("State channel full, skipping update")
+			}
+			continue
+		}
+
 		// Handle response messages
 		if msg.Type == "response" && msg.RequestID != "" {
 			c.pendingReqsMu.Lock()
@@ -246,6 +261,11 @@ func (c *IPCClient) StopRunning() error {
 	return err
 }
 
+func (c *IPCClient) SwitchProcess(name string) error {
+	_, err := c.sendCommand("switch", name)
+	return err
+}
+
 func (c *IPCClient) GetProcessList() ([]byte, error) {
 	resp, err := c.sendCommand("list", "")
 	if err != nil {
@@ -256,4 +276,38 @@ func (c *IPCClient) GetProcessList() ([]byte, error) {
 		"process_list": resp.ProcessList,
 	})
 	return data, err
+}
+
+// SendSelection sends a selection change to the server (fire-and-forget)
+func (c *IPCClient) SendSelection(procID int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	msg := IPCMessage{
+		Type:      "select",
+		ProcessID: procID,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal selection message: %w", err)
+	}
+
+	data = append(data, '\n')
+
+	if _, err := c.conn.Write(data); err != nil {
+		return fmt.Errorf("failed to send selection message: %w", err)
+	}
+
+	log.Printf("Sent selection update: process ID %d", procID)
+	return nil
+}
+
+// ReceiveState returns a channel that receives state updates from the server
+func (c *IPCClient) ReceiveState() <-chan *AppState {
+	return c.stateCh
 }

@@ -8,7 +8,7 @@ import (
 	"log"
 	"os"
 	"strings"
-	"sync/atomic"
+	"time"
 
 	"github.com/nick/proctmux/internal/proctmux"
 
@@ -37,13 +37,18 @@ func main() {
 	var configFile string
 	var mode string
 	var socketPath string
+	var clientMode bool
 	flag.StringVar(&configFile, "f", "", "path to config file (default: searches for proctmux.yaml in current directory)")
-	flag.StringVar(&mode, "mode", "list", "mode: list (process list UI) or viewer (output viewer)")
-	flag.StringVar(&socketPath, "socket", "", "unix socket path (required for viewer mode)")
+	flag.StringVar(&mode, "mode", "master", "mode: master (process server) or client (UI only)")
+	flag.BoolVar(&clientMode, "client", false, "run in client mode (connects to master)")
+	flag.StringVar(&socketPath, "socket", "", "unix socket path (optional, auto-discovered if not provided)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] [command]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nModes:\n")
+		fmt.Fprintf(os.Stderr, "  (default)                Run master server (manages processes)\n")
+		fmt.Fprintf(os.Stderr, "  --client                 Run UI client (connects to master)\n")
 		fmt.Fprintf(os.Stderr, "\nCommands:\n")
 		fmt.Fprintf(os.Stderr, "  start                    Start the TUI (default)\n")
 		fmt.Fprintf(os.Stderr, "  signal-list              List all processes and their statuses (tab-delimited)\n")
@@ -52,10 +57,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  signal-restart <name>    Restart a process\n")
 		fmt.Fprintf(os.Stderr, "  signal-restart-running   Restart all running processes\n")
 		fmt.Fprintf(os.Stderr, "  signal-stop-running      Stop all running processes\n")
-		fmt.Fprintf(os.Stderr, "\nViewer Mode:\n")
-		fmt.Fprintf(os.Stderr, "  --mode viewer --socket <path>    View process output in separate terminal\n")
 	}
 	flag.Parse()
+
+	// If --client is set, override mode
+	if clientMode {
+		mode = "client"
+	}
 
 	cfg, cfgLoadErr := proctmux.LoadConfig(configFile)
 
@@ -92,25 +100,38 @@ func main() {
 		subcmd = args[0]
 	}
 
-	// Viewer mode
-	if mode == "viewer" {
+	// Client mode - connect to master and show UI
+	if mode == "client" {
+		log.SetPrefix("[CLIENT] ")
 		if socketPath == "" {
-			log.Fatal("--socket required for viewer mode")
+			// Auto-discover socket path
+			var err error
+			socketPath, err = proctmux.ReadSocketPathFile()
+			if err != nil {
+				socketPath, err = proctmux.FindIPCSocket()
+				if err != nil {
+					log.Fatal("Failed to find master server socket. Start master first with `proctmux`")
+				}
+			}
 		}
+		log.Printf("Connecting to master at %s", socketPath)
 		client, err := proctmux.NewIPCClient(socketPath)
 		if err != nil {
-			log.Fatal("Failed to connect to IPC server:", err)
+			log.Fatal("Failed to connect to master server:", err)
 		}
-		processServer := proctmux.NewProcessServer()
-		viewerModel := proctmux.NewViewerModel(client, processServer, cfg)
-		p := tea.NewProgram(viewerModel, tea.WithAltScreen())
-		if err := p.Start(); err != nil {
+		defer client.Close()
+
+		// Create client UI model
+		state := proctmux.NewAppState(cfg)
+		clientModel := proctmux.NewClientModel(client, &state)
+		p := tea.NewProgram(clientModel, tea.WithAltScreen())
+		if _, err := p.Run(); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
 
-	// Client mode
+	// Signal commands - connect via IPC
 	if strings.HasPrefix(subcmd, "signal-") {
 		// Discover socket path
 		socketPath, cerr := proctmux.ReadSocketPathFile()
@@ -150,6 +171,13 @@ func main() {
 			if err := client.RestartProcess(args[1]); err != nil {
 				log.Fatal(err)
 			}
+		case "signal-switch":
+			if len(args) < 2 {
+				log.Fatal("missing name for signal-switch")
+			}
+			if err := client.SwitchProcess(args[1]); err != nil {
+				log.Fatal(err)
+			}
 		case "signal-restart-running":
 			if err := client.RestartRunning(); err != nil {
 				log.Fatal(err)
@@ -187,49 +215,40 @@ func main() {
 		return
 	}
 
-	log.Println("Starting proctmux...")
+	// Master mode (default) - Process server with output viewer UI
+	log.Println("Starting proctmux master server...")
 	log.Printf("Loaded config: %+v", cfg)
-
-	state := proctmux.NewAppState(cfg)
-	running := new(atomic.Bool)
-	running.Store(true)
-	controller := proctmux.NewController(&state, running)
-	defer controller.Destroy()
-
-	if err := controller.OnStartup(); err != nil {
-		log.Fatal("Controller startup failed:", err)
-	}
 
 	// Log deprecation warning if signal server is enabled in config
 	if cfg.SignalServer.Enable {
 		log.Printf("Warning: signal_server configuration is deprecated. Signal commands now use IPC automatically.")
 	}
 
-	// Start IPC server for viewer mode and signal commands
-	var ipcServer *proctmux.IPCServer
+	// Create and start master server
+	masterServer := proctmux.NewMasterServer(cfg)
 	ipcSocketPath := fmt.Sprintf("/tmp/proctmux-%d.sock", os.Getpid())
-	ipcServer = proctmux.NewIPCServer()
-	if err := ipcServer.Start(ipcSocketPath); err != nil {
-		log.Printf("Warning: Failed to start IPC server: %v", err)
-		ipcSocketPath = ""
-	} else {
-		controller.SetIPCServer(ipcServer)
-		log.Printf("IPC server started on %s", ipcSocketPath)
-
-		// Write socket path to well-known location for signal commands
-		if err := proctmux.WriteSocketPathFile(ipcSocketPath); err != nil {
-			log.Printf("Warning: Failed to write socket path file: %v", err)
-		}
-
-		defer func() {
-			ipcServer.Stop()
-			// Clean up socket path file
-			_ = os.Remove("/tmp/proctmux.socket")
-		}()
+	
+	if err := masterServer.Start(ipcSocketPath); err != nil {
+		log.Fatal("Failed to start master server:", err)
 	}
+	defer masterServer.Stop()
 
-	p := tea.NewProgram(proctmux.NewModel(&state, controller, ipcSocketPath), tea.WithAltScreen())
-	if err := p.Start(); err != nil {
-		log.Fatal(err)
+	// Create local IPC client to receive state updates from master
+	// Wait a moment for IPC server to be ready
+	time.Sleep(100 * time.Millisecond)
+	localClient, err := proctmux.NewIPCClient(ipcSocketPath)
+	if err != nil {
+		log.Fatal("Failed to create local IPC client:", err)
 	}
+	defer localClient.Close()
+
+	// Create viewer UI with IPC client for state updates and direct process server access
+	// model := proctmux.NewViewerModel(localClient, masterServer.GetProcessServer(), cfg)
+	// p := tea.NewProgram(model, tea.WithAltScreen())
+	// if _, err := p.Run(); err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	// just pause until ctrl-c
+	select {}
 }

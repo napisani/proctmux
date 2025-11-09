@@ -81,19 +81,14 @@ func (c *Controller) ApplySelection(procID int) error {
 		if state.CurrentProcID == procID {
 			return state, nil
 		}
-		mut := NewStateMutation(state)
-		mut, err := mut.SelectProcessByID(procID)
-		if err != nil {
-			return state, err
-		}
-		newState := mut.Commit()
+	mut := NewStateMutation(state)
+	mut, err := mut.SelectProcessByID(procID)
+	if err != nil {
+		return state, err
+	}
+	newState := mut.Commit()
 
-		proc := newState.GetProcessByID(procID)
-		if proc != nil && c.ipcServer != nil {
-			c.ipcServer.BroadcastSelection(proc.ID, proc.Label)
-		}
-
-		return newState, nil
+	return newState, nil
 	})
 }
 
