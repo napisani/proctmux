@@ -61,11 +61,31 @@ func NewViewer(server *ProcessServer) *Viewer {
 // 3. Write the new process's scrollback buffer to stdout
 // 4. Start copying the new process's output to stdout
 func (v *Viewer) SwitchToProcess(processID int) error {
+	return v.switchToProcess(processID, false)
+}
+
+// RefreshCurrentProcess forces a refresh of the currently viewed process.
+// This is useful when a process is restarted and we want to show its output from the beginning.
+func (v *Viewer) RefreshCurrentProcess() error {
+	v.mu.Lock()
+	currentID := v.currentProcessID
+	v.mu.Unlock()
+	
+	if currentID == 0 {
+		return nil
+	}
+	
+	return v.switchToProcess(currentID, true)
+}
+
+// switchToProcess is the internal implementation that handles both switching and refreshing.
+// If force is true, it will refresh even if already viewing the same process.
+func (v *Viewer) switchToProcess(processID int, force bool) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	// If already viewing this process, do nothing
-	if v.currentProcessID == processID {
+	// If already viewing this process and not forcing refresh, do nothing
+	if v.currentProcessID == processID && !force {
 		return nil
 	}
 

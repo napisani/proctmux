@@ -194,6 +194,12 @@ func (m *MasterServer) startProcessLocked(procID int, config *ProcessConfig) err
 	proc.Status = StatusRunning
 	proc.PID = pid
 
+	// If this process is currently being viewed, refresh the viewer to show output from the beginning
+	if m.viewer.GetCurrentProcessID() == procID {
+		log.Printf("Refreshing viewer for newly started process %d", procID)
+		go m.viewer.RefreshCurrentProcess()
+	}
+
 	// Watch for process exit
 	go func() {
 		<-instance.WaitForExit()

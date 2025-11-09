@@ -85,11 +85,6 @@ func (c *Controller) OnFilterStart() error {
 	})
 }
 
-// Deprecated: UI manages filter text; keep as no-op for compatibility.
-func (c *Controller) OnFilterSet(text string) error { return nil }
-
-// Deprecated: UI manages filter lifecycle; keep as no-op for compatibility.
-func (c *Controller) OnFilterDone() error { return nil }
 
 func (c *Controller) OnKeypressSwitchFocus() error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
