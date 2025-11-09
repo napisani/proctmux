@@ -21,8 +21,10 @@ import (
 // when HandleSelection or HandleCommand("switch") is called.
 //
 // Architecture:
-// The viewer subscribes to the process's BroadcastWriter to receive live output.
-// This avoids competing with the ProcessServer's io.Copy for PTY reads.
+// The viewer uses the ring buffer as the single source of truth.
+// - On switch: displays historical data via Bytes()
+// - For live updates: subscribes to NewReader() to get new writes
+// This avoids competing with ProcessServer's io.Copy for PTY reads.
 //
 // Example usage:
 //
@@ -40,7 +42,7 @@ type Viewer struct {
 	processServer        *ProcessServer
 	interruptOutputRelay chan struct{}
 	currentProcessID     int
-	currentSubscriberID  int           // ID for unsubscribing from broadcast
+	currentReaderID      int           // ID for removing reader from ring buffer
 	copyDone             chan struct{} // Signals when copyProcessOutput has fully exited
 	mu                   sync.Mutex
 }
@@ -79,12 +81,12 @@ func (v *Viewer) SwitchToProcess(processID int) error {
 		v.copyDone = nil
 	}
 
-	// Unsubscribe from the previous process's broadcast
-	if v.currentProcessID != 0 && v.currentSubscriberID != 0 {
+	// Remove reader from the previous process's ring buffer
+	if v.currentProcessID != 0 && v.currentReaderID != 0 {
 		if prevInstance, err := v.processServer.GetProcess(v.currentProcessID); err == nil && prevInstance != nil {
-			prevInstance.Broadcast.Unsubscribe(v.currentSubscriberID)
+			prevInstance.Scrollback.RemoveReader(v.currentReaderID)
 		}
-		v.currentSubscriberID = 0
+		v.currentReaderID = 0
 	}
 
 	v.currentProcessID = processID
@@ -117,20 +119,20 @@ func (v *Viewer) SwitchToProcess(processID int) error {
 		}
 	}
 
-	// Subscribe to the process's broadcast to receive live output
-	subscriberID, outputChan := instance.Broadcast.Subscribe()
-	v.currentSubscriberID = subscriberID
+	// Subscribe to the ring buffer to receive live output
+	readerID, outputChan := instance.Scrollback.NewReader()
+	v.currentReaderID = readerID
 
 	// Start relaying output from the new process
 	v.interruptOutputRelay = make(chan struct{})
 	v.copyDone = make(chan struct{})
 	go v.copyProcessOutput(outputChan, v.interruptOutputRelay, v.copyDone)
 
-	log.Printf("Switched viewer to process %d (PID: %d), subscriber ID: %d", processID, instance.GetPID(), subscriberID)
+	log.Printf("Switched viewer to process %d (PID: %d), reader ID: %d", processID, instance.GetPID(), readerID)
 	return nil
 }
 
-// copyProcessOutput copies output from a process broadcast channel to stdout until cancelled
+// copyProcessOutput copies output from a ring buffer reader channel to stdout until cancelled
 func (v *Viewer) copyProcessOutput(outputChan <-chan []byte, cancel chan struct{}, done chan struct{}) {
 	defer close(done) // Signal that we've fully exited
 

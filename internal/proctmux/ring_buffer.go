@@ -12,13 +12,19 @@ import (
 // overwriting the oldest data. This makes it ideal for terminal scrollback
 // where you want to keep recent output without unbounded memory growth.
 //
+// Readers can follow new writes by calling NewReader() to get a channel
+// that receives new data as it's written to the buffer.
+//
 // Thread-safe: All operations are protected by a RWMutex.
 type RingBuffer struct {
-	buf  []byte       // The underlying circular buffer
-	size int          // Total capacity in bytes
-	w    int          // Write position (0 to size-1)
-	full bool         // Whether we've wrapped around at least once
-	mu   sync.RWMutex // Protects concurrent access
+	buf       []byte                // The underlying circular buffer
+	size      int                   // Total capacity in bytes
+	w         int                   // Write position (0 to size-1)
+	full      bool                  // Whether we've wrapped around at least once
+	mu        sync.RWMutex          // Protects concurrent access
+	readers   map[int]chan []byte   // Active readers following new writes
+	nextID    int                   // Next reader ID
+	readersMu sync.RWMutex          // Protects readers map
 }
 
 // NewRingBuffer creates a new ring buffer with the specified capacity.
@@ -29,14 +35,17 @@ type RingBuffer struct {
 //	rb := NewRingBuffer(1024 * 1024) // 1MB scrollback buffer
 func NewRingBuffer(size int) *RingBuffer {
 	return &RingBuffer{
-		buf:  make([]byte, size),
-		size: size,
+		buf:     make([]byte, size),
+		size:    size,
+		readers: make(map[int]chan []byte),
 	}
 }
 
 // Write implements io.Writer interface.
 // Writes the provided bytes to the ring buffer, wrapping around when
 // the buffer is full and overwriting the oldest data.
+//
+// Notifies all active readers of the new data.
 //
 // Always returns len(p), nil to satisfy io.Writer contract.
 // This ensures writes never fail, making it suitable for use in
@@ -54,6 +63,25 @@ func (rb *RingBuffer) Write(p []byte) (n int, err error) {
 		if rb.w >= rb.size {
 			rb.w = 0
 			rb.full = true
+		}
+	}
+
+	// Notify all readers of new data (make a copy for each reader)
+	rb.readersMu.RLock()
+	defer rb.readersMu.RUnlock()
+	
+	if len(rb.readers) > 0 {
+		data := make([]byte, len(p))
+		copy(data, p)
+		
+		for _, ch := range rb.readers {
+			select {
+			case ch <- data:
+				// Successfully sent
+			default:
+				// Channel full, reader is slow - skip to avoid blocking writes
+				// The reader will still get historical data from Bytes() when switching
+			}
 		}
 	}
 
@@ -114,4 +142,45 @@ func (rb *RingBuffer) Clear() {
 	defer rb.mu.Unlock()
 	rb.w = 0
 	rb.full = false
+}
+
+// NewReader creates a new reader that receives copies of data as it's written.
+// The returned channel will receive all new data written to the buffer after
+// this call. The caller should call RemoveReader when done to avoid resource leaks.
+//
+// Returns:
+//   - id: unique identifier for this reader (used for removal)
+//   - ch: channel that receives new data as it's written
+//
+// Example:
+//
+//	id, ch := rb.NewReader()
+//	defer rb.RemoveReader(id)
+//	for data := range ch {
+//	    os.Stdout.Write(data)
+//	}
+func (rb *RingBuffer) NewReader() (int, <-chan []byte) {
+	rb.readersMu.Lock()
+	defer rb.readersMu.Unlock()
+
+	id := rb.nextID
+	rb.nextID++
+
+	// Buffered channel to avoid blocking on slow readers
+	ch := make(chan []byte, 100)
+	rb.readers[id] = ch
+
+	return id, ch
+}
+
+// RemoveReader removes a reader and closes its channel.
+// This should be called when the reader is done to avoid resource leaks.
+func (rb *RingBuffer) RemoveReader(id int) {
+	rb.readersMu.Lock()
+	defer rb.readersMu.Unlock()
+
+	if ch, exists := rb.readers[id]; exists {
+		close(ch)
+		delete(rb.readers, id)
+	}
 }

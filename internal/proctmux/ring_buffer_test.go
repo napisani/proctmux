@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"testing"
+	"time"
 )
 
 func TestRingBuffer_NewRingBuffer(t *testing.T) {
@@ -270,5 +271,98 @@ func TestRingBuffer_SingleByte(t *testing.T) {
 	}
 	if rb.Len() != 1 {
 		t.Errorf("Expected length 1, got %d", rb.Len())
+	}
+}
+
+func TestRingBuffer_NewReader_ReceivesWrites(t *testing.T) {
+	rb := NewRingBuffer(100)
+
+	// Create a reader
+	readerID, ch := rb.NewReader()
+	if readerID < 0 {
+		t.Error("Expected non-negative reader ID")
+	}
+	if ch == nil {
+		t.Fatal("Expected non-nil channel")
+	}
+
+	// Write data
+	data := []byte("hello world")
+	go rb.Write(data)
+
+	// Reader should receive the data
+	select {
+	case received := <-ch:
+		if !bytes.Equal(received, data) {
+			t.Errorf("Expected %q, got %q", data, received)
+		}
+	case <-time.After(1 * time.Second):
+		t.Error("Timeout waiting for data on reader channel")
+	}
+
+	rb.RemoveReader(readerID)
+}
+
+func TestRingBuffer_MultipleReaders(t *testing.T) {
+	rb := NewRingBuffer(100)
+
+	// Create multiple readers
+	id1, ch1 := rb.NewReader()
+	id2, ch2 := rb.NewReader()
+
+	if id1 == id2 {
+		t.Error("Expected unique reader IDs")
+	}
+
+	// Write data
+	data := []byte("broadcast")
+	go rb.Write(data)
+
+	// Both readers should receive the data
+	var received1, received2 []byte
+	select {
+	case received1 = <-ch1:
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timeout waiting for data on reader 1")
+	}
+
+	select {
+	case received2 = <-ch2:
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timeout waiting for data on reader 2")
+	}
+
+	if !bytes.Equal(received1, data) {
+		t.Errorf("Reader 1: Expected %q, got %q", data, received1)
+	}
+	if !bytes.Equal(received2, data) {
+		t.Errorf("Reader 2: Expected %q, got %q", data, received2)
+	}
+
+	rb.RemoveReader(id1)
+	rb.RemoveReader(id2)
+}
+
+func TestRingBuffer_RemoveReader_StopsReceiving(t *testing.T) {
+	rb := NewRingBuffer(100)
+
+	// Create reader
+	readerID, ch := rb.NewReader()
+
+	// Remove reader immediately
+	rb.RemoveReader(readerID)
+
+	// Write data
+	rb.Write([]byte("should not be received"))
+
+	// Channel should eventually be closed or not receive data
+	select {
+	case data, ok := <-ch:
+		if ok {
+			t.Errorf("Expected closed channel, but received data: %q", data)
+		}
+		// Channel closed is expected
+	case <-time.After(100 * time.Millisecond):
+		// No data received is also acceptable
 	}
 }
