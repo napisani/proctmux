@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// MasterServer is the main process server that manages all processes and state
-type MasterServer struct {
+// PrimaryServer is the main process server that manages all processes and state
+type PrimaryServer struct {
 	processServer *ProcessServer
 	ipcServer     *IPCServer
 	viewer        *Viewer
@@ -19,10 +19,10 @@ type MasterServer struct {
 	done          chan struct{}
 }
 
-func NewMasterServer(cfg *ProcTmuxConfig) *MasterServer {
+func NewPrimaryServer(cfg *ProcTmuxConfig) *PrimaryServer {
 	state := NewAppState(cfg)
 	processServer := NewProcessServer()
-	return &MasterServer{
+	return &PrimaryServer{
 		processServer: processServer,
 		ipcServer:     NewIPCServer(),
 		viewer:        NewViewer(processServer),
@@ -32,14 +32,14 @@ func NewMasterServer(cfg *ProcTmuxConfig) *MasterServer {
 	}
 }
 
-func (m *MasterServer) Start(socketPath string) error {
+func (m *PrimaryServer) Start(socketPath string) error {
 	// Start IPC server
 	if err := m.ipcServer.Start(socketPath); err != nil {
 		return fmt.Errorf("failed to start IPC server: %w", err)
 	}
 
 	// Set up IPC server to handle commands
-	m.ipcServer.SetMasterServer(m)
+	m.ipcServer.SetPrimaryServer(m)
 
 	// Write socket path to well-known location
 	if err := WriteSocketPathFile(socketPath); err != nil {
@@ -52,11 +52,11 @@ func (m *MasterServer) Start(socketPath string) error {
 	// Start state broadcast loop
 	go m.broadcastLoop()
 
-	log.Printf("Master server started on %s", socketPath)
+	log.Printf("Primary server started on %s", socketPath)
 	return nil
 }
 
-func (m *MasterServer) autoStartProcesses() {
+func (m *PrimaryServer) autoStartProcesses() {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 
@@ -69,7 +69,7 @@ func (m *MasterServer) autoStartProcesses() {
 	}
 }
 
-func (m *MasterServer) broadcastLoop() {
+func (m *PrimaryServer) broadcastLoop() {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -83,7 +83,7 @@ func (m *MasterServer) broadcastLoop() {
 	}
 }
 
-func (m *MasterServer) broadcastState() {
+func (m *PrimaryServer) broadcastState() {
 	m.stateMu.RLock()
 	state := m.state
 	m.stateMu.RUnlock()
@@ -92,7 +92,7 @@ func (m *MasterServer) broadcastState() {
 }
 
 // HandleCommand handles IPC commands from clients
-func (m *MasterServer) HandleCommand(action string, label string) error {
+func (m *PrimaryServer) HandleCommand(action string, label string) error {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 
@@ -136,7 +136,7 @@ func (m *MasterServer) HandleCommand(action string, label string) error {
 }
 
 // HandleSelection handles selection changes from UI clients
-func (m *MasterServer) HandleSelection(procID int) {
+func (m *PrimaryServer) HandleSelection(procID int) {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 
@@ -153,21 +153,21 @@ func (m *MasterServer) HandleSelection(procID int) {
 	}
 }
 
-func (m *MasterServer) GetState() *AppState {
+func (m *PrimaryServer) GetState() *AppState {
 	m.stateMu.RLock()
 	defer m.stateMu.RUnlock()
 	return m.state
 }
 
-func (m *MasterServer) GetProcessServer() *ProcessServer {
+func (m *PrimaryServer) GetProcessServer() *ProcessServer {
 	return m.processServer
 }
 
-func (m *MasterServer) GetViewer() *Viewer {
+func (m *PrimaryServer) GetViewer() *Viewer {
 	return m.viewer
 }
 
-func (m *MasterServer) startProcessLocked(procID int, config *ProcessConfig) error {
+func (m *PrimaryServer) startProcessLocked(procID int, config *ProcessConfig) error {
 	proc := m.state.GetProcessByID(procID)
 	if proc == nil {
 		return fmt.Errorf("process not found: %d", procID)
@@ -220,7 +220,7 @@ func (m *MasterServer) startProcessLocked(procID int, config *ProcessConfig) err
 	return nil
 }
 
-func (m *MasterServer) stopProcessLocked(procID int) error {
+func (m *PrimaryServer) stopProcessLocked(procID int) error {
 	proc := m.state.GetProcessByID(procID)
 	if proc == nil {
 		return fmt.Errorf("process not found: %d", procID)
@@ -245,8 +245,8 @@ func (m *MasterServer) stopProcessLocked(procID int) error {
 	return nil
 }
 
-func (m *MasterServer) Stop() {
-	log.Println("Stopping master server...")
+func (m *PrimaryServer) Stop() {
+	log.Println("Stopping primary server...")
 	close(m.done)
 
 	// Stop all running processes
@@ -266,5 +266,5 @@ func (m *MasterServer) Stop() {
 	// Clean up socket path file
 	_ = os.Remove("/tmp/proctmux.socket")
 
-	log.Println("Master server stopped")
+	log.Println("Primary server stopped")
 }

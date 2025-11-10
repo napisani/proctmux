@@ -85,7 +85,6 @@ func (c *Controller) OnFilterStart() error {
 	})
 }
 
-
 func (c *Controller) OnKeypressSwitchFocus() error {
 	return c.LockAndLoad(func(state *AppState) (*AppState, error) {
 		return state, nil

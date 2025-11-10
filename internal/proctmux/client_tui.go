@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// ClientModel is a UI-only model that connects to a master server
+// ClientModel is a UI-only model that connects to a primary server
 type ClientModel struct {
 	client     *IPCClient
 	domain     *AppState
@@ -19,7 +19,7 @@ type ClientModel struct {
 	selectSeq  int
 }
 
-// clientStateUpdateMsg wraps state updates from master
+// clientStateUpdateMsg wraps state updates from primary
 type clientStateUpdateMsg struct {
 	state *AppState
 }
@@ -32,7 +32,7 @@ func NewClientModel(client *IPCClient, state *AppState) ClientModel {
 	}
 }
 
-// subscribeToStateUpdates listens for state updates from the master server
+// subscribeToStateUpdates listens for state updates from the primary server
 func (m ClientModel) subscribeToStateUpdates() tea.Cmd {
 	return func() tea.Msg {
 		// Block until we receive a state update
@@ -48,7 +48,7 @@ func (m ClientModel) Init() tea.Cmd {
 func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case clientStateUpdateMsg:
-		// Update our local state copy from master
+		// Update our local state copy from primary
 		m.domain = msg.state
 		return m, m.subscribeToStateUpdates()
 
@@ -111,17 +111,17 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case contains(kb.Down, key):
 			m.moveSelection(+1)
 			m.selectSeq++
-			return m, m.sendSelectionToMaster(m.ui.ActiveProcID)
+			return m, m.sendSelectionToPrimary(m.ui.ActiveProcID)
 		case contains(kb.Up, key):
 			m.moveSelection(-1)
 			m.selectSeq++
-			return m, m.sendSelectionToMaster(m.ui.ActiveProcID)
+			return m, m.sendSelectionToPrimary(m.ui.ActiveProcID)
 		case contains(kb.Start, key):
-			return m, m.sendCommandToMaster("start")
+			return m, m.sendCommandToPrimary("start")
 		case contains(kb.Stop, key):
-			return m, m.sendCommandToMaster("stop")
+			return m, m.sendCommandToPrimary("stop")
 		case contains(kb.Restart, key):
-			return m, m.sendCommandToMaster("restart")
+			return m, m.sendCommandToPrimary("restart")
 		}
 		return m, nil
 
@@ -133,11 +133,11 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(procs) > 0 {
 			m.ui.ActiveProcID = procs[0].ID
 			m.selectSeq++
-			return m, m.sendSelectionToMaster(m.ui.ActiveProcID)
+			return m, m.sendSelectionToPrimary(m.ui.ActiveProcID)
 		}
 		m.ui.ActiveProcID = 0
 		m.selectSeq++
-		return m, m.sendSelectionToMaster(0)
+		return m, m.sendSelectionToPrimary(0)
 	}
 	return m, nil
 }
@@ -173,19 +173,19 @@ func (m *ClientModel) moveSelection(delta int) {
 	m.ui.ActiveProcID = ids[ni]
 }
 
-// sendSelectionToMaster sends selection change to the master server
-func (m ClientModel) sendSelectionToMaster(procID int) tea.Cmd {
+// sendSelectionToPrimary sends selection change to the primary server
+func (m ClientModel) sendSelectionToPrimary(procID int) tea.Cmd {
 	return func() tea.Msg {
 		if err := m.client.SendSelection(procID); err != nil {
-			log.Printf("Failed to send selection to master: %v", err)
+			log.Printf("Failed to send selection to primary: %v", err)
 			return errMsg{err}
 		}
 		return nil
 	}
 }
 
-// sendCommandToMaster sends a command (start/stop/restart) to the master server
-func (m ClientModel) sendCommandToMaster(action string) tea.Cmd {
+// sendCommandToPrimary sends a command (start/stop/restart) to the primary server
+func (m ClientModel) sendCommandToPrimary(action string) tea.Cmd {
 	return func() tea.Msg {
 		proc := m.domain.GetProcessByID(m.ui.ActiveProcID)
 		if proc == nil {
@@ -232,7 +232,7 @@ func (m ClientModel) appendHelpPanel(s string) string {
 		strings.Join(m.domain.Config.Keybinding.Down, "/") + "] Down  [" +
 		strings.Join(m.domain.Config.Keybinding.Filter, "/") + "] Filter  [" +
 		strings.Join(m.domain.Config.Keybinding.Quit, "/") + "] Quit\n"
-	s += "\n[Client Mode - Connected to Master]\n"
+	s += "\n[Client Mode - Connected to Primary]\n"
 	return s
 }
 

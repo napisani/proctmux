@@ -17,7 +17,7 @@ type IPCServer struct {
 	mu            sync.RWMutex
 	done          chan struct{}
 	controller    *Controller
-	masterServer  *MasterServer
+	primaryServer *PrimaryServer
 	currentProcID int
 }
 
@@ -129,8 +129,8 @@ func (s *IPCServer) handleMessage(conn net.Conn, msg IPCMessage) {
 		s.handleCommand(conn, msg)
 	case "select":
 		// Handle selection from UI clients
-		if s.masterServer != nil {
-			s.masterServer.HandleSelection(msg.ProcessID)
+		if s.primaryServer != nil {
+			s.primaryServer.HandleSelection(msg.ProcessID)
 		}
 	default:
 		log.Printf("Unknown IPC message type: %s", msg.Type)
@@ -144,19 +144,19 @@ func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
 		Success:   false,
 	}
 
-	// If we have a master server, use it to handle commands
-	if s.masterServer != nil {
+	// If we have a primary server, use it to handle commands
+	if s.primaryServer != nil {
 		switch msg.Action {
 		case "start", "stop", "restart", "switch":
 			if msg.Label == "" {
 				response.Error = "missing process name"
-			} else if err := s.masterServer.HandleCommand(msg.Action, msg.Label); err != nil {
+			} else if err := s.primaryServer.HandleCommand(msg.Action, msg.Label); err != nil {
 				response.Error = err.Error()
 			} else {
 				response.Success = true
 			}
 		case "list":
-			state := s.masterServer.GetState()
+			state := s.primaryServer.GetState()
 			var processList []map[string]interface{}
 			for i := range state.Processes {
 				p := state.Processes[i]
@@ -172,7 +172,7 @@ func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
 			response.ProcessList = processList
 			response.Success = true
 		case "restart-running":
-			state := s.masterServer.GetState()
+			state := s.primaryServer.GetState()
 			var runningLabels []string
 			for i := range state.Processes {
 				p := state.Processes[i]
@@ -181,11 +181,11 @@ func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
 				}
 			}
 			for _, name := range runningLabels {
-				_ = s.masterServer.HandleCommand("restart", name)
+				_ = s.primaryServer.HandleCommand("restart", name)
 			}
 			response.Success = true
 		case "stop-running":
-			state := s.masterServer.GetState()
+			state := s.primaryServer.GetState()
 			var runningLabels []string
 			for i := range state.Processes {
 				p := state.Processes[i]
@@ -194,7 +194,7 @@ func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
 				}
 			}
 			for _, name := range runningLabels {
-				_ = s.masterServer.HandleCommand("stop", name)
+				_ = s.primaryServer.HandleCommand("stop", name)
 			}
 			response.Success = true
 		default:
@@ -204,7 +204,7 @@ func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
 		return
 	}
 
-	// Fall back to controller if no master server
+	// Fall back to controller if no primary server
 	if s.controller == nil {
 		response.Error = "controller not available"
 		s.sendResponse(conn, response)
@@ -418,10 +418,10 @@ func (s *IPCServer) SetController(controller *Controller) {
 	s.controller = controller
 }
 
-func (s *IPCServer) SetMasterServer(master *MasterServer) {
+func (s *IPCServer) SetPrimaryServer(primary *PrimaryServer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.masterServer = master
+	s.primaryServer = primary
 }
 
 func (s *IPCServer) Stop() {
