@@ -3,7 +3,6 @@ package proctmux
 import (
 	"fmt"
 	"log"
-	"os"
 	"sync"
 	"time"
 )
@@ -40,11 +39,6 @@ func (m *PrimaryServer) Start(socketPath string) error {
 
 	// Set up IPC server to handle commands
 	m.ipcServer.SetPrimaryServer(m)
-
-	// Write socket path to well-known location
-	if err := WriteSocketPathFile(socketPath); err != nil {
-		log.Printf("Warning: Failed to write socket path file: %v", err)
-	}
 
 	// Auto-start processes
 	m.autoStartProcesses()
@@ -262,9 +256,6 @@ func (m *PrimaryServer) Stop() {
 
 	// Stop IPC server
 	m.ipcServer.Stop()
-
-	// Clean up socket path file
-	_ = os.Remove("/tmp/proctmux.socket")
 
 	log.Println("Primary server stopped")
 }

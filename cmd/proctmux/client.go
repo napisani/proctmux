@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -8,24 +9,24 @@ import (
 )
 
 // RunClient starts the application in client mode, connecting to a running primary server
-func RunClient(cfg *proctmux.ProcTmuxConfig, socketPath string) error {
+func RunClient(cfg *proctmux.ProcTmuxConfig) error {
 	log.SetPrefix("[CLIENT] ")
 
 	// Auto-discover socket path if not provided
-	if socketPath == "" {
-		var err error
-		socketPath, err = proctmux.ReadSocketPathFile()
+	socketPath, err := proctmux.GetSocket(cfg)
+	if err != nil {
+		// Wait for socket to be created
+		socketPath, err = proctmux.WaitForSocket(cfg)
 		if err != nil {
-			socketPath, err = proctmux.FindIPCSocket()
-			if err != nil {
-				log.Fatal("Failed to find primary server socket. Start primary first with `proctmux`")
-			}
+			fmt.Printf("Error finding primary server socket: %v\n", err)
+			log.Fatal("Failed to find primary server socket. Start primary first with `proctmux`")
 		}
 	}
 
 	log.Printf("Connecting to primary at %s", socketPath)
 	client, err := proctmux.NewIPCClient(socketPath)
 	if err != nil {
+		fmt.Printf("Error connecting to primary server: %v", err)
 		log.Fatal("Failed to connect to primary server:", err)
 	}
 	defer client.Close()
@@ -35,6 +36,7 @@ func RunClient(cfg *proctmux.ProcTmuxConfig, socketPath string) error {
 	clientModel := proctmux.NewClientModel(client, &state)
 	p := tea.NewProgram(clientModel, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
+		fmt.Printf("Error running proctmux client: %v\n", err)
 		log.Fatal(err)
 	}
 

@@ -10,7 +10,6 @@ import (
 type CLIConfig struct {
 	ConfigFile string
 	Mode       string
-	SocketPath string
 	Subcommand string
 	Args       []string
 }
@@ -23,7 +22,6 @@ func ParseCLI() *CLIConfig {
 	flag.StringVar(&cfg.ConfigFile, "f", "", "path to config file (default: searches for proctmux.yaml in current directory)")
 	flag.StringVar(&cfg.Mode, "mode", "primary", "mode: primary (process server) or client (UI only)")
 	flag.BoolVar(&clientMode, "client", false, "run in client mode (connects to primary)")
-	flag.StringVar(&cfg.SocketPath, "socket", "", "unix socket path (optional, auto-discovered if not provided)")
 	flag.Usage = printUsage
 	flag.Parse()
 

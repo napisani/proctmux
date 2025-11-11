@@ -9,15 +9,11 @@ import (
 )
 
 // RunSignalCommand executes a signal command by connecting to the primary server via IPC
-func RunSignalCommand(subcmd string, args []string) error {
+func RunSignalCommand(cfg *proctmux.ProcTmuxConfig, subcmd string, args []string) error {
 	// Discover socket path
-	socketPath, err := proctmux.ReadSocketPathFile()
+	socketPath, err := proctmux.GetSocket(cfg)
 	if err != nil {
-		// Fallback to finding most recent socket
-		socketPath, err = proctmux.FindIPCSocket()
-		if err != nil {
-			log.Fatal("Failed to find proctmux instance: ", err)
-		}
+		log.Fatal("Failed to find proctmux instance: ", err)
 	}
 
 	client, err := proctmux.NewIPCClient(socketPath)

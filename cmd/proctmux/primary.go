@@ -1,9 +1,7 @@
 package main
 
 import (
-	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"github.com/nick/proctmux/internal/proctmux"
@@ -22,7 +20,10 @@ func RunPrimary(cfg *proctmux.ProcTmuxConfig) error {
 
 	// Create and start primary server
 	primaryServer := proctmux.NewPrimaryServer(cfg)
-	ipcSocketPath := fmt.Sprintf("/tmp/proctmux-%d.sock", os.Getpid())
+	ipcSocketPath, err := proctmux.CreateSocket(cfg)
+	if err != nil {
+		log.Fatal("Failed to create socket path:", err)
+	}
 
 	if err := primaryServer.Start(ipcSocketPath); err != nil {
 		log.Fatal("Failed to start primary server:", err)

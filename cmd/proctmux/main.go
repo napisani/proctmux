@@ -65,14 +65,14 @@ func main() {
 
 	// Route to appropriate mode/command
 	if cliCfg.Mode == "client" {
-		if err := RunClient(cfg, cliCfg.SocketPath); err != nil {
+		if err := RunClient(cfg); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
 
 	if strings.HasPrefix(cliCfg.Subcommand, "signal-") {
-		if err := RunSignalCommand(cliCfg.Subcommand, cliCfg.Args); err != nil {
+		if err := RunSignalCommand(cfg, cliCfg.Subcommand, cliCfg.Args); err != nil {
 			log.Fatal(err)
 		}
 		return

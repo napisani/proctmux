@@ -3,69 +3,66 @@ package proctmux
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"sort"
-	"strings"
+	"time"
 )
 
-// FindIPCSocket finds the most recent proctmux IPC socket.
-// It looks for socket files matching /tmp/proctmux-*.sock and returns the most recent one.
-func FindIPCSocket() (string, error) {
-	pattern := "/tmp/proctmux-*.sock"
-	matches, err := filepath.Glob(pattern)
+// CreateSocket creates a new socket file path based on config hash and creates it.
+// Returns the socket path.
+func CreateSocket(config *ProcTmuxConfig) (string, error) {
+	hash, err := config.ToHash()
 	if err != nil {
-		return "", fmt.Errorf("failed to search for sockets: %w", err)
+		return "", fmt.Errorf("failed to generate config hash: %w", err)
 	}
 
-	if len(matches) == 0 {
-		return "", fmt.Errorf("no proctmux instance found (no socket files in /tmp)")
-	}
+	socketPath := fmt.Sprintf("/tmp/proctmux-%s.socket", hash)
 
-	// Sort by modification time (most recent first)
-	sort.Slice(matches, func(i, j int) bool {
-		infoI, errI := os.Stat(matches[i])
-		infoJ, errJ := os.Stat(matches[j])
-		if errI != nil || errJ != nil {
-			return false
-		}
-		return infoI.ModTime().After(infoJ.ModTime())
-	})
+	// Remove any existing socket file
+	_ = os.Remove(socketPath)
 
-	// Return the most recent socket
-	return matches[0], nil
+	return socketPath, nil
 }
 
-// GetIPCSocketPath returns the socket path for the given PID, or discovers it if pid is 0.
-func GetIPCSocketPath(pid int) (string, error) {
-	if pid > 0 {
-		return fmt.Sprintf("/tmp/proctmux-%d.sock", pid), nil
-	}
-	return FindIPCSocket()
-}
-
-// WriteSocketPathFile writes the socket path to a well-known location for discovery.
-func WriteSocketPathFile(socketPath string) error {
-	pidFile := "/tmp/proctmux.socket"
-	content := socketPath + "\n"
-	if err := os.WriteFile(pidFile, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write socket path file: %w", err)
-	}
-	return nil
-}
-
-// ReadSocketPathFile reads the socket path from the well-known location.
-func ReadSocketPathFile() (string, error) {
-	pidFile := "/tmp/proctmux.socket"
-	content, err := os.ReadFile(pidFile)
+// GetSocket returns the socket path for the given config.
+// It checks if the socket exists, and returns an error if it doesn't.
+func GetSocket(config *ProcTmuxConfig) (string, error) {
+	hash, err := config.ToHash()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to generate config hash: %w", err)
 	}
-	socketPath := strings.TrimSpace(string(content))
 
-	// Verify the socket still exists
+	socketPath := fmt.Sprintf("/tmp/proctmux-%s.socket", hash)
+
+	// Verify the socket exists
 	if _, err := os.Stat(socketPath); err != nil {
-		return "", fmt.Errorf("socket file no longer exists: %s", socketPath)
+		return "", fmt.Errorf("socket file does not exist: %s", socketPath)
 	}
 
 	return socketPath, nil
+}
+
+// WaitForSocket waits for the socket to be created, up to a timeout.
+// Returns the socket path when it becomes available.
+func WaitForSocket(config *ProcTmuxConfig) (string, error) {
+	hash, err := config.ToHash()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate config hash: %w", err)
+	}
+
+	socketPath := fmt.Sprintf("/tmp/proctmux-%s.socket", hash)
+
+	// Wait up to 5 seconds for the socket to be created
+	timeout := time.After(5 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return "", fmt.Errorf("timeout waiting for socket: %s", socketPath)
+		case <-ticker.C:
+			if _, err := os.Stat(socketPath); err == nil {
+				return socketPath, nil
+			}
+		}
+	}
 }
