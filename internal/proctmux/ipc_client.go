@@ -44,7 +44,7 @@ func (c *IPCClient) Connect() error {
 	defer c.mu.Unlock()
 
 	maxRetries := 5
-	for i := 0; i < maxRetries; i++ {
+	for i := range maxRetries {
 		conn, err := net.Dial("unix", c.socketPath)
 		if err != nil {
 			if i < maxRetries-1 {

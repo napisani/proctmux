@@ -16,7 +16,6 @@ type IPCServer struct {
 	clients       []net.Conn
 	mu            sync.RWMutex
 	done          chan struct{}
-	controller    *Controller
 	primaryServer *PrimaryServer
 	currentProcID int
 }
@@ -121,10 +120,6 @@ func (s *IPCServer) handleClient(conn net.Conn) {
 
 func (s *IPCServer) handleMessage(conn net.Conn, msg IPCMessage) {
 	switch msg.Type {
-	case "state":
-		if s.controller != nil {
-			s.controller.OnStateUpdate(msg.State)
-		}
 	case "command":
 		s.handleCommand(conn, msg)
 	case "select":
@@ -204,90 +199,8 @@ func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
 		return
 	}
 
-	// Fall back to controller if no primary server
-	if s.controller == nil {
-		response.Error = "controller not available"
-		s.sendResponse(conn, response)
-		return
-	}
-
-	switch msg.Action {
-	case "start":
-		if msg.Label == "" {
-			response.Error = "missing process name"
-		} else if err := s.controller.OnKeypressStartWithLabel(msg.Label); err != nil {
-			response.Error = err.Error()
-		} else {
-			response.Success = true
-		}
-	case "stop":
-		if msg.Label == "" {
-			response.Error = "missing process name"
-		} else if err := s.controller.OnKeypressStopWithLabel(msg.Label); err != nil {
-			response.Error = err.Error()
-		} else {
-			response.Success = true
-		}
-	case "restart":
-		if msg.Label == "" {
-			response.Error = "missing process name"
-		} else if err := s.controller.OnKeypressRestartWithLabel(msg.Label); err != nil {
-			response.Error = err.Error()
-		} else {
-			response.Success = true
-		}
-	case "list":
-		var processList []map[string]interface{}
-		_ = s.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-			for i := range state.Processes {
-				p := state.Processes[i]
-				if p.ID == DummyProcessID {
-					continue
-				}
-				processList = append(processList, map[string]interface{}{
-					"name":    p.Label,
-					"running": p.Status == StatusRunning,
-					"index":   p.ID,
-				})
-			}
-			return state, nil
-		})
-		response.ProcessList = processList
-		response.Success = true
-	case "restart-running":
-		var runningLabels []string
-		_ = s.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-			for i := range state.Processes {
-				p := state.Processes[i]
-				if p.Status == StatusRunning && p.ID != DummyProcessID {
-					runningLabels = append(runningLabels, p.Label)
-				}
-			}
-			return state, nil
-		})
-		for _, name := range runningLabels {
-			_ = s.controller.OnKeypressRestartWithLabel(name)
-		}
-		response.Success = true
-	case "stop-running":
-		var runningLabels []string
-		_ = s.controller.LockAndLoad(func(state *AppState) (*AppState, error) {
-			for i := range state.Processes {
-				p := state.Processes[i]
-				if p.Status == StatusRunning && p.ID != DummyProcessID {
-					runningLabels = append(runningLabels, p.Label)
-				}
-			}
-			return state, nil
-		})
-		for _, name := range runningLabels {
-			_ = s.controller.OnKeypressStopWithLabel(name)
-		}
-		response.Success = true
-	default:
-		response.Error = fmt.Sprintf("unknown action: %s", msg.Action)
-	}
-
+	// No primary server available
+	response.Error = "primary server not available"
 	s.sendResponse(conn, response)
 }
 
@@ -410,12 +323,6 @@ func (s *IPCServer) SendCommand(action string, procID int, config *ProcessConfig
 
 	log.Printf("Sent command '%s' for process %d to %d clients", action, procID, len(s.clients))
 	return nil
-}
-
-func (s *IPCServer) SetController(controller *Controller) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.controller = controller
 }
 
 func (s *IPCServer) SetPrimaryServer(primary *PrimaryServer) {

@@ -1,6 +1,7 @@
 package proctmux
 
 import (
+	"crypto/md5"
 	"fmt"
 	"os"
 
@@ -118,6 +119,15 @@ func LoadConfig(path string) (*ProcTmuxConfig, error) {
 
 	cfg = applyDefaults(cfg)
 	return &cfg, nil
+}
+
+func (cfg *ProcTmuxConfig) ToHash() (string, error) {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	sum := md5.Sum(data)
+	return fmt.Sprintf("%x", sum), nil
 }
 
 const banner = `
