@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 
+	"github.com/nick/proctmux/internal/ipc"
 	"github.com/nick/proctmux/internal/proctmux"
 )
 
@@ -12,9 +13,12 @@ func RunPrimary(cfg *proctmux.ProcTmuxConfig) error {
 	log.Println("Starting proctmux primary server...")
 	log.Printf("Loaded config: %+v", cfg)
 
+	// Create IPC server
+	ipcServer := ipc.NewServer()
+
 	// Create and start primary server
-	primaryServer := proctmux.NewPrimaryServer(cfg)
-	ipcSocketPath, err := proctmux.CreateSocket(cfg)
+	primaryServer := proctmux.NewPrimaryServer(cfg, ipcServer)
+	ipcSocketPath, err := ipc.CreateSocket(cfg)
 	if err != nil {
 		log.Fatal("Failed to create socket path:", err)
 	}

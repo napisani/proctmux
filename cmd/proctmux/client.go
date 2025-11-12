@@ -5,6 +5,7 @@ import (
 	"log"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/nick/proctmux/internal/ipc"
 	"github.com/nick/proctmux/internal/proctmux"
 )
 
@@ -13,10 +14,10 @@ func RunClient(cfg *proctmux.ProcTmuxConfig) error {
 	log.SetPrefix("[CLIENT] ")
 
 	// Auto-discover socket path if not provided
-	socketPath, err := proctmux.GetSocket(cfg)
+	socketPath, err := ipc.GetSocket(cfg)
 	if err != nil {
 		// Wait for socket to be created
-		socketPath, err = proctmux.WaitForSocket(cfg)
+		socketPath, err = ipc.WaitForSocket(cfg)
 		if err != nil {
 			fmt.Printf("Error finding primary server socket: %v\n", err)
 			log.Fatal("Failed to find primary server socket. Start primary first with `proctmux`")
@@ -24,7 +25,7 @@ func RunClient(cfg *proctmux.ProcTmuxConfig) error {
 	}
 
 	log.Printf("Connecting to primary at %s", socketPath)
-	client, err := proctmux.NewIPCClient(socketPath)
+	client, err := ipc.NewClient(socketPath)
 	if err != nil {
 		fmt.Printf("Error connecting to primary server: %v", err)
 		log.Fatal("Failed to connect to primary server:", err)

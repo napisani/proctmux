@@ -5,18 +5,19 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/nick/proctmux/internal/ipc"
 	"github.com/nick/proctmux/internal/proctmux"
 )
 
 // RunSignalCommand executes a signal command by connecting to the primary server via IPC
 func RunSignalCommand(cfg *proctmux.ProcTmuxConfig, subcmd string, args []string) error {
 	// Discover socket path
-	socketPath, err := proctmux.GetSocket(cfg)
+	socketPath, err := ipc.GetSocket(cfg)
 	if err != nil {
 		log.Fatal("Failed to find proctmux instance: ", err)
 	}
 
-	client, err := proctmux.NewIPCClient(socketPath)
+	client, err := ipc.NewClient(socketPath)
 	if err != nil {
 		log.Fatal(err)
 	}

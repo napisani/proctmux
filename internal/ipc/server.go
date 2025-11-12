@@ -1,4 +1,4 @@
-package proctmux
+package ipc
 
 import (
 	"bufio"
@@ -8,42 +8,48 @@ import (
 	"net"
 	"os"
 	"sync"
+
+	"github.com/nick/proctmux/internal/proctmux"
 )
 
-type IPCServer struct {
+type Server struct {
 	socketPath    string
 	listener      net.Listener
 	clients       []net.Conn
 	mu            sync.RWMutex
 	done          chan struct{}
-	primaryServer *PrimaryServer
+	primaryServer interface {
+		HandleSelection(procID int)
+		HandleCommand(action, label string) error
+		GetState() *proctmux.AppState
+	}
 	currentProcID int
 }
 
-type IPCMessage struct {
+type Message struct {
 	Type        string                   `json:"type"`
 	RequestID   string                   `json:"request_id,omitempty"`
 	ProcessID   int                      `json:"process_id,omitempty"`
 	Label       string                   `json:"label,omitempty"`
 	Action      string                   `json:"action,omitempty"`
-	Config      *ProcessConfig           `json:"config,omitempty"`
+	Config      *proctmux.ProcessConfig  `json:"config,omitempty"`
 	Status      string                   `json:"status,omitempty"`
 	PID         int                      `json:"pid,omitempty"`
 	ExitCode    int                      `json:"exit_code,omitempty"`
-	State       *AppState                `json:"state,omitempty"`
+	State       *proctmux.AppState       `json:"state,omitempty"`
 	ProcessList []map[string]interface{} `json:"process_list,omitempty"`
 	Error       string                   `json:"error,omitempty"`
 	Success     bool                     `json:"success,omitempty"`
 }
 
-func NewIPCServer() *IPCServer {
-	return &IPCServer{
+func NewServer() *Server {
+	return &Server{
 		clients: []net.Conn{},
 		done:    make(chan struct{}),
 	}
 }
 
-func (s *IPCServer) Start(socketPath string) error {
+func (s *Server) Start(socketPath string) error {
 	if err := os.RemoveAll(socketPath); err != nil {
 		return fmt.Errorf("failed to remove existing socket: %w", err)
 	}
@@ -62,7 +68,7 @@ func (s *IPCServer) Start(socketPath string) error {
 	return nil
 }
 
-func (s *IPCServer) acceptClients() {
+func (s *Server) acceptClients() {
 	for {
 		select {
 		case <-s.done:
@@ -90,7 +96,7 @@ func (s *IPCServer) acceptClients() {
 	}
 }
 
-func (s *IPCServer) handleClient(conn net.Conn) {
+func (s *Server) handleClient(conn net.Conn) {
 	defer func() {
 		conn.Close()
 		s.removeClient(conn)
@@ -103,7 +109,7 @@ func (s *IPCServer) handleClient(conn net.Conn) {
 			return
 		default:
 			line := scanner.Bytes()
-			var msg IPCMessage
+			var msg Message
 			if err := json.Unmarshal(line, &msg); err != nil {
 				log.Printf("Failed to parse IPC message: %v", err)
 				continue
@@ -118,7 +124,7 @@ func (s *IPCServer) handleClient(conn net.Conn) {
 	}
 }
 
-func (s *IPCServer) handleMessage(conn net.Conn, msg IPCMessage) {
+func (s *Server) handleMessage(conn net.Conn, msg Message) {
 	switch msg.Type {
 	case "command":
 		s.handleCommand(conn, msg)
@@ -132,8 +138,8 @@ func (s *IPCServer) handleMessage(conn net.Conn, msg IPCMessage) {
 	}
 }
 
-func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
-	response := IPCMessage{
+func (s *Server) handleCommand(conn net.Conn, msg Message) {
+	response := Message{
 		Type:      "response",
 		RequestID: msg.RequestID,
 		Success:   false,
@@ -155,12 +161,12 @@ func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
 			var processList []map[string]interface{}
 			for i := range state.Processes {
 				p := state.Processes[i]
-				if p.ID == DummyProcessID {
+				if p.ID == proctmux.DummyProcessID {
 					continue
 				}
 				processList = append(processList, map[string]interface{}{
 					"name":    p.Label,
-					"running": p.Status == StatusRunning,
+					"running": p.Status == proctmux.StatusRunning,
 					"index":   p.ID,
 				})
 			}
@@ -171,7 +177,7 @@ func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
 			var runningLabels []string
 			for i := range state.Processes {
 				p := state.Processes[i]
-				if p.Status == StatusRunning && p.ID != DummyProcessID {
+				if p.Status == proctmux.StatusRunning && p.ID != proctmux.DummyProcessID {
 					runningLabels = append(runningLabels, p.Label)
 				}
 			}
@@ -184,7 +190,7 @@ func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
 			var runningLabels []string
 			for i := range state.Processes {
 				p := state.Processes[i]
-				if p.Status == StatusRunning && p.ID != DummyProcessID {
+				if p.Status == proctmux.StatusRunning && p.ID != proctmux.DummyProcessID {
 					runningLabels = append(runningLabels, p.Label)
 				}
 			}
@@ -204,7 +210,7 @@ func (s *IPCServer) handleCommand(conn net.Conn, msg IPCMessage) {
 	s.sendResponse(conn, response)
 }
 
-func (s *IPCServer) sendResponse(conn net.Conn, msg IPCMessage) {
+func (s *Server) sendResponse(conn net.Conn, msg Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("Failed to marshal response: %v", err)
@@ -216,7 +222,7 @@ func (s *IPCServer) sendResponse(conn net.Conn, msg IPCMessage) {
 	}
 }
 
-func (s *IPCServer) removeClient(conn net.Conn) {
+func (s *Server) removeClient(conn net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -229,11 +235,7 @@ func (s *IPCServer) removeClient(conn net.Conn) {
 	}
 }
 
-func (s *IPCServer) BroadcastSelection(procID int, label string) {
-	s.mu.Lock()
-	s.currentProcID = procID
-	s.mu.Unlock()
-
+func (s *Server) BroadcastState(state *proctmux.AppState) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -241,39 +243,7 @@ func (s *IPCServer) BroadcastSelection(procID int, label string) {
 		return
 	}
 
-	msg := IPCMessage{
-		Type:      "user_action",
-		Action:    "select",
-		ProcessID: procID,
-		Label:     label,
-	}
-
-	data, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("Failed to marshal IPC message: %v", err)
-		return
-	}
-
-	data = append(data, '\n')
-
-	for _, conn := range s.clients {
-		if _, err := conn.Write(data); err != nil {
-			log.Printf("Failed to write to IPC client: %v", err)
-		}
-	}
-
-	log.Printf("Broadcasted selection to %d clients: %s (ID: %d)", len(s.clients), label, procID)
-}
-
-func (s *IPCServer) BroadcastState(state *AppState) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if len(s.clients) == 0 {
-		return
-	}
-
-	msg := IPCMessage{
+	msg := Message{
 		Type:  "state",
 		State: state,
 	}
@@ -293,7 +263,7 @@ func (s *IPCServer) BroadcastState(state *AppState) {
 	}
 }
 
-func (s *IPCServer) SendCommand(action string, procID int, config *ProcessConfig) error {
+func (s *Server) SendCommand(action string, procID int, config *proctmux.ProcessConfig) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -301,7 +271,7 @@ func (s *IPCServer) SendCommand(action string, procID int, config *ProcessConfig
 		return fmt.Errorf("no connected viewers to send command")
 	}
 
-	msg := IPCMessage{
+	msg := Message{
 		Type:      "user_action",
 		Action:    action,
 		ProcessID: procID,
@@ -325,13 +295,17 @@ func (s *IPCServer) SendCommand(action string, procID int, config *ProcessConfig
 	return nil
 }
 
-func (s *IPCServer) SetPrimaryServer(primary *PrimaryServer) {
+func (s *Server) SetPrimaryServer(primary interface {
+	HandleSelection(procID int)
+	HandleCommand(action, label string) error
+	GetState() *proctmux.AppState
+}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.primaryServer = primary
 }
 
-func (s *IPCServer) Stop() {
+func (s *Server) Stop() {
 	close(s.done)
 
 	s.mu.Lock()
@@ -351,8 +325,4 @@ func (s *IPCServer) Stop() {
 	}
 
 	log.Printf("IPC server stopped")
-}
-
-func (s *IPCServer) GetSocketPath() string {
-	return s.socketPath
 }

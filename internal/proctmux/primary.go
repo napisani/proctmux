@@ -10,7 +10,7 @@ import (
 // PrimaryServer is the main process server that manages all processes and state
 type PrimaryServer struct {
 	processServer *ProcessServer
-	ipcServer     *IPCServer
+	ipcServer     IPCServerInterface
 	viewer        *Viewer
 	state         *AppState
 	stateMu       sync.RWMutex
@@ -18,12 +18,24 @@ type PrimaryServer struct {
 	done          chan struct{}
 }
 
-func NewPrimaryServer(cfg *ProcTmuxConfig) *PrimaryServer {
+// IPCServerInterface defines the interface for IPC server operations
+type IPCServerInterface interface {
+	Start(socketPath string) error
+	SetPrimaryServer(primary interface {
+		HandleSelection(procID int)
+		HandleCommand(action, label string) error
+		GetState() *AppState
+	})
+	BroadcastState(state *AppState)
+	Stop()
+}
+
+func NewPrimaryServer(cfg *ProcTmuxConfig, ipcServer IPCServerInterface) *PrimaryServer {
 	state := NewAppState(cfg)
 	processServer := NewProcessServer()
 	return &PrimaryServer{
 		processServer: processServer,
-		ipcServer:     NewIPCServer(),
+		ipcServer:     ipcServer,
 		viewer:        NewViewer(processServer),
 		state:         &state,
 		cfg:           cfg,
@@ -44,7 +56,7 @@ func (m *PrimaryServer) Start(socketPath string) error {
 	m.autoStartProcesses()
 
 	// Start state broadcast loop
-	go m.broadcastLoop()
+	// go m.broadcastLoop()
 
 	log.Printf("Primary server started on %s", socketPath)
 	return nil
@@ -61,6 +73,7 @@ func (m *PrimaryServer) autoStartProcesses() {
 			m.startProcessLocked(proc.ID)
 		}
 	}
+	m.broadcastStateLocked()
 }
 
 func (m *PrimaryServer) broadcastLoop() {
@@ -85,6 +98,10 @@ func (m *PrimaryServer) broadcastState() {
 	m.ipcServer.BroadcastState(state)
 }
 
+func (m *PrimaryServer) broadcastStateLocked() {
+	m.ipcServer.BroadcastState(m.state)
+}
+
 // HandleCommand handles IPC commands from clients
 func (m *PrimaryServer) HandleCommand(action string, label string) error {
 	m.stateMu.Lock()
@@ -94,42 +111,29 @@ func (m *PrimaryServer) HandleCommand(action string, label string) error {
 	if proc == nil {
 		return fmt.Errorf("process not found: %s", label)
 	}
+	var err error
 
 	switch action {
 	case "switch":
-		return m.switchToProcessLocked(proc.ID)
+		err = m.switchToProcessLocked(proc.ID)
 	case "start":
-		return m.startProcessLocked(proc.ID)
+		err = m.startProcessLocked(proc.ID)
 	case "stop":
-		return m.stopProcessLocked(proc.ID)
+		err = m.stopProcessLocked(proc.ID)
 	case "restart":
-		if err := m.stopProcessLocked(proc.ID); err != nil {
-			return err
+		err = m.stopProcessLocked(proc.ID)
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			err = m.startProcessLocked(proc.ID)
 		}
-		time.Sleep(500 * time.Millisecond)
-		return m.startProcessLocked(proc.ID)
 	default:
 		return fmt.Errorf("unknown action: %s", action)
+
 	}
+	m.broadcastStateLocked()
+	return err
 }
 
-// HandleSelection handles selection changes from UI clients
-func (m *PrimaryServer) HandleSelection(procID int) {
-	m.stateMu.Lock()
-	defer m.stateMu.Unlock()
-
-	if m.state.CurrentProcID == procID {
-		return
-	}
-
-	m.state.CurrentProcID = procID
-	log.Printf("Selection changed to process ID %d", procID)
-
-	// Switch the viewer to display this process
-	if err := m.viewer.SwitchToProcess(procID); err != nil {
-		log.Printf("Warning: failed to switch viewer to process %d: %v", procID, err)
-	}
-}
 
 func (m *PrimaryServer) GetState() *AppState {
 	m.stateMu.RLock()

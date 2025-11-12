@@ -1,4 +1,4 @@
-package proctmux
+package ipc
 
 import (
 	"bufio"
@@ -9,24 +9,26 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nick/proctmux/internal/proctmux"
 )
 
-type IPCClient struct {
+type Client struct {
 	socketPath    string
 	conn          net.Conn
 	mu            sync.Mutex
 	reader        *bufio.Reader
 	requestID     atomic.Uint64
-	pendingReqs   map[string]chan IPCMessage
+	pendingReqs   map[string]chan Message
 	pendingReqsMu sync.Mutex
-	stateCh       chan *AppState
+	stateCh       chan *proctmux.AppState
 }
 
-func NewIPCClient(socketPath string) (*IPCClient, error) {
-	client := &IPCClient{
+func NewClient(socketPath string) (*Client, error) {
+	client := &Client{
 		socketPath:  socketPath,
-		pendingReqs: make(map[string]chan IPCMessage),
-		stateCh:     make(chan *AppState, 10), // Buffered channel for state updates
+		pendingReqs: make(map[string]chan Message),
+		stateCh:     make(chan *proctmux.AppState, 10), // Buffered channel for state updates
 	}
 
 	if err := client.Connect(); err != nil {
@@ -39,7 +41,7 @@ func NewIPCClient(socketPath string) (*IPCClient, error) {
 	return client, nil
 }
 
-func (c *IPCClient) Connect() error {
+func (c *Client) Connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -64,7 +66,7 @@ func (c *IPCClient) Connect() error {
 	return fmt.Errorf("failed to connect to IPC server")
 }
 
-func (c *IPCClient) ReadSelection() (*IPCMessage, error) {
+func (c *Client) ReadSelection() (*Message, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -77,7 +79,7 @@ func (c *IPCClient) ReadSelection() (*IPCMessage, error) {
 		return nil, fmt.Errorf("failed to read from IPC server: %w", err)
 	}
 
-	var msg IPCMessage
+	var msg Message
 	if err := json.Unmarshal(line, &msg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal IPC message: %w", err)
 	}
@@ -85,11 +87,11 @@ func (c *IPCClient) ReadSelection() (*IPCMessage, error) {
 	return &msg, nil
 }
 
-func (c *IPCClient) ReadMessage() (*IPCMessage, error) {
+func (c *Client) ReadMessage() (*Message, error) {
 	return c.ReadSelection()
 }
 
-func (c *IPCClient) SendState(state *AppState) error {
+func (c *Client) SendState(state *proctmux.AppState) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -97,7 +99,7 @@ func (c *IPCClient) SendState(state *AppState) error {
 		return fmt.Errorf("not connected")
 	}
 
-	msg := IPCMessage{
+	msg := Message{
 		Type:  "state",
 		State: state,
 	}
@@ -117,7 +119,7 @@ func (c *IPCClient) SendState(state *AppState) error {
 	return nil
 }
 
-func (c *IPCClient) Close() {
+func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -129,13 +131,13 @@ func (c *IPCClient) Close() {
 	}
 }
 
-func (c *IPCClient) IsConnected() bool {
+func (c *Client) IsConnected() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.conn != nil
 }
 
-func (c *IPCClient) readResponses() {
+func (c *Client) readResponses() {
 	for {
 		c.mu.Lock()
 		if c.conn == nil || c.reader == nil {
@@ -151,7 +153,7 @@ func (c *IPCClient) readResponses() {
 			return
 		}
 
-		var msg IPCMessage
+		var msg Message
 		if err := json.Unmarshal(line, &msg); err != nil {
 			log.Printf("Failed to unmarshal IPC message: %v", err)
 			continue
@@ -182,7 +184,7 @@ func (c *IPCClient) readResponses() {
 	}
 }
 
-func (c *IPCClient) sendCommand(action string, label string) (*IPCMessage, error) {
+func (c *Client) sendCommand(action string, label string) (*Message, error) {
 	c.mu.Lock()
 	if c.conn == nil {
 		c.mu.Unlock()
@@ -191,7 +193,7 @@ func (c *IPCClient) sendCommand(action string, label string) (*IPCMessage, error
 	c.mu.Unlock()
 
 	reqID := fmt.Sprintf("%d", c.requestID.Add(1))
-	msg := IPCMessage{
+	msg := Message{
 		Type:      "command",
 		RequestID: reqID,
 		Action:    action,
@@ -205,7 +207,7 @@ func (c *IPCClient) sendCommand(action string, label string) (*IPCMessage, error
 	data = append(data, '\n')
 
 	// Create response channel
-	respCh := make(chan IPCMessage, 1)
+	respCh := make(chan Message, 1)
 	c.pendingReqsMu.Lock()
 	c.pendingReqs[reqID] = respCh
 	c.pendingReqsMu.Unlock()
@@ -236,37 +238,37 @@ func (c *IPCClient) sendCommand(action string, label string) (*IPCMessage, error
 	}
 }
 
-func (c *IPCClient) StartProcess(name string) error {
+func (c *Client) StartProcess(name string) error {
 	_, err := c.sendCommand("start", name)
 	return err
 }
 
-func (c *IPCClient) StopProcess(name string) error {
+func (c *Client) StopProcess(name string) error {
 	_, err := c.sendCommand("stop", name)
 	return err
 }
 
-func (c *IPCClient) RestartProcess(name string) error {
+func (c *Client) RestartProcess(name string) error {
 	_, err := c.sendCommand("restart", name)
 	return err
 }
 
-func (c *IPCClient) RestartRunning() error {
+func (c *Client) RestartRunning() error {
 	_, err := c.sendCommand("restart-running", "")
 	return err
 }
 
-func (c *IPCClient) StopRunning() error {
+func (c *Client) StopRunning() error {
 	_, err := c.sendCommand("stop-running", "")
 	return err
 }
 
-func (c *IPCClient) SwitchProcess(name string) error {
+func (c *Client) SwitchProcess(name string) error {
 	_, err := c.sendCommand("switch", name)
 	return err
 }
 
-func (c *IPCClient) GetProcessList() ([]byte, error) {
+func (c *Client) GetProcessList() ([]byte, error) {
 	resp, err := c.sendCommand("list", "")
 	if err != nil {
 		return nil, err
@@ -279,7 +281,7 @@ func (c *IPCClient) GetProcessList() ([]byte, error) {
 }
 
 // SendSelection sends a selection change to the server (fire-and-forget)
-func (c *IPCClient) SendSelection(procID int) error {
+func (c *Client) SendSelection(procID int) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -287,7 +289,7 @@ func (c *IPCClient) SendSelection(procID int) error {
 		return fmt.Errorf("not connected")
 	}
 
-	msg := IPCMessage{
+	msg := Message{
 		Type:      "select",
 		ProcessID: procID,
 	}
@@ -308,6 +310,6 @@ func (c *IPCClient) SendSelection(procID int) error {
 }
 
 // ReceiveState returns a channel that receives state updates from the server
-func (c *IPCClient) ReceiveState() <-chan *AppState {
+func (c *Client) ReceiveState() <-chan *proctmux.AppState {
 	return c.stateCh
 }

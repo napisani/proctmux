@@ -44,9 +44,18 @@ func debounceSelection(seq, procID int) tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return applySelectionMsg{seq: seq, procID: procID} })
 }
 
+// IPCClient interface abstracts IPC client operations
+type IPCClient interface {
+	ReceiveState() <-chan *AppState
+	SendSelection(procID int) error
+	StartProcess(label string) error
+	StopProcess(label string) error
+	RestartProcess(label string) error
+}
+
 // ClientModel is a UI-only model that connects to a primary server
 type ClientModel struct {
-	client     *IPCClient
+	client     IPCClient
 	domain     *AppState
 	ui         UIState
 	termWidth  int
@@ -60,7 +69,7 @@ type clientStateUpdateMsg struct {
 	state *AppState
 }
 
-func NewClientModel(client *IPCClient, state *AppState) ClientModel {
+func NewClientModel(client IPCClient, state *AppState) ClientModel {
 	return ClientModel{
 		client: client,
 		domain: state,
