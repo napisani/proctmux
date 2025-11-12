@@ -3,6 +3,7 @@ package proctmux
 import (
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,16 +42,6 @@ func debounceFilter(seq int) tea.Cmd {
 // debounceSelection returns a command that debounces selection changes
 func debounceSelection(seq, procID int) tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return applySelectionMsg{seq: seq, procID: procID} })
-}
-
-// contains checks if a slice contains a string
-func contains(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // ClientModel is a UI-only model that connects to a primary server
@@ -112,12 +103,12 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.ui.EnteringFilterText {
 			switch {
-			case contains(kb.FilterSubmit, key):
+			case slices.Contains(kb.FilterSubmit, key):
 				m.ui.EnteringFilterText = false
 				m.ui.Mode = NormalMode
 				m.filterSeq++
 				return m, debounceFilter(m.filterSeq)
-			case contains(kb.Filter, key):
+			case slices.Contains(kb.Filter, key):
 				m.ui.EnteringFilterText = false
 				m.ui.Mode = NormalMode
 				return m, nil
@@ -144,28 +135,28 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch {
-		case contains(kb.Quit, key):
+		case slices.Contains(kb.Quit, key):
 			return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
-		case contains(kb.Filter, key):
+		case slices.Contains(kb.Filter, key):
 			m.ui.EnteringFilterText = true
 			m.ui.Mode = FilterMode
 			m.ui.FilterText = ""
 			m.ui.ActiveProcID = 0
 			m.selectSeq++
 			return m, debounceSelection(m.selectSeq, 0)
-		case contains(kb.Down, key):
+		case slices.Contains(kb.Down, key):
 			m.moveSelection(+1)
 			m.selectSeq++
 			return m, m.sendSelectionToPrimary(m.ui.ActiveProcID)
-		case contains(kb.Up, key):
+		case slices.Contains(kb.Up, key):
 			m.moveSelection(-1)
 			m.selectSeq++
 			return m, m.sendSelectionToPrimary(m.ui.ActiveProcID)
-		case contains(kb.Start, key):
+		case slices.Contains(kb.Start, key):
 			return m, m.sendCommandToPrimary("start")
-		case contains(kb.Stop, key):
+		case slices.Contains(kb.Stop, key):
 			return m, m.sendCommandToPrimary("stop")
-		case contains(kb.Restart, key):
+		case slices.Contains(kb.Restart, key):
 			return m, m.sendCommandToPrimary("restart")
 		}
 		return m, nil

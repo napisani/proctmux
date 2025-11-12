@@ -51,12 +51,6 @@ type StyleConfig struct {
 	ColorLevel                 string            `yaml:"color_level"`
 }
 
-type SignalServerConfig struct {
-	Port   int    `yaml:"port"`
-	Host   string `yaml:"host"`
-	Enable bool   `yaml:"enable"`
-}
-
 type ProcTmuxConfig struct {
 	Keybinding KeybindingConfig         `yaml:"keybinding"`
 	Layout     LayoutConfig             `yaml:"layout"`
@@ -66,10 +60,9 @@ type ProcTmuxConfig struct {
 		DetachedSessionName string `yaml:"detached_session_name"`
 		KillExistingSession bool   `yaml:"kill_existing_session"`
 	} `yaml:"general"`
-	SignalServer SignalServerConfig `yaml:"signal_server"`
-	ShellCmd     []string           `yaml:"shell_cmd"`
-	LogFile      string             `yaml:"log_file"`
-	EnableMouse  bool               `yaml:"enable_mouse"`
+	ShellCmd    []string `yaml:"shell_cmd"`
+	LogFile     string   `yaml:"log_file"`
+	EnableMouse bool     `yaml:"enable_mouse"`
 }
 
 type ProcessConfig struct {
@@ -189,33 +182,24 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	if cfg.General.DetachedSessionName == "" {
 		cfg.General.DetachedSessionName = "_proctmux"
 	}
-	if cfg.SignalServer.Enable {
-		if cfg.SignalServer.Port == 0 {
-			cfg.SignalServer.Port = 9792
-		}
-		if cfg.SignalServer.Host == "" {
-			cfg.SignalServer.Host = "localhost"
-		}
 
-		if cfg.Style.SelectedProcessColor == "" {
-			cfg.Style.SelectedProcessColor = "white"
-		}
-		if cfg.Style.SelectedProcessBgColor == "" {
-			cfg.Style.SelectedProcessBgColor = "magenta"
-		}
-		if cfg.Style.StatusRunningColor == "" {
-			cfg.Style.StatusRunningColor = "green"
-		}
-		if cfg.Style.StatusStoppedColor == "" {
-			cfg.Style.StatusStoppedColor = "red"
-		}
-		if cfg.Style.PlaceholderTerminalBgColor == "" {
-			cfg.Style.PlaceholderTerminalBgColor = "black"
-		}
-		if cfg.Style.ColorLevel == "" {
-			cfg.Style.ColorLevel = "256"
-		}
-
+	if cfg.Style.SelectedProcessColor == "" {
+		cfg.Style.SelectedProcessColor = "white"
+	}
+	if cfg.Style.SelectedProcessBgColor == "" {
+		cfg.Style.SelectedProcessBgColor = "magenta"
+	}
+	if cfg.Style.StatusRunningColor == "" {
+		cfg.Style.StatusRunningColor = "green"
+	}
+	if cfg.Style.StatusStoppedColor == "" {
+		cfg.Style.StatusStoppedColor = "red"
+	}
+	if cfg.Style.PlaceholderTerminalBgColor == "" {
+		cfg.Style.PlaceholderTerminalBgColor = "black"
+	}
+	if cfg.Style.ColorLevel == "" {
+		cfg.Style.ColorLevel = "256"
 	}
 
 	return cfg

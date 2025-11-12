@@ -58,7 +58,7 @@ func (m *PrimaryServer) autoStartProcesses() {
 		proc := &m.state.Processes[idx]
 		if proc.Config.Autostart {
 			log.Printf("Auto-starting process %s", proc.Label)
-			m.startProcessLocked(proc.ID, proc.Config)
+			m.startProcessLocked(proc.ID)
 		}
 	}
 }
@@ -90,32 +90,16 @@ func (m *PrimaryServer) HandleCommand(action string, label string) error {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 
-	// Handle switch action separately (doesn't need to lock a specific process)
-	if action == "switch" {
-		proc := m.state.GetProcessByLabel(label)
-		if proc == nil {
-			return fmt.Errorf("process not found: %s", label)
-		}
-		// Update selection
-		m.state.CurrentProcID = proc.ID
-		log.Printf("Switched to process %s (ID: %d)", label, proc.ID)
-
-		// Switch the viewer to display this process
-		if err := m.viewer.SwitchToProcess(proc.ID); err != nil {
-			log.Printf("Warning: failed to switch viewer to process %d: %v", proc.ID, err)
-		}
-
-		return nil
-	}
-
 	proc := m.state.GetProcessByLabel(label)
 	if proc == nil {
 		return fmt.Errorf("process not found: %s", label)
 	}
 
 	switch action {
+	case "switch":
+		return m.switchToProcessLocked(proc.ID)
 	case "start":
-		return m.startProcessLocked(proc.ID, proc.Config)
+		return m.startProcessLocked(proc.ID)
 	case "stop":
 		return m.stopProcessLocked(proc.ID)
 	case "restart":
@@ -123,7 +107,7 @@ func (m *PrimaryServer) HandleCommand(action string, label string) error {
 			return err
 		}
 		time.Sleep(500 * time.Millisecond)
-		return m.startProcessLocked(proc.ID, proc.Config)
+		return m.startProcessLocked(proc.ID)
 	default:
 		return fmt.Errorf("unknown action: %s", action)
 	}
@@ -161,7 +145,25 @@ func (m *PrimaryServer) GetViewer() *Viewer {
 	return m.viewer
 }
 
-func (m *PrimaryServer) startProcessLocked(procID int, config *ProcessConfig) error {
+func (m *PrimaryServer) switchToProcessLocked(procID int) error {
+	proc := m.state.GetProcessByID(procID)
+	if proc == nil {
+		return fmt.Errorf("process not found: %d", procID)
+	}
+
+	// Update selection
+	m.state.CurrentProcID = proc.ID
+	log.Printf("Switched to process %s (ID: %d)", proc.Label, proc.ID)
+
+	// Switch the viewer to display this process
+	if err := m.viewer.SwitchToProcess(proc.ID); err != nil {
+		log.Printf("Warning: failed to switch viewer to process %d: %v", proc.ID, err)
+	}
+
+	return nil
+}
+
+func (m *PrimaryServer) startProcessLocked(procID int) error {
 	proc := m.state.GetProcessByID(procID)
 	if proc == nil {
 		return fmt.Errorf("process not found: %d", procID)
@@ -174,7 +176,7 @@ func (m *PrimaryServer) startProcessLocked(procID int, config *ProcessConfig) er
 
 	log.Printf("Starting process %s (ID: %d)", proc.Label, procID)
 
-	instance, err := m.processServer.StartProcess(procID, config)
+	instance, err := m.processServer.StartProcess(procID, proc.Config)
 	if err != nil {
 		log.Printf("Error starting process %d: %v", procID, err)
 		proc.Status = StatusHalted
