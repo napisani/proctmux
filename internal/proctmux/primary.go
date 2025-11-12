@@ -22,7 +22,6 @@ type PrimaryServer struct {
 type IPCServerInterface interface {
 	Start(socketPath string) error
 	SetPrimaryServer(primary interface {
-		HandleSelection(procID int)
 		HandleCommand(action, label string) error
 		GetState() *AppState
 	})
@@ -55,9 +54,6 @@ func (m *PrimaryServer) Start(socketPath string) error {
 	// Auto-start processes
 	m.autoStartProcesses()
 
-	// Start state broadcast loop
-	// go m.broadcastLoop()
-
 	log.Printf("Primary server started on %s", socketPath)
 	return nil
 }
@@ -74,28 +70,6 @@ func (m *PrimaryServer) autoStartProcesses() {
 		}
 	}
 	m.broadcastStateLocked()
-}
-
-func (m *PrimaryServer) broadcastLoop() {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-m.done:
-			return
-		case <-ticker.C:
-			m.broadcastState()
-		}
-	}
-}
-
-func (m *PrimaryServer) broadcastState() {
-	m.stateMu.RLock()
-	state := m.state
-	m.stateMu.RUnlock()
-
-	m.ipcServer.BroadcastState(state)
 }
 
 func (m *PrimaryServer) broadcastStateLocked() {
@@ -133,7 +107,6 @@ func (m *PrimaryServer) HandleCommand(action string, label string) error {
 	m.broadcastStateLocked()
 	return err
 }
-
 
 func (m *PrimaryServer) GetState() *AppState {
 	m.stateMu.RLock()
@@ -212,9 +185,9 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 			proc.Status = StatusHalted
 			proc.PID = 0
 		}
+		m.broadcastStateLocked()
 		m.stateMu.Unlock()
 
-		m.broadcastState()
 	}()
 
 	return nil

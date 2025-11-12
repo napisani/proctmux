@@ -65,20 +65,9 @@ func NewAppState(cfg *ProcTmuxConfig) AppState {
 	return s
 }
 
-func (s *AppState) GetDummyProcess() *Process { return s.GetProcessByID(DummyProcessID) }
-
 func (s *AppState) GetProcessByID(id int) *Process {
 	for i, p := range s.Processes {
 		if p.ID == id {
-			return &s.Processes[i]
-		}
-	}
-	return nil
-}
-
-func (s *AppState) GetProcessByPID(pid int) *Process {
-	for i, p := range s.Processes {
-		if p.PID == pid {
 			return &s.Processes[i]
 		}
 	}
@@ -92,13 +81,6 @@ func (s *AppState) GetProcessByLabel(label string) *Process {
 		}
 	}
 	return nil
-}
-
-func (s *AppState) GetCurrentProcess() *Process {
-	if s.CurrentProcID == 0 {
-		return nil
-	}
-	return s.GetProcessByID(s.CurrentProcID)
 }
 
 func (s *AppState) SetProcessStatus(id int, status ProcessStatus) {
@@ -120,40 +102,6 @@ func (s *AppState) SelectFirstProcess() *AppState {
 	return s
 }
 
-// MoveProcessSelection moves selection by delta across all non-dummy processes.
-func (s *AppState) MoveProcessSelection(directionNum int) *AppState {
-	var procs []*Process
-	for i := range s.Processes {
-		if s.Processes[i].ID != DummyProcessID {
-			procs = append(procs, &s.Processes[i])
-		}
-	}
-	if len(procs) == 0 {
-		return s
-	}
-	if len(procs) == 1 {
-		return s.SelectFirstProcess()
-	}
-	ids := make([]int, len(procs))
-	curIdx := -1
-	for i, p := range procs {
-		ids[i] = p.ID
-		if p.ID == s.CurrentProcID {
-			curIdx = i
-		}
-	}
-	if curIdx == -1 {
-		return s.SelectFirstProcess()
-	}
-	newIdx := curIdx + directionNum
-	if newIdx < 0 {
-		newIdx = len(procs) - 1
-	} else {
-		newIdx = newIdx % len(procs)
-	}
-	s.CurrentProcID = ids[newIdx]
-	return s
-}
 
 func fuzzyMatch(a, b string) bool {
 	a = strings.ToLower(a)

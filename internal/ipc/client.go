@@ -280,35 +280,6 @@ func (c *Client) GetProcessList() ([]byte, error) {
 	return data, err
 }
 
-// SendSelection sends a selection change to the server (fire-and-forget)
-func (c *Client) SendSelection(procID int) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.conn == nil {
-		return fmt.Errorf("not connected")
-	}
-
-	msg := Message{
-		Type:      "select",
-		ProcessID: procID,
-	}
-
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal selection message: %w", err)
-	}
-
-	data = append(data, '\n')
-
-	if _, err := c.conn.Write(data); err != nil {
-		return fmt.Errorf("failed to send selection message: %w", err)
-	}
-
-	log.Printf("Sent selection update: process ID %d", procID)
-	return nil
-}
-
 // ReceiveState returns a channel that receives state updates from the server
 func (c *Client) ReceiveState() <-chan *proctmux.AppState {
 	return c.stateCh

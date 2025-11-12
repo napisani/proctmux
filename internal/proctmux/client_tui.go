@@ -47,7 +47,7 @@ func debounceSelection(seq, procID int) tea.Cmd {
 // IPCClient interface abstracts IPC client operations
 type IPCClient interface {
 	ReceiveState() <-chan *AppState
-	SendSelection(procID int) error
+	SwitchProcess(label string) error
 	StartProcess(label string) error
 	StopProcess(label string) error
 	RestartProcess(label string) error
@@ -156,11 +156,11 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case slices.Contains(kb.Down, key):
 			m.moveSelection(+1)
 			m.selectSeq++
-			return m, m.sendSelectionToPrimary(m.ui.ActiveProcID)
+			return m, m.sendSelectionToPrimary(m.activeProcLabel())
 		case slices.Contains(kb.Up, key):
 			m.moveSelection(-1)
 			m.selectSeq++
-			return m, m.sendSelectionToPrimary(m.ui.ActiveProcID)
+			return m, m.sendSelectionToPrimary(m.activeProcLabel())
 		case slices.Contains(kb.Start, key):
 			return m, m.sendCommandToPrimary("start")
 		case slices.Contains(kb.Stop, key):
@@ -178,13 +178,22 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(procs) > 0 {
 			m.ui.ActiveProcID = procs[0].ID
 			m.selectSeq++
-			return m, m.sendSelectionToPrimary(m.ui.ActiveProcID)
+			return m, m.sendSelectionToPrimary(m.activeProcLabel())
 		}
 		m.ui.ActiveProcID = 0
 		m.selectSeq++
-		return m, m.sendSelectionToPrimary(0)
+		return m, m.sendSelectionToPrimary("Dummy")
 	}
 	return m, nil
+}
+
+func (m *ClientModel) activeProcLabel() string {
+	procID := m.ui.ActiveProcID
+	proc := m.domain.GetProcessByID(procID)
+	if proc != nil {
+		return proc.Label
+	}
+	return ""
 }
 
 func (m *ClientModel) moveSelection(delta int) {
@@ -219,9 +228,9 @@ func (m *ClientModel) moveSelection(delta int) {
 }
 
 // sendSelectionToPrimary sends selection change to the primary server
-func (m ClientModel) sendSelectionToPrimary(procID int) tea.Cmd {
+func (m ClientModel) sendSelectionToPrimary(label string) tea.Cmd {
 	return func() tea.Msg {
-		if err := m.client.SendSelection(procID); err != nil {
+		if err := m.client.SwitchProcess(label); err != nil {
 			log.Printf("Failed to send selection to primary: %v", err)
 			return errMsg{err}
 		}

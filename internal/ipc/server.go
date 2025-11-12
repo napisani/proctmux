@@ -19,7 +19,6 @@ type Server struct {
 	mu            sync.RWMutex
 	done          chan struct{}
 	primaryServer interface {
-		HandleSelection(procID int)
 		HandleCommand(action, label string) error
 		GetState() *proctmux.AppState
 	}
@@ -128,11 +127,6 @@ func (s *Server) handleMessage(conn net.Conn, msg Message) {
 	switch msg.Type {
 	case "command":
 		s.handleCommand(conn, msg)
-	case "select":
-		// Handle selection from UI clients
-		if s.primaryServer != nil {
-			s.primaryServer.HandleSelection(msg.ProcessID)
-		}
 	default:
 		log.Printf("Unknown IPC message type: %s", msg.Type)
 	}
@@ -296,7 +290,6 @@ func (s *Server) SendCommand(action string, procID int, config *proctmux.Process
 }
 
 func (s *Server) SetPrimaryServer(primary interface {
-	HandleSelection(procID int)
 	HandleCommand(action, label string) error
 	GetState() *proctmux.AppState
 }) {
