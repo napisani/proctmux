@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/nick/proctmux/internal/buffer"
+	"github.com/nick/proctmux/internal/config"
+	"github.com/nick/proctmux/internal/domain"
 )
 
 // PrimaryServer is the main process server that manages all processes and state
@@ -16,9 +18,9 @@ type PrimaryServer struct {
 	processServer     *ProcessServer
 	ipcServer         IPCServerInterface
 	viewer            *Viewer
-	state             *AppState
+	state             *domain.AppState
 	stateMu           sync.RWMutex
-	cfg               *ProcTmuxConfig
+	cfg               *config.ProcTmuxConfig
 	done              chan struct{}
 	stdOutDebugWriter io.Writer
 }
@@ -28,14 +30,14 @@ type IPCServerInterface interface {
 	Start(socketPath string) error
 	SetPrimaryServer(primary interface {
 		HandleCommand(action, label string) error
-		GetState() *AppState
+		GetState() *domain.AppState
 	})
-	BroadcastState(state *AppState)
+	BroadcastState(state *domain.AppState)
 	Stop()
 }
 
 func setupLogger(
-	cfg *ProcTmuxConfig,
+	cfg *config.ProcTmuxConfig,
 ) (io.Writer, error) {
 	if cfg != nil && cfg.StdOutDebugLogFile != "" {
 		logPath := cfg.StdOutDebugLogFile
@@ -54,8 +56,8 @@ func setupLogger(
 	return nil, nil
 }
 
-func NewPrimaryServer(cfg *ProcTmuxConfig, ipcServer IPCServerInterface) *PrimaryServer {
-	state := NewAppState(cfg)
+func NewPrimaryServer(cfg *config.ProcTmuxConfig, ipcServer IPCServerInterface) *PrimaryServer {
+	state := domain.NewAppState(cfg)
 	processServer := NewProcessServer()
 
 	logWriter, err := setupLogger(cfg)
@@ -140,7 +142,7 @@ func (m *PrimaryServer) HandleCommand(action string, label string) error {
 	return err
 }
 
-func (m *PrimaryServer) GetState() *AppState {
+func (m *PrimaryServer) GetState() *domain.AppState {
 	m.stateMu.RLock()
 	defer m.stateMu.RUnlock()
 	return m.state
@@ -178,7 +180,7 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 		return fmt.Errorf("process not found: %d", procID)
 	}
 
-	if proc.Status == StatusRunning {
+	if proc.Status == domain.StatusRunning {
 		log.Printf("Process %s is already running", proc.Label)
 		return nil
 	}
@@ -188,7 +190,7 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 	instance, err := m.processServer.StartProcess(procID, proc.Config)
 	if err != nil {
 		log.Printf("Error starting process %d: %v", procID, err)
-		proc.Status = StatusHalted
+		proc.Status = domain.StatusHalted
 		proc.PID = 0
 		return err
 	}
@@ -201,7 +203,7 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 	pid := instance.GetPID()
 	log.Printf("Started process %s with PID %d", proc.Label, pid)
 
-	proc.Status = StatusRunning
+	proc.Status = domain.StatusRunning
 	proc.PID = pid
 
 	// If this process is currently being viewed, refresh the viewer to show output from the beginning
@@ -219,7 +221,7 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 		m.stateMu.Lock()
 		proc := m.state.GetProcessByID(procID)
 		if proc != nil {
-			proc.Status = StatusHalted
+			proc.Status = domain.StatusHalted
 			proc.PID = 0
 		}
 		m.broadcastStateLocked()
@@ -236,7 +238,7 @@ func (m *PrimaryServer) stopProcessLocked(procID int) error {
 		return fmt.Errorf("process not found: %d", procID)
 	}
 
-	if proc.Status != StatusRunning {
+	if proc.Status != domain.StatusRunning {
 		log.Printf("Process %s is not running", proc.Label)
 		return nil
 	}
@@ -248,7 +250,7 @@ func (m *PrimaryServer) stopProcessLocked(procID int) error {
 		return err
 	}
 
-	proc.Status = StatusHalted
+	proc.Status = domain.StatusHalted
 	proc.PID = 0
 	log.Printf("Stopped process %s", proc.Label)
 
@@ -268,7 +270,7 @@ func (m *PrimaryServer) Stop() {
 	m.stateMu.Lock()
 	for idx := range m.state.Processes {
 		proc := &m.state.Processes[idx]
-		if proc.Status == StatusRunning {
+		if proc.Status == domain.StatusRunning {
 			log.Printf("Stopping process %s", proc.Label)
 			m.processServer.StopProcess(proc.ID)
 		}

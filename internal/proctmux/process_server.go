@@ -12,6 +12,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/nick/proctmux/internal/buffer"
+	"github.com/nick/proctmux/internal/config"
 	"golang.org/x/sys/unix"
 )
 
@@ -79,7 +80,7 @@ type ProcessInstance struct {
 	args []string
 
 	// the original process configuration that this instance was created with
-	config *ProcessConfig
+	config *config.ProcessConfig
 
 	// exitChan is used to signal when the process has exited
 	exitChan chan error
@@ -96,7 +97,7 @@ func NewProcessServer() *ProcessServer {
 	}
 }
 
-func (ps *ProcessServer) StartProcess(id int, config *ProcessConfig) (*ProcessInstance, error) {
+func (ps *ProcessServer) StartProcess(id int, config *config.ProcessConfig) (*ProcessInstance, error) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
@@ -276,7 +277,7 @@ func (pi *ProcessInstance) WaitForExit() <-chan error {
 	return pi.exitChan
 }
 
-func buildCommand(config *ProcessConfig) *exec.Cmd {
+func buildCommand(config *config.ProcessConfig) *exec.Cmd {
 	if config.Shell != "" {
 		return exec.Command("sh", "-c", config.Shell)
 	}
@@ -288,7 +289,7 @@ func buildCommand(config *ProcessConfig) *exec.Cmd {
 	return nil
 }
 
-func buildEnvironment(config *ProcessConfig) []string {
+func buildEnvironment(config *config.ProcessConfig) []string {
 	env := os.Environ()
 
 	if config.Env != nil {

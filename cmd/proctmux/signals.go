@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/ipc"
-	"github.com/nick/proctmux/internal/proctmux"
 )
 
 // RunSignalCommand executes a signal command by connecting to the primary server via IPC
-func RunSignalCommand(cfg *proctmux.ProcTmuxConfig, subcmd string, args []string) error {
+func RunSignalCommand(cfg *config.ProcTmuxConfig, subcmd string, args []string) error {
 	// Discover socket path
 	socketPath, err := ipc.GetSocket(cfg)
 	if err != nil {

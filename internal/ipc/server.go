@@ -11,7 +11,8 @@ import (
 
 	"slices"
 
-	"github.com/nick/proctmux/internal/proctmux"
+	"github.com/nick/proctmux/internal/config"
+	"github.com/nick/proctmux/internal/domain"
 )
 
 type Server struct {
@@ -22,25 +23,25 @@ type Server struct {
 	done          chan struct{}
 	primaryServer interface {
 		HandleCommand(action, label string) error
-		GetState() *proctmux.AppState
+		GetState() *domain.AppState
 	}
 	currentProcID int
 }
 
 type Message struct {
-	Type        string                   `json:"type"`
-	RequestID   string                   `json:"request_id,omitempty"`
-	ProcessID   int                      `json:"process_id,omitempty"`
-	Label       string                   `json:"label,omitempty"`
-	Action      string                   `json:"action,omitempty"`
-	Config      *proctmux.ProcessConfig  `json:"config,omitempty"`
-	Status      string                   `json:"status,omitempty"`
-	PID         int                      `json:"pid,omitempty"`
-	ExitCode    int                      `json:"exit_code,omitempty"`
-	State       *proctmux.AppState       `json:"state,omitempty"`
-	ProcessList []map[string]any `json:"process_list,omitempty"`
-	Error       string                   `json:"error,omitempty"`
-	Success     bool                     `json:"success,omitempty"`
+	Type        string                `json:"type"`
+	RequestID   string                `json:"request_id,omitempty"`
+	ProcessID   int                   `json:"process_id,omitempty"`
+	Label       string                `json:"label,omitempty"`
+	Action      string                `json:"action,omitempty"`
+	Config      *config.ProcessConfig `json:"config,omitempty"`
+	Status      string                `json:"status,omitempty"`
+	PID         int                   `json:"pid,omitempty"`
+	ExitCode    int                   `json:"exit_code,omitempty"`
+	State       *domain.AppState      `json:"state,omitempty"`
+	ProcessList []map[string]any      `json:"process_list,omitempty"`
+	Error       string                `json:"error,omitempty"`
+	Success     bool                  `json:"success,omitempty"`
 }
 
 func NewServer() *Server {
@@ -157,12 +158,12 @@ func (s *Server) handleCommand(conn net.Conn, msg Message) {
 			var processList []map[string]any
 			for i := range state.Processes {
 				p := state.Processes[i]
-				if p.ID == proctmux.DummyProcessID {
+				if p.ID == domain.DummyProcessID {
 					continue
 				}
 				processList = append(processList, map[string]any{
 					"name":    p.Label,
-					"running": p.Status == proctmux.StatusRunning,
+					"running": p.Status == domain.StatusRunning,
 					"index":   p.ID,
 				})
 			}
@@ -173,7 +174,7 @@ func (s *Server) handleCommand(conn net.Conn, msg Message) {
 			var runningLabels []string
 			for i := range state.Processes {
 				p := state.Processes[i]
-				if p.Status == proctmux.StatusRunning && p.ID != proctmux.DummyProcessID {
+				if p.Status == domain.StatusRunning && p.ID != domain.DummyProcessID {
 					runningLabels = append(runningLabels, p.Label)
 				}
 			}
@@ -186,7 +187,7 @@ func (s *Server) handleCommand(conn net.Conn, msg Message) {
 			var runningLabels []string
 			for i := range state.Processes {
 				p := state.Processes[i]
-				if p.Status == proctmux.StatusRunning && p.ID != proctmux.DummyProcessID {
+				if p.Status == domain.StatusRunning && p.ID != domain.DummyProcessID {
 					runningLabels = append(runningLabels, p.Label)
 				}
 			}
@@ -231,7 +232,7 @@ func (s *Server) removeClient(conn net.Conn) {
 	}
 }
 
-func (s *Server) BroadcastState(state *proctmux.AppState) {
+func (s *Server) BroadcastState(state *domain.AppState) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -259,7 +260,7 @@ func (s *Server) BroadcastState(state *proctmux.AppState) {
 	}
 }
 
-func (s *Server) SendCommand(action string, procID int, config *proctmux.ProcessConfig) error {
+func (s *Server) SendCommand(action string, procID int, config *config.ProcessConfig) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -293,7 +294,7 @@ func (s *Server) SendCommand(action string, procID int, config *proctmux.Process
 
 func (s *Server) SetPrimaryServer(primary interface {
 	HandleCommand(action, label string) error
-	GetState() *proctmux.AppState
+	GetState() *domain.AppState
 }) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/nick/proctmux/internal/proctmux"
+	"github.com/nick/proctmux/internal/config"
 )
 
 // setupLogger configures the logger to write to the specified file path.
@@ -32,7 +32,7 @@ func main() {
 	cliCfg := ParseCLI()
 
 	// Load configuration file
-	cfg, cfgLoadErr := proctmux.LoadConfig(cliCfg.ConfigFile)
+	cfg, cfgLoadErr := config.LoadConfig(cliCfg.ConfigFile)
 
 	// Setup logging
 	logPath := ""

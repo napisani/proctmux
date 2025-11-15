@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/nick/proctmux/internal/domain"
 )
 
 // UIState holds the UI-specific state for the client TUI
@@ -16,7 +17,7 @@ type UIState struct {
 	FilterText         string
 	EnteringFilterText bool
 	Info               string
-	Mode               Mode
+	Mode               domain.Mode
 	ActiveProcID       int
 }
 
@@ -46,7 +47,7 @@ func debounceSelection(seq, procID int) tea.Cmd {
 
 // IPCClient interface abstracts IPC client operations
 type IPCClient interface {
-	ReceiveState() <-chan *AppState
+	ReceiveState() <-chan *domain.AppState
 	SwitchProcess(label string) error
 	StartProcess(label string) error
 	StopProcess(label string) error
@@ -56,7 +57,7 @@ type IPCClient interface {
 // ClientModel is a UI-only model that connects to a primary server
 type ClientModel struct {
 	client     IPCClient
-	domain     *AppState
+	domain     *domain.AppState
 	ui         UIState
 	termWidth  int
 	termHeight int
@@ -66,10 +67,10 @@ type ClientModel struct {
 
 // clientStateUpdateMsg wraps state updates from primary
 type clientStateUpdateMsg struct {
-	state *AppState
+	state *domain.AppState
 }
 
-func NewClientModel(client IPCClient, state *AppState) ClientModel {
+func NewClientModel(client IPCClient, state *domain.AppState) ClientModel {
 	return ClientModel{
 		client: client,
 		domain: state,
@@ -114,16 +115,16 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch {
 			case slices.Contains(kb.FilterSubmit, key):
 				m.ui.EnteringFilterText = false
-				m.ui.Mode = NormalMode
+				m.ui.Mode = domain.NormalMode
 				m.filterSeq++
 				return m, debounceFilter(m.filterSeq)
 			case slices.Contains(kb.Filter, key):
 				m.ui.EnteringFilterText = false
-				m.ui.Mode = NormalMode
+				m.ui.Mode = domain.NormalMode
 				return m, nil
 			case key == "esc":
 				m.ui.EnteringFilterText = false
-				m.ui.Mode = NormalMode
+				m.ui.Mode = domain.NormalMode
 				m.ui.FilterText = ""
 				m.filterSeq++
 				return m, debounceFilter(m.filterSeq)
@@ -148,7 +149,7 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
 		case slices.Contains(kb.Filter, key):
 			m.ui.EnteringFilterText = true
-			m.ui.Mode = FilterMode
+			m.ui.Mode = domain.FilterMode
 			m.ui.FilterText = ""
 			m.ui.ActiveProcID = 0
 			m.selectSeq++
@@ -174,7 +175,7 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq != m.filterSeq {
 			return m, nil
 		}
-		procs := FilterProcesses(m.domain.Config, m.domain.Processes, m.ui.FilterText)
+		procs := domain.FilterProcesses(m.domain.Config, m.domain.Processes, m.ui.FilterText)
 		if len(procs) > 0 {
 			m.ui.ActiveProcID = procs[0].ID
 			m.selectSeq++
@@ -197,7 +198,7 @@ func (m *ClientModel) activeProcLabel() string {
 }
 
 func (m *ClientModel) moveSelection(delta int) {
-	procs := FilterProcesses(m.domain.Config, m.domain.Processes, m.ui.FilterText)
+	procs := domain.FilterProcesses(m.domain.Config, m.domain.Processes, m.ui.FilterText)
 	if len(procs) == 0 {
 		m.ui.ActiveProcID = 0
 		return
@@ -319,10 +320,10 @@ func (m ClientModel) appendProcessDescription(s string) string {
 	return s
 }
 
-func (m ClientModel) appendProcess(p *Process, s string) string {
+func (m ClientModel) appendProcess(p *domain.Process, s string) string {
 	cursor := "  "
 	statusColor := m.domain.Config.Style.StatusStoppedColor
-	if p.Status == StatusRunning {
+	if p.Status == domain.StatusRunning {
 		statusColor = m.domain.Config.Style.StatusRunningColor
 	}
 	styleStart, styleEnd := colorToAnsi(statusColor)
@@ -335,7 +336,7 @@ func (m ClientModel) appendProcess(p *Process, s string) string {
 		processColorStart, processColorEnd = colorToAnsi(m.domain.Config.Style.SelectedProcessColor)
 		bgColorStart, bgColorEnd = colorToBgAnsi(m.domain.Config.Style.SelectedProcessBgColor)
 	} else {
-		if p.Status == StatusRunning {
+		if p.Status == domain.StatusRunning {
 			cursor = styleStart + "● " + styleEnd
 		} else {
 			cursor = styleStart + "■ " + styleEnd
@@ -358,7 +359,7 @@ func (m ClientModel) appendProcess(p *Process, s string) string {
 }
 
 func (m ClientModel) View() string {
-	procs := FilterProcesses(m.domain.Config, m.domain.Processes, m.ui.FilterText)
+	procs := domain.FilterProcesses(m.domain.Config, m.domain.Processes, m.ui.FilterText)
 	s := ""
 	s = m.appendHelpPanel(s)
 	s = m.appendProcessDescription(s)

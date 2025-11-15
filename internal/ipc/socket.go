@@ -5,12 +5,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/nick/proctmux/internal/proctmux"
+	"github.com/nick/proctmux/internal/config"
 )
 
 // CreateSocket creates a new socket file path based on config hash and creates it.
 // Returns the socket path.
-func CreateSocket(config *proctmux.ProcTmuxConfig) (string, error) {
+func CreateSocket(config *config.ProcTmuxConfig) (string, error) {
 	hash, err := config.ToHash()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate config hash: %w", err)
@@ -26,7 +26,7 @@ func CreateSocket(config *proctmux.ProcTmuxConfig) (string, error) {
 
 // GetSocket returns the socket path for the given config.
 // It checks if the socket exists, and returns an error if it doesn't.
-func GetSocket(config *proctmux.ProcTmuxConfig) (string, error) {
+func GetSocket(config *config.ProcTmuxConfig) (string, error) {
 	hash, err := config.ToHash()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate config hash: %w", err)
@@ -44,7 +44,7 @@ func GetSocket(config *proctmux.ProcTmuxConfig) (string, error) {
 
 // WaitForSocket waits for the socket to be created, up to a timeout.
 // Returns the socket path when it becomes available.
-func WaitForSocket(config *proctmux.ProcTmuxConfig) (string, error) {
+func WaitForSocket(config *config.ProcTmuxConfig) (string, error) {
 	hash, err := config.ToHash()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate config hash: %w", err)

@@ -3,12 +3,13 @@ package main
 import (
 	"log"
 
+	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/ipc"
 	"github.com/nick/proctmux/internal/proctmux"
 )
 
 // RunPrimary starts the application in primary mode, running the process server
-func RunPrimary(cfg *proctmux.ProcTmuxConfig) error {
+func RunPrimary(cfg *config.ProcTmuxConfig) error {
 	log.SetPrefix("[PRIMARY] ")
 	log.Println("Starting proctmux primary server...")
 	log.Printf("Loaded config: %+v", cfg)

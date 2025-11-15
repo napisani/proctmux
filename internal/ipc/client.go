@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nick/proctmux/internal/proctmux"
+	"github.com/nick/proctmux/internal/domain"
 )
 
 type Client struct {
@@ -21,14 +21,14 @@ type Client struct {
 	requestID     atomic.Uint64
 	pendingReqs   map[string]chan Message
 	pendingReqsMu sync.Mutex
-	stateCh       chan *proctmux.AppState
+	stateCh       chan *domain.AppState
 }
 
 func NewClient(socketPath string) (*Client, error) {
 	client := &Client{
 		socketPath:  socketPath,
 		pendingReqs: make(map[string]chan Message),
-		stateCh:     make(chan *proctmux.AppState, 10), // Buffered channel for state updates
+		stateCh:     make(chan *domain.AppState, 10), // Buffered channel for state updates
 	}
 
 	if err := client.Connect(); err != nil {
@@ -91,7 +91,7 @@ func (c *Client) ReadMessage() (*Message, error) {
 	return c.ReadSelection()
 }
 
-func (c *Client) SendState(state *proctmux.AppState) error {
+func (c *Client) SendState(state *domain.AppState) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -281,6 +281,6 @@ func (c *Client) GetProcessList() ([]byte, error) {
 }
 
 // ReceiveState returns a channel that receives state updates from the server
-func (c *Client) ReceiveState() <-chan *proctmux.AppState {
+func (c *Client) ReceiveState() <-chan *domain.AppState {
 	return c.stateCh
 }

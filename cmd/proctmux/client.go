@@ -5,12 +5,14 @@ import (
 	"log"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/nick/proctmux/internal/config"
+	"github.com/nick/proctmux/internal/domain"
 	"github.com/nick/proctmux/internal/ipc"
 	"github.com/nick/proctmux/internal/proctmux"
 )
 
 // RunClient starts the application in client mode, connecting to a running primary server
-func RunClient(cfg *proctmux.ProcTmuxConfig) error {
+func RunClient(cfg *config.ProcTmuxConfig) error {
 	log.SetPrefix("[CLIENT] ")
 
 	// Auto-discover socket path if not provided
@@ -33,7 +35,7 @@ func RunClient(cfg *proctmux.ProcTmuxConfig) error {
 	defer client.Close()
 
 	// Create client UI model
-	state := proctmux.NewAppState(cfg)
+	state := domain.NewAppState(cfg)
 	clientModel := proctmux.NewClientModel(client, &state)
 	p := tea.NewProgram(clientModel, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
