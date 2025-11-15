@@ -2,20 +2,23 @@ package proctmux
 
 import (
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"sync"
 	"time"
 )
 
 // PrimaryServer is the main process server that manages all processes and state
 type PrimaryServer struct {
-	processServer *ProcessServer
-	ipcServer     IPCServerInterface
-	viewer        *Viewer
-	state         *AppState
-	stateMu       sync.RWMutex
-	cfg           *ProcTmuxConfig
-	done          chan struct{}
+	processServer     *ProcessServer
+	ipcServer         IPCServerInterface
+	viewer            *Viewer
+	state             *AppState
+	stateMu           sync.RWMutex
+	cfg               *ProcTmuxConfig
+	done              chan struct{}
+	stdOutDebugWriter io.Writer
 }
 
 // IPCServerInterface defines the interface for IPC server operations
@@ -29,16 +32,43 @@ type IPCServerInterface interface {
 	Stop()
 }
 
+func setupLogger(
+	cfg *ProcTmuxConfig,
+) (io.Writer, error) {
+	if cfg != nil && cfg.StdOutDebugLogFile != "" {
+		logPath := cfg.StdOutDebugLogFile
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err != nil {
+			return nil, err
+		}
+
+		return FnToWriter(func(b []byte) (int, error) {
+			if logFile != nil {
+				return logFile.Write(b)
+			}
+			return len(b), nil
+		}), err
+	}
+	return nil, nil
+}
+
 func NewPrimaryServer(cfg *ProcTmuxConfig, ipcServer IPCServerInterface) *PrimaryServer {
 	state := NewAppState(cfg)
 	processServer := NewProcessServer()
+
+	logWriter, err := setupLogger(cfg)
+	if err != nil {
+		log.Printf("Warning: failed to set up stdout debug logger: %v", err)
+	}
+
 	return &PrimaryServer{
-		processServer: processServer,
-		ipcServer:     ipcServer,
-		viewer:        NewViewer(processServer),
-		state:         &state,
-		cfg:           cfg,
-		done:          make(chan struct{}),
+		processServer:     processServer,
+		ipcServer:         ipcServer,
+		viewer:            NewViewer(processServer),
+		state:             &state,
+		cfg:               cfg,
+		done:              make(chan struct{}),
+		stdOutDebugWriter: logWriter,
 	}
 }
 
@@ -96,7 +126,7 @@ func (m *PrimaryServer) HandleCommand(action string, label string) error {
 		err = m.stopProcessLocked(proc.ID)
 	case "restart":
 		err = m.stopProcessLocked(proc.ID)
-		if err != nil {
+		if err == nil {
 			time.Sleep(500 * time.Millisecond)
 			err = m.startProcessLocked(proc.ID)
 		}
@@ -161,6 +191,11 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 		return err
 	}
 
+	// Attach debug writer if configured, so that all stdout/stderr is also written there
+	if m.stdOutDebugWriter != nil {
+		instance = instance.WithWriter(m.stdOutDebugWriter)
+	}
+
 	pid := instance.GetPID()
 	log.Printf("Started process %s with PID %d", proc.Label, pid)
 
@@ -220,6 +255,11 @@ func (m *PrimaryServer) stopProcessLocked(procID int) error {
 
 func (m *PrimaryServer) Stop() {
 	log.Println("Stopping primary server...")
+	if m.stdOutDebugWriter != nil {
+		if closer, ok := m.stdOutDebugWriter.(io.Closer); ok {
+			closer.Close()
+		}
+	}
 	close(m.done)
 
 	// Stop all running processes

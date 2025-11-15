@@ -60,9 +60,10 @@ type ProcTmuxConfig struct {
 		DetachedSessionName string `yaml:"detached_session_name"`
 		KillExistingSession bool   `yaml:"kill_existing_session"`
 	} `yaml:"general"`
-	ShellCmd    []string `yaml:"shell_cmd"`
-	LogFile     string   `yaml:"log_file"`
-	EnableMouse bool     `yaml:"enable_mouse"`
+	ShellCmd           []string `yaml:"shell_cmd"`
+	LogFile            string   `yaml:"log_file"`
+	StdOutDebugLogFile string   `yaml:"stdout_debug_log_file"`
+	EnableMouse        bool     `yaml:"enable_mouse"`
 }
 
 type ProcessConfig struct {

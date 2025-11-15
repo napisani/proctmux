@@ -69,6 +69,9 @@ signal_server:
 # Write logs here. Leave empty to disable logging entirely.
 log_file: "/tmp/proctmux.log"
 
+# Optional: write stdout debug logs to a separate file
+stdout_debug_log_file: "/tmp/proctmux_stdout.log"
+
 procs:
   "tail log":
     shell: "tail -f /tmp/proctmux.log"
@@ -160,6 +163,7 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
   - `host` (string): Bind host (e.g. `localhost`). Default `localhost` when enabled.
   - `port` (int): Bind port. Default `9792` when enabled.
 - `log_file` (string): Path to write logs. Leave empty to disable logging entirely.
+- `stdout_debug_log_file` (string): Optional path to write stdout debug logs. Useful for debugging process output. Leave empty to disable.
 - `shell_cmd` (string list): Present for config parity; currently unused by proctmux.
 - `enable_mouse` (bool): Present for config parity; not wired in current TUI.
 - `procs` (map[string]Process): Your defined processes (see below).

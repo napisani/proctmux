@@ -9,6 +9,8 @@ import (
 	"os"
 	"sync"
 
+	"slices"
+
 	"github.com/nick/proctmux/internal/proctmux"
 )
 
@@ -36,7 +38,7 @@ type Message struct {
 	PID         int                      `json:"pid,omitempty"`
 	ExitCode    int                      `json:"exit_code,omitempty"`
 	State       *proctmux.AppState       `json:"state,omitempty"`
-	ProcessList []map[string]interface{} `json:"process_list,omitempty"`
+	ProcessList []map[string]any `json:"process_list,omitempty"`
 	Error       string                   `json:"error,omitempty"`
 	Success     bool                     `json:"success,omitempty"`
 }
@@ -152,13 +154,13 @@ func (s *Server) handleCommand(conn net.Conn, msg Message) {
 			}
 		case "list":
 			state := s.primaryServer.GetState()
-			var processList []map[string]interface{}
+			var processList []map[string]any
 			for i := range state.Processes {
 				p := state.Processes[i]
 				if p.ID == proctmux.DummyProcessID {
 					continue
 				}
-				processList = append(processList, map[string]interface{}{
+				processList = append(processList, map[string]any{
 					"name":    p.Label,
 					"running": p.Status == proctmux.StatusRunning,
 					"index":   p.ID,
@@ -222,7 +224,7 @@ func (s *Server) removeClient(conn net.Conn) {
 
 	for i, c := range s.clients {
 		if c == conn {
-			s.clients = append(s.clients[:i], s.clients[i+1:]...)
+			s.clients = slices.Delete(s.clients, i, i+1)
 			log.Printf("IPC client disconnected (remaining: %d)", len(s.clients))
 			break
 		}

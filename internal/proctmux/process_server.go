@@ -184,25 +184,9 @@ func (ps *ProcessServer) StartProcess(id int, config *ProcessConfig) (*ProcessIn
 	ps.processes[id] = instance
 	log.Printf("Started process %d (PID: %d)", id, cmd.Process.Pid)
 
-	debug, err := os.Create("/tmp/test.log")
-	if err != nil {
-		log.Printf("Failed to create debug log: %v", err)
-		os.Exit(1)
-	}
-	// defer debug.Close()
 
 	log.Printf("Attaching PTY output logger for process %d", id)
-	i := instance.WithWriter(
-		io.MultiWriter(
-			instance.Scrollback, // Capture output in scrollback buffer (also notifies readers)
-			FnToWriter(func(b []byte) (int, error) {
-				// os.Stdout.Write(b)
-				// log.Printf("PTY Output: %s", string(b))
-				debug.Write(b)
-				return len(b), nil
-			}),
-		),
-	)
+	i := instance.WithWriter(instance.Scrollback) // Capture output in scrollback buffer (also notifies readers)
 
 	// Copy PTY output to configured writer (blocking operation)
 	// This reads from master PTY and forwards to a.writer

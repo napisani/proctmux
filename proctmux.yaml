@@ -145,3 +145,4 @@ procs:
 signal_server:
   enable: true
 log_file: "/tmp/proctmux.log"
+stdout_debug_log_file: "/tmp/proctmux_stdout.log"
