@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/nick/proctmux/internal/buffer"
 )
 
 // PrimaryServer is the main process server that manages all processes and state
@@ -42,7 +44,7 @@ func setupLogger(
 			return nil, err
 		}
 
-		return FnToWriter(func(b []byte) (int, error) {
+		return buffer.FnToWriter(func(b []byte) (int, error) {
 			if logFile != nil {
 				return logFile.Write(b)
 			}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/nick/proctmux/internal/buffer"
 	"golang.org/x/sys/unix"
 )
 
@@ -21,22 +22,6 @@ type ProcessServer struct {
 
 const rowsDefault = uint16(24)
 const colsDefault = uint16(80)
-
-// FnWriter adapts a function to the io.Writer interface
-// This allows passing simple functions wherever io.Writer is required
-type FnWriter struct {
-	w func(b []byte) (int, error)
-}
-
-func (f *FnWriter) Write(b []byte) (int, error) {
-	return f.w(b)
-}
-
-// FnToWriter converts a write function into an io.Writer
-// Useful for creating custom writers with inline behavior
-func FnToWriter(w func(b []byte) (int, error)) io.Writer {
-	return &FnWriter{w: w}
-}
 
 // Program represents a running program with a pseudo-terminal (PTY) attached
 // This is a higher-level abstraction than the server's pipe-based approach.
@@ -102,7 +87,7 @@ type ProcessInstance struct {
 	// Scrollback is a ring buffer that stores the last N bytes of output
 	// This allows users to see recent output when switching between processes
 	// The ring buffer also supports live readers for streaming new data
-	Scrollback *RingBuffer
+	Scrollback *buffer.RingBuffer
 }
 
 func NewProcessServer() *ProcessServer {
@@ -171,7 +156,7 @@ func (ps *ProcessServer) StartProcess(id int, config *ProcessConfig) (*ProcessIn
 		File:       ptmx,
 		config:     config,
 		exitChan:   make(chan error, 1),
-		Scrollback: NewRingBuffer(1024 * 1024), // 1MB scrollback buffer per process
+		Scrollback: buffer.NewRingBuffer(1024 * 1024), // 1MB scrollback buffer per process
 	}
 
 	go func() {
@@ -183,7 +168,6 @@ func (ps *ProcessServer) StartProcess(id int, config *ProcessConfig) (*ProcessIn
 
 	ps.processes[id] = instance
 	log.Printf("Started process %d (PID: %d)", id, cmd.Process.Pid)
-
 
 	log.Printf("Attaching PTY output logger for process %d", id)
 	i := instance.WithWriter(instance.Scrollback) // Capture output in scrollback buffer (also notifies readers)

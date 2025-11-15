@@ -253,8 +253,6 @@ Notes:
 - Colors: `status_*_color` accepts common names (`red`, `brightblue`, `ansigreen`) and hex (`#rrggbb`).
 
 ## Feature wishlist
-- [ ] fix broadcast state so its not in a loop
-- [ ] fix the writer for deubugging so that it can be disabled/enabled properly. Also, move it so it doesnt get truncated on process switching 
 - [ ] support graceful shutdown of all processes managed by proctmux 
 - [ ] support taking input (maybe break with a leader combo?) in the viewer 
 - [ ] bug where a process is still running but the client thinks its stopped 
