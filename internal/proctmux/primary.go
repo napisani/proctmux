@@ -11,13 +11,15 @@ import (
 	"github.com/nick/proctmux/internal/buffer"
 	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/domain"
+	"github.com/nick/proctmux/internal/process"
+	"github.com/nick/proctmux/internal/viewer"
 )
 
 // PrimaryServer is the main process server that manages all processes and state
 type PrimaryServer struct {
-	processServer     *ProcessServer
+	processServer     *process.Server
 	ipcServer         IPCServerInterface
-	viewer            *Viewer
+	viewer            *viewer.Viewer
 	state             *domain.AppState
 	stateMu           sync.RWMutex
 	cfg               *config.ProcTmuxConfig
@@ -58,22 +60,34 @@ func setupLogger(
 
 func NewPrimaryServer(cfg *config.ProcTmuxConfig, ipcServer IPCServerInterface) *PrimaryServer {
 	state := domain.NewAppState(cfg)
-	processServer := NewProcessServer()
+	processServer := process.NewServer()
 
 	logWriter, err := setupLogger(cfg)
 	if err != nil {
 		log.Printf("Warning: failed to set up stdout debug logger: %v", err)
 	}
 
+	// Create an adapter that satisfies the viewer.ProcessServer interface
+	serverAdapter := &processServerAdapter{ps: processServer}
+
 	return &PrimaryServer{
 		processServer:     processServer,
 		ipcServer:         ipcServer,
-		viewer:            NewViewer(processServer),
+		viewer:            viewer.New(serverAdapter),
 		state:             &state,
 		cfg:               cfg,
 		done:              make(chan struct{}),
 		stdOutDebugWriter: logWriter,
 	}
+}
+
+// processServerAdapter adapts process.Server to satisfy viewer.ProcessServer interface
+type processServerAdapter struct {
+	ps *process.Server
+}
+
+func (a *processServerAdapter) GetProcess(id int) (viewer.ProcessInstance, error) {
+	return a.ps.GetProcess(id)
 }
 
 func (m *PrimaryServer) Start(socketPath string) error {
@@ -148,11 +162,11 @@ func (m *PrimaryServer) GetState() *domain.AppState {
 	return m.state
 }
 
-func (m *PrimaryServer) GetProcessServer() *ProcessServer {
+func (m *PrimaryServer) GetProcessServer() *process.Server {
 	return m.processServer
 }
 
-func (m *PrimaryServer) GetViewer() *Viewer {
+func (m *PrimaryServer) GetViewer() *viewer.Viewer {
 	return m.viewer
 }
 

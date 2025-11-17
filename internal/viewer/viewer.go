@@ -1,4 +1,4 @@
-package proctmux
+package viewer
 
 import (
 	"fmt"
@@ -6,6 +6,38 @@ import (
 	"os"
 	"sync"
 )
+
+// ProcessServer interface defines what the viewer needs from a process server
+type ProcessServer interface {
+	GetProcess(id int) (ProcessInstance, error)
+}
+
+// ProcessInstance interface defines what the viewer needs from a process instance
+type ProcessInstance interface {
+	GetPID() int
+	Scrollback() ScrollbackBuffer
+}
+
+// ScrollbackBuffer interface defines what the viewer needs from a scrollback buffer
+type ScrollbackBuffer interface {
+	Bytes() []byte
+	NewReader() (int, <-chan []byte)
+	RemoveReader(id int)
+}
+
+// ServerAdapter adapts a concrete process server to the ProcessServer interface
+type ServerAdapter struct {
+	getProcess func(id int) (ProcessInstance, error)
+}
+
+func (a *ServerAdapter) GetProcess(id int) (ProcessInstance, error) {
+	return a.getProcess(id)
+}
+
+// NewServerAdapter creates an adapter for any type that can get process instances
+func NewServerAdapter(getProcess func(id int) (ProcessInstance, error)) *ServerAdapter {
+	return &ServerAdapter{getProcess: getProcess}
+}
 
 // Viewer is a simple output relay for viewing process output.
 // Unlike the old TTYViewer/ViewerModel bubbletea implementation, this viewer
@@ -28,18 +60,14 @@ import (
 //
 // Example usage:
 //
-//	server := NewProcessServer()
-//	viewer := NewViewer(server)
-//
-//	// Start a process
-//	instance, _ := server.StartProcess(1, &config)
+//	viewer := viewer.New(server)
 //
 //	// Switch viewer to display the process
 //	viewer.SwitchToProcess(1)
 //
 //	// Output will now stream to stdout until another process is switched
 type Viewer struct {
-	processServer        *ProcessServer
+	processServer        ProcessServer
 	interruptOutputRelay chan struct{}
 	currentProcessID     int
 	currentReaderID      int           // ID for removing reader from ring buffer
@@ -47,7 +75,7 @@ type Viewer struct {
 	mu                   sync.Mutex
 }
 
-func NewViewer(server *ProcessServer) *Viewer {
+func New(server ProcessServer) *Viewer {
 	return &Viewer{
 		processServer: server,
 	}
@@ -70,11 +98,11 @@ func (v *Viewer) RefreshCurrentProcess() error {
 	v.mu.Lock()
 	currentID := v.currentProcessID
 	v.mu.Unlock()
-	
+
 	if currentID == 0 {
 		return nil
 	}
-	
+
 	return v.switchToProcess(currentID, true)
 }
 
@@ -104,7 +132,7 @@ func (v *Viewer) switchToProcess(processID int, force bool) error {
 	// Remove reader from the previous process's ring buffer
 	if v.currentProcessID != 0 && v.currentReaderID != 0 {
 		if prevInstance, err := v.processServer.GetProcess(v.currentProcessID); err == nil && prevInstance != nil {
-			prevInstance.Scrollback.RemoveReader(v.currentReaderID)
+			prevInstance.Scrollback().RemoveReader(v.currentReaderID)
 		}
 		v.currentReaderID = 0
 	}
@@ -131,7 +159,7 @@ func (v *Viewer) switchToProcess(processID int, force bool) error {
 	}
 
 	// Write the current scrollback buffer to stdout
-	scrollback := instance.Scrollback.Bytes()
+	scrollback := instance.Scrollback().Bytes()
 	fmt.Printf("----- Showing scrollback for process %d (PID: %d) -----\n", processID, instance.GetPID())
 	if len(scrollback) > 0 {
 		if _, err := os.Stdout.Write(scrollback); err != nil {
@@ -140,7 +168,7 @@ func (v *Viewer) switchToProcess(processID int, force bool) error {
 	}
 
 	// Subscribe to the ring buffer to receive live output
-	readerID, outputChan := instance.Scrollback.NewReader()
+	readerID, outputChan := instance.Scrollback().NewReader()
 	v.currentReaderID = readerID
 
 	// Start relaying output from the new process
