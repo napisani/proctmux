@@ -24,24 +24,26 @@ type Server struct {
 	primaryServer interface {
 		HandleCommand(action, label string) error
 		GetState() *domain.AppState
+		GetProcessController() domain.ProcessController
 	}
 	currentProcID int
 }
 
 type Message struct {
-	Type        string                `json:"type"`
-	RequestID   string                `json:"request_id,omitempty"`
-	ProcessID   int                   `json:"process_id,omitempty"`
-	Label       string                `json:"label,omitempty"`
-	Action      string                `json:"action,omitempty"`
-	Config      *config.ProcessConfig `json:"config,omitempty"`
-	Status      string                `json:"status,omitempty"`
-	PID         int                   `json:"pid,omitempty"`
-	ExitCode    int                   `json:"exit_code,omitempty"`
-	State       *domain.AppState      `json:"state,omitempty"`
-	ProcessList []map[string]any      `json:"process_list,omitempty"`
-	Error       string                `json:"error,omitempty"`
-	Success     bool                  `json:"success,omitempty"`
+	Type         string                `json:"type"`
+	RequestID    string                `json:"request_id,omitempty"`
+	ProcessID    int                   `json:"process_id,omitempty"`
+	Label        string                `json:"label,omitempty"`
+	Action       string                `json:"action,omitempty"`
+	Config       *config.ProcessConfig `json:"config,omitempty"`
+	Status       string                `json:"status,omitempty"`
+	PID          int                   `json:"pid,omitempty"`
+	ExitCode     int                   `json:"exit_code,omitempty"`
+	State        *domain.AppState      `json:"state,omitempty"`
+	ProcessList  []map[string]any      `json:"process_list,omitempty"`
+	ProcessViews []domain.ProcessView  `json:"process_views,omitempty"`
+	Error        string                `json:"error,omitempty"`
+	Success      bool                  `json:"success,omitempty"`
 }
 
 func NewServer() *Server {
@@ -92,6 +94,13 @@ func (s *Server) acceptClients() {
 			s.mu.Unlock()
 
 			log.Printf("IPC client connected (total: %d)", len(s.clients))
+
+			// Send initial state to the new client
+			if s.primaryServer != nil {
+				state := s.primaryServer.GetState()
+				pc := s.primaryServer.GetProcessController()
+				s.sendInitialState(conn, state, pc)
+			}
 
 			go s.handleClient(conn)
 		}
@@ -155,27 +164,31 @@ func (s *Server) handleCommand(conn net.Conn, msg Message) {
 			}
 		case "list":
 			state := s.primaryServer.GetState()
+			pc := s.primaryServer.GetProcessController()
 			var processList []map[string]any
 			for i := range state.Processes {
-				p := state.Processes[i]
+				p := &state.Processes[i]
 				if p.ID == domain.DummyProcessID {
 					continue
 				}
+				view := p.ToView(pc)
 				processList = append(processList, map[string]any{
-					"name":    p.Label,
-					"running": p.Status == domain.StatusRunning,
-					"index":   p.ID,
+					"name":    view.Label,
+					"running": view.Status == domain.StatusRunning,
+					"index":   view.ID,
 				})
 			}
 			response.ProcessList = processList
 			response.Success = true
 		case "restart-running":
 			state := s.primaryServer.GetState()
+			pc := s.primaryServer.GetProcessController()
 			var runningLabels []string
 			for i := range state.Processes {
-				p := state.Processes[i]
-				if p.Status == domain.StatusRunning && p.ID != domain.DummyProcessID {
-					runningLabels = append(runningLabels, p.Label)
+				p := &state.Processes[i]
+				view := p.ToView(pc)
+				if view.Status == domain.StatusRunning && view.ID != domain.DummyProcessID {
+					runningLabels = append(runningLabels, view.Label)
 				}
 			}
 			for _, name := range runningLabels {
@@ -184,11 +197,13 @@ func (s *Server) handleCommand(conn net.Conn, msg Message) {
 			response.Success = true
 		case "stop-running":
 			state := s.primaryServer.GetState()
+			pc := s.primaryServer.GetProcessController()
 			var runningLabels []string
 			for i := range state.Processes {
-				p := state.Processes[i]
-				if p.Status == domain.StatusRunning && p.ID != domain.DummyProcessID {
-					runningLabels = append(runningLabels, p.Label)
+				p := &state.Processes[i]
+				view := p.ToView(pc)
+				if view.Status == domain.StatusRunning && view.ID != domain.DummyProcessID {
+					runningLabels = append(runningLabels, view.Label)
 				}
 			}
 			for _, name := range runningLabels {
@@ -232,7 +247,7 @@ func (s *Server) removeClient(conn net.Conn) {
 	}
 }
 
-func (s *Server) BroadcastState(state *domain.AppState) {
+func (s *Server) BroadcastState(state *domain.AppState, pc domain.ProcessController) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -240,9 +255,16 @@ func (s *Server) BroadcastState(state *domain.AppState) {
 		return
 	}
 
+	// Convert processes to ProcessViews
+	processViews := make([]domain.ProcessView, len(state.Processes))
+	for i := range state.Processes {
+		processViews[i] = state.Processes[i].ToView(pc)
+	}
+
 	msg := Message{
-		Type:  "state",
-		State: state,
+		Type:         "state",
+		State:        state,
+		ProcessViews: processViews,
 	}
 
 	data, err := json.Marshal(msg)
@@ -257,6 +279,33 @@ func (s *Server) BroadcastState(state *domain.AppState) {
 		if _, err := conn.Write(data); err != nil {
 			log.Printf("Failed to broadcast state to IPC client: %v", err)
 		}
+	}
+}
+
+// sendInitialState sends the current state to a newly connected client
+func (s *Server) sendInitialState(conn net.Conn, state *domain.AppState, pc domain.ProcessController) {
+	// Convert processes to ProcessViews
+	processViews := make([]domain.ProcessView, len(state.Processes))
+	for i := range state.Processes {
+		processViews[i] = state.Processes[i].ToView(pc)
+	}
+
+	msg := Message{
+		Type:         "state",
+		State:        state,
+		ProcessViews: processViews,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("Failed to marshal initial state message: %v", err)
+		return
+	}
+
+	data = append(data, '\n')
+
+	if _, err := conn.Write(data); err != nil {
+		log.Printf("Failed to send initial state to IPC client: %v", err)
 	}
 }
 
@@ -295,6 +344,7 @@ func (s *Server) SendCommand(action string, procID int, config *config.ProcessCo
 func (s *Server) SetPrimaryServer(primary interface {
 	HandleCommand(action, label string) error
 	GetState() *domain.AppState
+	GetProcessController() domain.ProcessController
 }) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

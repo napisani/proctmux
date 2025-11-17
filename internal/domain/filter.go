@@ -13,9 +13,9 @@ func fuzzyMatch(a, b string) bool {
 	return strings.Contains(a, b) || strings.Contains(b, a)
 }
 
-// FilterProcesses is a pure helper to compute a filtered/sorted view from domain state and UI filter text.
-func FilterProcesses(cfg *config.ProcTmuxConfig, processes []Process, filterText string) []*Process {
-	var out []*Process
+// FilterProcesses is a pure helper to compute a filtered/sorted view from ProcessViews and UI filter text.
+func FilterProcesses(cfg *config.ProcTmuxConfig, processes []ProcessView, filterText string) []*ProcessView {
+	var out []*ProcessView
 	prefix := cfg.Layout.CategorySearchPrefix
 	ft := strings.TrimSpace(filterText)
 	if ft == "" {

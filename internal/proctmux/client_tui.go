@@ -48,6 +48,7 @@ func debounceSelection(seq, procID int) tea.Cmd {
 // IPCClient interface abstracts IPC client operations
 type IPCClient interface {
 	ReceiveState() <-chan *domain.AppState
+	ReceiveProcessViews() <-chan []domain.ProcessView
 	SwitchProcess(label string) error
 	StartProcess(label string) error
 	StopProcess(label string) error
@@ -56,34 +57,39 @@ type IPCClient interface {
 
 // ClientModel is a UI-only model that connects to a primary server
 type ClientModel struct {
-	client     IPCClient
-	domain     *domain.AppState
-	ui         UIState
-	termWidth  int
-	termHeight int
-	filterSeq  int
-	selectSeq  int
+	client       IPCClient
+	domain       *domain.AppState
+	processViews []domain.ProcessView
+	ui           UIState
+	termWidth    int
+	termHeight   int
+	filterSeq    int
+	selectSeq    int
 }
 
 // clientStateUpdateMsg wraps state updates from primary
 type clientStateUpdateMsg struct {
-	state *domain.AppState
+	state        *domain.AppState
+	processViews []domain.ProcessView
 }
 
 func NewClientModel(client IPCClient, state *domain.AppState) ClientModel {
 	return ClientModel{
-		client: client,
-		domain: state,
-		ui:     UIState{Messages: []string{}, ActiveProcID: state.CurrentProcID},
+		client:       client,
+		domain:       state,
+		processViews: []domain.ProcessView{},
+		ui:           UIState{Messages: []string{}, ActiveProcID: state.CurrentProcID},
 	}
 }
 
 // subscribeToStateUpdates listens for state updates from the primary server
 func (m ClientModel) subscribeToStateUpdates() tea.Cmd {
 	return func() tea.Msg {
-		// Block until we receive a state update
+		// Both state and processViews are sent together in the same IPC message
+		// They arrive on separate buffered channels, so we can receive them in order
 		state := <-m.client.ReceiveState()
-		return clientStateUpdateMsg{state: state}
+		processViews := <-m.client.ReceiveProcessViews()
+		return clientStateUpdateMsg{state: state, processViews: processViews}
 	}
 }
 
@@ -96,6 +102,7 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clientStateUpdateMsg:
 		// Update our local state copy from primary
 		m.domain = msg.state
+		m.processViews = msg.processViews
 		return m, m.subscribeToStateUpdates()
 
 	case tea.WindowSizeMsg:
@@ -175,7 +182,7 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq != m.filterSeq {
 			return m, nil
 		}
-		procs := domain.FilterProcesses(m.domain.Config, m.domain.Processes, m.ui.FilterText)
+		procs := domain.FilterProcesses(m.domain.Config, m.processViews, m.ui.FilterText)
 		if len(procs) > 0 {
 			m.ui.ActiveProcID = procs[0].ID
 			m.selectSeq++
@@ -198,7 +205,7 @@ func (m *ClientModel) activeProcLabel() string {
 }
 
 func (m *ClientModel) moveSelection(delta int) {
-	procs := domain.FilterProcesses(m.domain.Config, m.domain.Processes, m.ui.FilterText)
+	procs := domain.FilterProcesses(m.domain.Config, m.processViews, m.ui.FilterText)
 	if len(procs) == 0 {
 		m.ui.ActiveProcID = 0
 		return
@@ -320,7 +327,7 @@ func (m ClientModel) appendProcessDescription(s string) string {
 	return s
 }
 
-func (m ClientModel) appendProcess(p *domain.Process, s string) string {
+func (m ClientModel) appendProcess(p *domain.ProcessView, s string) string {
 	cursor := "  "
 	statusColor := m.domain.Config.Style.StatusStoppedColor
 	if p.Status == domain.StatusRunning {
@@ -359,7 +366,7 @@ func (m ClientModel) appendProcess(p *domain.Process, s string) string {
 }
 
 func (m ClientModel) View() string {
-	procs := domain.FilterProcesses(m.domain.Config, m.domain.Processes, m.ui.FilterText)
+	procs := domain.FilterProcesses(m.domain.Config, m.processViews, m.ui.FilterText)
 	s := ""
 	s = m.appendHelpPanel(s)
 	s = m.appendProcessDescription(s)

@@ -33,8 +33,9 @@ type IPCServerInterface interface {
 	SetPrimaryServer(primary interface {
 		HandleCommand(action, label string) error
 		GetState() *domain.AppState
+		GetProcessController() domain.ProcessController
 	})
-	BroadcastState(state *domain.AppState)
+	BroadcastState(state *domain.AppState, pc domain.ProcessController)
 	Stop()
 }
 
@@ -121,15 +122,8 @@ func (m *PrimaryServer) autoStartProcesses() {
 }
 
 func (m *PrimaryServer) broadcastStateLocked() {
-	// Update Status and PID fields from controller before broadcasting
-	// This ensures clients see the current live state
-	// TODO: In Phase 4, replace this with ProcessView broadcasting
-	for i := range m.state.Processes {
-		proc := &m.state.Processes[i]
-		proc.Status = m.processController.GetProcessStatus(proc.ID)
-		proc.PID = m.processController.GetPID(proc.ID)
-	}
-	m.ipcServer.BroadcastState(m.state)
+	// Pass the controller to the IPC server so it can compute ProcessViews
+	m.ipcServer.BroadcastState(m.state, m.processController)
 }
 
 // HandleCommand handles IPC commands from clients
@@ -170,7 +164,7 @@ func (m *PrimaryServer) GetState() *domain.AppState {
 	return m.state
 }
 
-func (m *PrimaryServer) GetProcessController() *process.Controller {
+func (m *PrimaryServer) GetProcessController() domain.ProcessController {
 	return m.processController
 }
 

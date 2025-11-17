@@ -14,21 +14,23 @@ import (
 )
 
 type Client struct {
-	socketPath    string
-	conn          net.Conn
-	mu            sync.Mutex
-	reader        *bufio.Reader
-	requestID     atomic.Uint64
-	pendingReqs   map[string]chan Message
-	pendingReqsMu sync.Mutex
-	stateCh       chan *domain.AppState
+	socketPath     string
+	conn           net.Conn
+	mu             sync.Mutex
+	reader         *bufio.Reader
+	requestID      atomic.Uint64
+	pendingReqs    map[string]chan Message
+	pendingReqsMu  sync.Mutex
+	stateCh        chan *domain.AppState
+	processViewsCh chan []domain.ProcessView
 }
 
 func NewClient(socketPath string) (*Client, error) {
 	client := &Client{
-		socketPath:  socketPath,
-		pendingReqs: make(map[string]chan Message),
-		stateCh:     make(chan *domain.AppState, 10), // Buffered channel for state updates
+		socketPath:     socketPath,
+		pendingReqs:    make(map[string]chan Message),
+		stateCh:        make(chan *domain.AppState, 10),     // Buffered channel for state updates
+		processViewsCh: make(chan []domain.ProcessView, 10), // Buffered channel for process views
 	}
 
 	if err := client.Connect(); err != nil {
@@ -169,6 +171,15 @@ func (c *Client) readResponses() {
 				// todo comeback to this -- is this right
 				// log.Printf("State channel full, skipping update")
 			}
+			// Also send ProcessViews if available
+			if msg.ProcessViews != nil {
+				select {
+				case c.processViewsCh <- msg.ProcessViews:
+					// ProcessViews sent to channel
+				default:
+					// Channel full, skip this update
+				}
+			}
 			continue
 		}
 
@@ -283,4 +294,9 @@ func (c *Client) GetProcessList() ([]byte, error) {
 // ReceiveState returns a channel that receives state updates from the server
 func (c *Client) ReceiveState() <-chan *domain.AppState {
 	return c.stateCh
+}
+
+// ReceiveProcessViews returns a channel that receives process view updates from the server
+func (c *Client) ReceiveProcessViews() <-chan []domain.ProcessView {
+	return c.processViewsCh
 }

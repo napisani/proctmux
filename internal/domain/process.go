@@ -32,14 +32,8 @@ func (s ProcessStatus) String() string {
 }
 
 type Process struct {
-	ID    int
-	Label string
-	// Status and PID are kept for backward compatibility with IPC protocol
-	// These fields are synced from the process controller before broadcasting
-	// DO NOT update these fields directly - they are derived from controller state
-	// TODO: Phase 4 - Remove these fields and use ProcessView everywhere
-	Status ProcessStatus
-	PID    int
+	ID     int
+	Label  string
 	Config *config.ProcessConfig
 }
 
@@ -47,11 +41,8 @@ func NewFromProcessConfig(id int, label string, cfg *config.ProcessConfig) Proce
 	return Process{
 		ID:     id,
 		Label:  label,
-		Status: StatusHalted,
-		PID:    -1,
 		Config: cfg,
 	}
-
 }
 
 func (p *Process) Command() string {
@@ -107,16 +98,12 @@ type ProcessController interface {
 
 // ToView converts a Process to a ProcessView by querying the controller for live state
 func (p *Process) ToView(pc ProcessController) ProcessView {
-	status := ProcessStatus(StatusHalted)
+	status := StatusHalted
 	pid := -1
 
 	if pc != nil {
 		status = pc.GetProcessStatus(p.ID)
 		pid = pc.GetPID(p.ID)
-	} else {
-		// Fallback to stored values if no controller is available
-		status = p.Status
-		pid = p.PID
 	}
 
 	return ProcessView{
