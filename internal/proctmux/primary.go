@@ -17,7 +17,7 @@ import (
 
 // PrimaryServer is the main process server that manages all processes and state
 type PrimaryServer struct {
-	processServer     *process.Server
+	processController *process.Controller
 	ipcServer         IPCServerInterface
 	viewer            *viewer.Viewer
 	state             *domain.AppState
@@ -60,7 +60,7 @@ func setupLogger(
 
 func NewPrimaryServer(cfg *config.ProcTmuxConfig, ipcServer IPCServerInterface) *PrimaryServer {
 	state := domain.NewAppState(cfg)
-	processServer := process.NewServer()
+	processController := process.NewController()
 
 	logWriter, err := setupLogger(cfg)
 	if err != nil {
@@ -68,10 +68,10 @@ func NewPrimaryServer(cfg *config.ProcTmuxConfig, ipcServer IPCServerInterface) 
 	}
 
 	// Create an adapter that satisfies the viewer.ProcessServer interface
-	serverAdapter := &processServerAdapter{ps: processServer}
+	serverAdapter := &processControllerAdapter{pc: processController}
 
 	return &PrimaryServer{
-		processServer:     processServer,
+		processController: processController,
 		ipcServer:         ipcServer,
 		viewer:            viewer.New(serverAdapter),
 		state:             &state,
@@ -81,13 +81,13 @@ func NewPrimaryServer(cfg *config.ProcTmuxConfig, ipcServer IPCServerInterface) 
 	}
 }
 
-// processServerAdapter adapts process.Server to satisfy viewer.ProcessServer interface
-type processServerAdapter struct {
-	ps *process.Server
+// processControllerAdapter adapts process.Controller to satisfy viewer.ProcessServer interface
+type processControllerAdapter struct {
+	pc *process.Controller
 }
 
-func (a *processServerAdapter) GetProcess(id int) (viewer.ProcessInstance, error) {
-	return a.ps.GetProcess(id)
+func (a *processControllerAdapter) GetProcess(id int) (viewer.ProcessInstance, error) {
+	return a.pc.GetProcess(id)
 }
 
 func (m *PrimaryServer) Start(socketPath string) error {
@@ -162,8 +162,8 @@ func (m *PrimaryServer) GetState() *domain.AppState {
 	return m.state
 }
 
-func (m *PrimaryServer) GetProcessServer() *process.Server {
-	return m.processServer
+func (m *PrimaryServer) GetProcessController() *process.Controller {
+	return m.processController
 }
 
 func (m *PrimaryServer) GetViewer() *viewer.Viewer {
@@ -201,7 +201,7 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 
 	log.Printf("Starting process %s (ID: %d)", proc.Label, procID)
 
-	instance, err := m.processServer.StartProcess(procID, proc.Config)
+	instance, err := m.processController.StartProcess(procID, proc.Config)
 	if err != nil {
 		log.Printf("Error starting process %d: %v", procID, err)
 		proc.Status = domain.StatusHalted
@@ -230,7 +230,7 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 	go func() {
 		<-instance.WaitForExit()
 		log.Printf("Process %d (PID: %d) exited", procID, pid)
-		m.processServer.RemoveProcess(procID)
+		m.processController.RemoveProcess(procID)
 
 		m.stateMu.Lock()
 		proc := m.state.GetProcessByID(procID)
@@ -259,7 +259,7 @@ func (m *PrimaryServer) stopProcessLocked(procID int) error {
 
 	log.Printf("Stopping process %s (ID: %d)", proc.Label, procID)
 
-	if err := m.processServer.StopProcess(procID); err != nil {
+	if err := m.processController.StopProcess(procID); err != nil {
 		log.Printf("Error stopping process %d: %v", procID, err)
 		return err
 	}
@@ -286,7 +286,7 @@ func (m *PrimaryServer) Stop() {
 		proc := &m.state.Processes[idx]
 		if proc.Status == domain.StatusRunning {
 			log.Printf("Stopping process %s", proc.Label)
-			m.processServer.StopProcess(proc.ID)
+			m.processController.StopProcess(proc.ID)
 		}
 	}
 	m.stateMu.Unlock()

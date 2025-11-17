@@ -11,25 +11,25 @@ import (
 	"github.com/nick/proctmux/internal/config"
 )
 
-// Server manages a collection of process instances
-type Server struct {
+// Controller manages a collection of process instances and controls their lifecycle
+type Controller struct {
 	processes map[int]*Instance
 	mu        sync.RWMutex
 }
 
-// NewServer creates a new process server
-func NewServer() *Server {
-	return &Server{
+// NewController creates a new process controller
+func NewController() *Controller {
+	return &Controller{
 		processes: make(map[int]*Instance),
 	}
 }
 
 // StartProcess starts a new process with the given configuration
-func (ps *Server) StartProcess(id int, cfg *config.ProcessConfig) (*Instance, error) {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
+func (pc *Controller) StartProcess(id int, cfg *config.ProcessConfig) (*Instance, error) {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
 
-	if _, exists := ps.processes[id]; exists {
+	if _, exists := pc.processes[id]; exists {
 		return nil, fmt.Errorf("process %d already exists", id)
 	}
 
@@ -95,7 +95,7 @@ func (ps *Server) StartProcess(id int, cfg *config.ProcessConfig) (*Instance, er
 		close(instance.exitChan)
 	}()
 
-	ps.processes[id] = instance
+	pc.processes[id] = instance
 	log.Printf("Started process %d (PID: %d)", id, cmd.Process.Pid)
 
 	log.Printf("Attaching PTY output logger for process %d", id)
@@ -112,11 +112,11 @@ func (ps *Server) StartProcess(id int, cfg *config.ProcessConfig) (*Instance, er
 }
 
 // GetProcess returns the process instance with the given ID
-func (ps *Server) GetProcess(id int) (*Instance, error) {
-	ps.mu.RLock()
-	defer ps.mu.RUnlock()
+func (pc *Controller) GetProcess(id int) (*Instance, error) {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
 
-	instance, exists := ps.processes[id]
+	instance, exists := pc.processes[id]
 	if !exists {
 		return nil, fmt.Errorf("process %d not found", id)
 	}
@@ -125,11 +125,11 @@ func (ps *Server) GetProcess(id int) (*Instance, error) {
 }
 
 // StopProcess stops the process with the given ID
-func (ps *Server) StopProcess(id int) error {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
+func (pc *Controller) StopProcess(id int) error {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
 
-	instance, exists := ps.processes[id]
+	instance, exists := pc.processes[id]
 	if !exists {
 		return fmt.Errorf("process %d not found", id)
 	}
@@ -144,25 +144,25 @@ func (ps *Server) StopProcess(id int) error {
 		instance.File.Close()
 	}
 
-	delete(ps.processes, id)
+	delete(pc.processes, id)
 	log.Printf("Stopped process %d", id)
 
 	return nil
 }
 
-// RemoveProcess removes a process from the server without stopping it
-func (ps *Server) RemoveProcess(id int) {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	delete(ps.processes, id)
+// RemoveProcess removes a process from the controller without stopping it
+func (pc *Controller) RemoveProcess(id int) {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	delete(pc.processes, id)
 }
 
 // GetScrollback returns the scrollback buffer contents for the given process
-func (ps *Server) GetScrollback(id int) ([]byte, error) {
-	ps.mu.RLock()
-	defer ps.mu.RUnlock()
+func (pc *Controller) GetScrollback(id int) ([]byte, error) {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
 
-	instance, exists := ps.processes[id]
+	instance, exists := pc.processes[id]
 	if !exists {
 		return nil, fmt.Errorf("process %d not found", id)
 	}
@@ -175,11 +175,11 @@ func (ps *Server) GetScrollback(id int) ([]byte, error) {
 }
 
 // GetReader returns a reader for the process's PTY output
-func (ps *Server) GetReader(id int) (io.Reader, error) {
-	ps.mu.RLock()
-	defer ps.mu.RUnlock()
+func (pc *Controller) GetReader(id int) (io.Reader, error) {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
 
-	instance, exists := ps.processes[id]
+	instance, exists := pc.processes[id]
 	if !exists {
 		return nil, fmt.Errorf("process %d not found", id)
 	}
@@ -188,11 +188,11 @@ func (ps *Server) GetReader(id int) (io.Reader, error) {
 }
 
 // GetWriter returns a writer for the process's PTY input
-func (ps *Server) GetWriter(id int) (io.Writer, error) {
-	ps.mu.RLock()
-	defer ps.mu.RUnlock()
+func (pc *Controller) GetWriter(id int) (io.Writer, error) {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
 
-	instance, exists := ps.processes[id]
+	instance, exists := pc.processes[id]
 	if !exists {
 		return nil, fmt.Errorf("process %d not found", id)
 	}
