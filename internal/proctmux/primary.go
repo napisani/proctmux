@@ -121,6 +121,14 @@ func (m *PrimaryServer) autoStartProcesses() {
 }
 
 func (m *PrimaryServer) broadcastStateLocked() {
+	// Update Status and PID fields from controller before broadcasting
+	// This ensures clients see the current live state
+	// TODO: In Phase 4, replace this with ProcessView broadcasting
+	for i := range m.state.Processes {
+		proc := &m.state.Processes[i]
+		proc.Status = m.processController.GetProcessStatus(proc.ID)
+		proc.PID = m.processController.GetPID(proc.ID)
+	}
 	m.ipcServer.BroadcastState(m.state)
 }
 
@@ -194,7 +202,8 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 		return fmt.Errorf("process not found: %d", procID)
 	}
 
-	if proc.Status == domain.StatusRunning {
+	// Check if already running by querying the controller
+	if m.processController.IsRunning(procID) {
 		log.Printf("Process %s is already running", proc.Label)
 		return nil
 	}
@@ -204,8 +213,6 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 	instance, err := m.processController.StartProcess(procID, proc.Config)
 	if err != nil {
 		log.Printf("Error starting process %d: %v", procID, err)
-		proc.Status = domain.StatusHalted
-		proc.PID = 0
 		return err
 	}
 
@@ -217,8 +224,7 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 	pid := instance.GetPID()
 	log.Printf("Started process %s with PID %d", proc.Label, pid)
 
-	proc.Status = domain.StatusRunning
-	proc.PID = pid
+	// No need to manually update Status/PID - they will be queried from controller when needed
 
 	// If this process is currently being viewed, refresh the viewer to show output from the beginning
 	if m.viewer.GetCurrentProcessID() == procID {
@@ -230,14 +236,12 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 	go func() {
 		<-instance.WaitForExit()
 		log.Printf("Process %d (PID: %d) exited", procID, pid)
-		m.processController.RemoveProcess(procID)
+		// even though the processes has exited, its not clear if it was stopped via the proctmux app
+		// or crashed/terminated externally, so ensure to stop it properly here.
+		m.processController.StopProcess(procID)
 
+		// Broadcast state change to notify clients that process has exited
 		m.stateMu.Lock()
-		proc := m.state.GetProcessByID(procID)
-		if proc != nil {
-			proc.Status = domain.StatusHalted
-			proc.PID = 0
-		}
 		m.broadcastStateLocked()
 		m.stateMu.Unlock()
 
@@ -252,21 +256,20 @@ func (m *PrimaryServer) stopProcessLocked(procID int) error {
 		return fmt.Errorf("process not found: %d", procID)
 	}
 
-	if proc.Status != domain.StatusRunning {
+	// Check if running by querying the controller
+	if !m.processController.IsRunning(procID) {
 		log.Printf("Process %s is not running", proc.Label)
 		return nil
 	}
 
-	log.Printf("Stopping process %s (ID: %d)", proc.Label, procID)
-
+	// Actually stop the process via the controller (this was the bug!)
 	if err := m.processController.StopProcess(procID); err != nil {
-		log.Printf("Error stopping process %d: %v", procID, err)
+		log.Printf("Error stopping process %s: %v", proc.Label, err)
 		return err
 	}
 
-	proc.Status = domain.StatusHalted
-	proc.PID = 0
 	log.Printf("Stopped process %s", proc.Label)
+	// No need to manually update Status/PID - they will be queried from controller when needed
 
 	return nil
 }
@@ -280,13 +283,16 @@ func (m *PrimaryServer) Stop() {
 	}
 	close(m.done)
 
-	// Stop all running processes
+	// Stop all running processes by querying the controller
 	m.stateMu.Lock()
-	for idx := range m.state.Processes {
-		proc := &m.state.Processes[idx]
-		if proc.Status == domain.StatusRunning {
-			log.Printf("Stopping process %s", proc.Label)
-			m.processController.StopProcess(proc.ID)
+	runningIDs := m.processController.GetAllProcessIDs()
+	for _, id := range runningIDs {
+		if m.processController.IsRunning(id) {
+			proc := m.state.GetProcessByID(id)
+			if proc != nil {
+				log.Printf("Stopping process %s", proc.Label)
+			}
+			m.processController.StopProcess(id)
 		}
 	}
 	m.stateMu.Unlock()

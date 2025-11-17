@@ -85,11 +85,6 @@ func (s *AppState) GetProcessByLabel(label string) *Process {
 	return nil
 }
 
-func (s *AppState) SetProcessStatus(id int, status ProcessStatus) {
-	if p := s.GetProcessByID(id); p != nil {
-		p.Status = status
-	}
-}
 
 // SelectFirstProcess selects the first non-dummy process by current ordering.
 func (s *AppState) SelectFirstProcess() *AppState {
@@ -102,4 +97,24 @@ func (s *AppState) SelectFirstProcess() *AppState {
 	}
 	log.Printf("No processes available to select")
 	return s
+}
+
+// GetProcessView returns a ProcessView for the given process ID
+// The ProcessView combines static config with live state from the controller
+func (s *AppState) GetProcessView(pc ProcessController, id int) *ProcessView {
+	proc := s.GetProcessByID(id)
+	if proc == nil {
+		return nil
+	}
+	view := proc.ToView(pc)
+	return &view
+}
+
+// GetAllProcessViews returns ProcessViews for all processes
+func (s *AppState) GetAllProcessViews(pc ProcessController) []ProcessView {
+	views := make([]ProcessView, len(s.Processes))
+	for i, proc := range s.Processes {
+		views[i] = proc.ToView(pc)
+	}
+	return views
 }

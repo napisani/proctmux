@@ -9,6 +9,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/nick/proctmux/internal/buffer"
 	"github.com/nick/proctmux/internal/config"
+	"github.com/nick/proctmux/internal/domain"
 )
 
 // Controller manages a collection of process instances and controls their lifecycle
@@ -136,7 +137,11 @@ func (pc *Controller) StopProcess(id int) error {
 
 	if instance.cmd.Process != nil {
 		if err := instance.cmd.Process.Kill(); err != nil {
-			return fmt.Errorf("failed to kill process: %w", err)
+			if err.Error() == "os: process already finished" {
+				log.Printf("Process %d already finished", id)
+			} else {
+				return fmt.Errorf("failed to kill process: %w", err)
+			}
 		}
 	}
 
@@ -148,13 +153,6 @@ func (pc *Controller) StopProcess(id int) error {
 	log.Printf("Stopped process %d", id)
 
 	return nil
-}
-
-// RemoveProcess removes a process from the controller without stopping it
-func (pc *Controller) RemoveProcess(id int) {
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
-	delete(pc.processes, id)
 }
 
 // GetScrollback returns the scrollback buffer contents for the given process
@@ -198,4 +196,63 @@ func (pc *Controller) GetWriter(id int) (io.Writer, error) {
 	}
 
 	return instance.File, nil
+}
+
+// GetPID returns the process ID for the given process, or -1 if not running
+func (pc *Controller) GetPID(id int) int {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+
+	instance, exists := pc.processes[id]
+	if !exists {
+		return -1
+	}
+
+	return instance.GetPID()
+}
+
+// IsRunning returns true if the process exists and is currently running
+func (pc *Controller) IsRunning(id int) bool {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+
+	instance, exists := pc.processes[id]
+	if !exists {
+		return false
+	}
+
+	// Process is running if it has a valid PID
+	return instance.cmd.Process != nil
+}
+
+// GetAllProcessIDs returns a list of all process IDs currently managed by the controller
+func (pc *Controller) GetAllProcessIDs() []int {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+
+	ids := make([]int, 0, len(pc.processes))
+	for id := range pc.processes {
+		ids = append(ids, id)
+	}
+
+	return ids
+}
+
+// GetProcessStatus returns the current status of the process
+// This derives the status from the actual process state rather than storing it
+func (pc *Controller) GetProcessStatus(id int) domain.ProcessStatus {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+
+	instance, exists := pc.processes[id]
+	if !exists {
+		return domain.StatusHalted
+	}
+
+	// Process is running if it has a valid process handle
+	if instance.cmd.Process != nil {
+		return domain.StatusRunning
+	}
+
+	return domain.StatusHalted
 }
