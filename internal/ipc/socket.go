@@ -8,6 +8,10 @@ import (
 	"github.com/nick/proctmux/internal/config"
 )
 
+func getTmpDir() string {
+	return "/tmp"
+}
+
 // CreateSocket creates a new socket file path based on config hash and creates it.
 // Returns the socket path.
 func CreateSocket(config *config.ProcTmuxConfig) (string, error) {
@@ -16,7 +20,7 @@ func CreateSocket(config *config.ProcTmuxConfig) (string, error) {
 		return "", fmt.Errorf("failed to generate config hash: %w", err)
 	}
 
-	socketPath := fmt.Sprintf("/tmp/proctmux-%s.socket", hash)
+	socketPath := fmt.Sprintf("%s/proctmux-%s.socket", getTmpDir(), hash)
 
 	// Remove any existing socket file
 	_ = os.Remove(socketPath)
@@ -32,7 +36,7 @@ func GetSocket(config *config.ProcTmuxConfig) (string, error) {
 		return "", fmt.Errorf("failed to generate config hash: %w", err)
 	}
 
-	socketPath := fmt.Sprintf("/tmp/proctmux-%s.socket", hash)
+	socketPath := fmt.Sprintf("%s/proctmux-%s.socket", getTmpDir(), hash)
 
 	// Verify the socket exists
 	if _, err := os.Stat(socketPath); err != nil {
@@ -50,7 +54,7 @@ func WaitForSocket(config *config.ProcTmuxConfig) (string, error) {
 		return "", fmt.Errorf("failed to generate config hash: %w", err)
 	}
 
-	socketPath := fmt.Sprintf("/tmp/proctmux-%s.socket", hash)
+	socketPath := fmt.Sprintf("%s/proctmux-%s.socket", getTmpDir(), hash)
 
 	// Wait up to 5 seconds for the socket to be created
 	timeout := time.After(5 * time.Second)

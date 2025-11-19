@@ -14,23 +14,21 @@ import (
 )
 
 type Client struct {
-	socketPath     string
-	conn           net.Conn
-	mu             sync.Mutex
-	reader         *bufio.Reader
-	requestID      atomic.Uint64
-	pendingReqs    map[string]chan Message
-	pendingReqsMu  sync.Mutex
-	stateCh        chan *domain.AppState
-	processViewsCh chan []domain.ProcessView
+	socketPath    string
+	conn          net.Conn
+	mu            sync.Mutex
+	reader        *bufio.Reader
+	requestID     atomic.Uint64
+	pendingReqs   map[string]chan Message
+	pendingReqsMu sync.Mutex
+	updatesCh     chan domain.StateUpdate
 }
 
 func NewClient(socketPath string) (*Client, error) {
 	client := &Client{
-		socketPath:     socketPath,
-		pendingReqs:    make(map[string]chan Message),
-		stateCh:        make(chan *domain.AppState, 10),     // Buffered channel for state updates
-		processViewsCh: make(chan []domain.ProcessView, 10), // Buffered channel for process views
+		socketPath:  socketPath,
+		pendingReqs: make(map[string]chan Message),
+		updatesCh:   make(chan domain.StateUpdate, 10), // Buffered channel for combined updates
 	}
 
 	if err := client.Connect(); err != nil {
@@ -68,59 +66,6 @@ func (c *Client) Connect() error {
 	return fmt.Errorf("failed to connect to IPC server")
 }
 
-func (c *Client) ReadSelection() (*Message, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.conn == nil {
-		return nil, fmt.Errorf("not connected")
-	}
-
-	line, err := c.reader.ReadBytes('\n')
-	if err != nil {
-		return nil, fmt.Errorf("failed to read from IPC server: %w", err)
-	}
-
-	var msg Message
-	if err := json.Unmarshal(line, &msg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal IPC message: %w", err)
-	}
-
-	return &msg, nil
-}
-
-func (c *Client) ReadMessage() (*Message, error) {
-	return c.ReadSelection()
-}
-
-func (c *Client) SendState(state *domain.AppState) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.conn == nil {
-		return fmt.Errorf("not connected")
-	}
-
-	msg := Message{
-		Type:  "state",
-		State: state,
-	}
-
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal state message: %w", err)
-	}
-
-	data = append(data, '\n')
-
-	if _, err := c.conn.Write(data); err != nil {
-		return fmt.Errorf("failed to send state message: %w", err)
-	}
-
-	log.Printf("Sent state update with %d processes", len(state.Processes))
-	return nil
-}
-
 func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -131,12 +76,6 @@ func (c *Client) Close() {
 		c.reader = nil
 		log.Printf("Disconnected from IPC server")
 	}
-}
-
-func (c *Client) IsConnected() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.conn != nil
 }
 
 func (c *Client) readResponses() {
@@ -163,22 +102,12 @@ func (c *Client) readResponses() {
 
 		// Handle state broadcast messages
 		if msg.Type == "state" && msg.State != nil {
+			upd := domain.StateUpdate{State: msg.State, ProcessViews: msg.ProcessViews}
 			select {
-			case c.stateCh <- msg.State:
-				// State sent to channel
+			case c.updatesCh <- upd:
+				// Update sent to channel
 			default:
 				// Channel full, skip this update
-				// todo comeback to this -- is this right
-				// log.Printf("State channel full, skipping update")
-			}
-			// Also send ProcessViews if available
-			if msg.ProcessViews != nil {
-				select {
-				case c.processViewsCh <- msg.ProcessViews:
-					// ProcessViews sent to channel
-				default:
-					// Channel full, skip this update
-				}
 			}
 			continue
 		}
@@ -291,12 +220,7 @@ func (c *Client) GetProcessList() ([]byte, error) {
 	return data, err
 }
 
-// ReceiveState returns a channel that receives state updates from the server
-func (c *Client) ReceiveState() <-chan *domain.AppState {
-	return c.stateCh
-}
-
-// ReceiveProcessViews returns a channel that receives process view updates from the server
-func (c *Client) ReceiveProcessViews() <-chan []domain.ProcessView {
-	return c.processViewsCh
+// ReceiveUpdates returns a channel that receives combined state updates
+func (c *Client) ReceiveUpdates() <-chan domain.StateUpdate {
+	return c.updatesCh
 }

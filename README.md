@@ -255,10 +255,8 @@ Notes:
 ## Feature wishlist
 - [ ] support graceful shutdown of all processes managed by proctmux 
 - [ ] support taking input (maybe break with a leader combo?) in the viewer 
-- [ ] bug where a process is still running but the client thinks its stopped 
 - [ ] fzf for filtering 
 - [ ] better socket timeout / waiting fmt.print 
-- [ ] better app structure / modules  
 
 - [ ] add stop command for each process command 
 - [ ] better tui ui placement of help text, process description, etc.

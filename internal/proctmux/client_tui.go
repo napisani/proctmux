@@ -47,11 +47,11 @@ func debounceSelection(seq, procID int) tea.Cmd {
 
 // IPCClient interface abstracts IPC client operations
 type IPCClient interface {
-	ReceiveState() <-chan *domain.AppState
-	ReceiveProcessViews() <-chan []domain.ProcessView
+	ReceiveUpdates() <-chan domain.StateUpdate
 	SwitchProcess(label string) error
 	StartProcess(label string) error
 	StopProcess(label string) error
+	StopRunning() error
 	RestartProcess(label string) error
 }
 
@@ -85,11 +85,8 @@ func NewClientModel(client IPCClient, state *domain.AppState) ClientModel {
 // subscribeToStateUpdates listens for state updates from the primary server
 func (m ClientModel) subscribeToStateUpdates() tea.Cmd {
 	return func() tea.Msg {
-		// Both state and processViews are sent together in the same IPC message
-		// They arrive on separate buffered channels, so we can receive them in order
-		state := <-m.client.ReceiveState()
-		processViews := <-m.client.ReceiveProcessViews()
-		return clientStateUpdateMsg{state: state, processViews: processViews}
+		upd := <-m.client.ReceiveUpdates()
+		return clientStateUpdateMsg{state: upd.State, processViews: upd.ProcessViews}
 	}
 }
 
@@ -153,7 +150,12 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch {
 		case slices.Contains(kb.Quit, key):
-			return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
+			log.Printf("Client quitting, sending stop-running to primary")
+			return m, tea.Sequence(
+				m.sendCommandToPrimary("stop-running"),
+				tea.ExitAltScreen,
+				tea.Quit,
+			)
 		case slices.Contains(kb.Filter, key):
 			m.ui.EnteringFilterText = true
 			m.ui.Mode = domain.FilterMode
@@ -249,6 +251,15 @@ func (m ClientModel) sendSelectionToPrimary(label string) tea.Cmd {
 // sendCommandToPrimary sends a command (start/stop/restart) to the primary server
 func (m ClientModel) sendCommandToPrimary(action string) tea.Cmd {
 	return func() tea.Msg {
+		// Actions that target all running processes do not require a selection
+		if action == "stop-running" {
+			if err := m.client.StopRunning(); err != nil {
+				return errMsg{err}
+			}
+			log.Printf("Client sent %s command for all running processes", action)
+			return nil
+		}
+
 		proc := m.domain.GetProcessByID(m.ui.ActiveProcID)
 		if proc == nil {
 			return errMsg{fmt.Errorf("no process selected")}

@@ -11,14 +11,18 @@ import (
 
 	"slices"
 
-	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/domain"
 )
+
+type clientConn struct {
+	net.Conn
+	mu sync.Mutex
+}
 
 type Server struct {
 	socketPath    string
 	listener      net.Listener
-	clients       []net.Conn
+	clients       []*clientConn
 	mu            sync.RWMutex
 	done          chan struct{}
 	primaryServer interface {
@@ -26,29 +30,24 @@ type Server struct {
 		GetState() *domain.AppState
 		GetProcessController() domain.ProcessController
 	}
-	currentProcID int
+	// currentProcID removed
 }
 
 type Message struct {
-	Type         string                `json:"type"`
-	RequestID    string                `json:"request_id,omitempty"`
-	ProcessID    int                   `json:"process_id,omitempty"`
-	Label        string                `json:"label,omitempty"`
-	Action       string                `json:"action,omitempty"`
-	Config       *config.ProcessConfig `json:"config,omitempty"`
-	Status       string                `json:"status,omitempty"`
-	PID          int                   `json:"pid,omitempty"`
-	ExitCode     int                   `json:"exit_code,omitempty"`
-	State        *domain.AppState      `json:"state,omitempty"`
-	ProcessList  []map[string]any      `json:"process_list,omitempty"`
-	ProcessViews []domain.ProcessView  `json:"process_views,omitempty"`
-	Error        string                `json:"error,omitempty"`
-	Success      bool                  `json:"success,omitempty"`
+	Type         string               `json:"type"`
+	RequestID    string               `json:"request_id,omitempty"`
+	Label        string               `json:"label,omitempty"`
+	Action       string               `json:"action,omitempty"`
+	State        *domain.AppState     `json:"state,omitempty"`
+	ProcessList  []map[string]any     `json:"process_list,omitempty"`
+	ProcessViews []domain.ProcessView `json:"process_views,omitempty"`
+	Error        string               `json:"error,omitempty"`
+	Success      bool                 `json:"success,omitempty"`
 }
 
 func NewServer() *Server {
 	return &Server{
-		clients: []net.Conn{},
+		clients: []*clientConn{},
 		done:    make(chan struct{}),
 	}
 }
@@ -90,7 +89,8 @@ func (s *Server) acceptClients() {
 			}
 
 			s.mu.Lock()
-			s.clients = append(s.clients, conn)
+			cc := &clientConn{Conn: conn}
+			s.clients = append(s.clients, cc)
 			s.mu.Unlock()
 
 			log.Printf("IPC client connected (total: %d)", len(s.clients))
@@ -99,43 +99,61 @@ func (s *Server) acceptClients() {
 			if s.primaryServer != nil {
 				state := s.primaryServer.GetState()
 				pc := s.primaryServer.GetProcessController()
-				s.sendInitialState(conn, state, pc)
+				s.sendInitialState(cc, state, pc)
 			}
 
-			go s.handleClient(conn)
+			go s.handleClient(cc)
 		}
 	}
 }
 
-func (s *Server) handleClient(conn net.Conn) {
+func (s *Server) handleClient(conn *clientConn) {
 	defer func() {
 		conn.Close()
 		s.removeClient(conn)
 	}()
 
-	scanner := bufio.NewScanner(conn)
-	for scanner.Scan() {
+	reader := bufio.NewReader(conn.Conn)
+	for {
 		select {
 		case <-s.done:
 			return
 		default:
-			line := scanner.Bytes()
-			var msg Message
-			if err := json.Unmarshal(line, &msg); err != nil {
-				log.Printf("Failed to parse IPC message: %v", err)
-				continue
-			}
-
-			s.handleMessage(conn, msg)
 		}
-	}
 
-	if err := scanner.Err(); err != nil {
-		log.Printf("IPC client read error: %v", err)
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			// If the client closed the connection, just return
+			log.Printf("IPC client read error: %v", err)
+			return
+		}
+
+		var msg Message
+		if err := json.Unmarshal(line, &msg); err != nil {
+			log.Printf("Failed to parse IPC message: %v", err)
+			continue
+		}
+
+		s.handleMessage(conn, msg)
 	}
 }
 
-func (s *Server) handleMessage(conn net.Conn, msg Message) {
+func getRunningLabels(state *domain.AppState, pc domain.ProcessController) []string {
+	var labels []string
+	for i := range state.Processes {
+		p := &state.Processes[i]
+		if p.ID == domain.DummyProcessID {
+			continue
+		}
+		view := p.ToView(pc)
+		if view.Status == domain.StatusRunning {
+			labels = append(labels, view.Label)
+		}
+	}
+	return labels
+}
+
+func (s *Server) handleMessage(conn *clientConn, msg Message) {
 	switch msg.Type {
 	case "command":
 		s.handleCommand(conn, msg)
@@ -144,7 +162,7 @@ func (s *Server) handleMessage(conn net.Conn, msg Message) {
 	}
 }
 
-func (s *Server) handleCommand(conn net.Conn, msg Message) {
+func (s *Server) handleCommand(conn *clientConn, msg Message) {
 	response := Message{
 		Type:      "response",
 		RequestID: msg.RequestID,
@@ -183,14 +201,7 @@ func (s *Server) handleCommand(conn net.Conn, msg Message) {
 		case "restart-running":
 			state := s.primaryServer.GetState()
 			pc := s.primaryServer.GetProcessController()
-			var runningLabels []string
-			for i := range state.Processes {
-				p := &state.Processes[i]
-				view := p.ToView(pc)
-				if view.Status == domain.StatusRunning && view.ID != domain.DummyProcessID {
-					runningLabels = append(runningLabels, view.Label)
-				}
-			}
+			runningLabels := getRunningLabels(state, pc)
 			for _, name := range runningLabels {
 				_ = s.primaryServer.HandleCommand("restart", name)
 			}
@@ -198,15 +209,9 @@ func (s *Server) handleCommand(conn net.Conn, msg Message) {
 		case "stop-running":
 			state := s.primaryServer.GetState()
 			pc := s.primaryServer.GetProcessController()
-			var runningLabels []string
-			for i := range state.Processes {
-				p := &state.Processes[i]
-				view := p.ToView(pc)
-				if view.Status == domain.StatusRunning && view.ID != domain.DummyProcessID {
-					runningLabels = append(runningLabels, view.Label)
-				}
-			}
+			runningLabels := getRunningLabels(state, pc)
 			for _, name := range runningLabels {
+				log.Printf("IPC server sending stop command for process: %s", name)
 				_ = s.primaryServer.HandleCommand("stop", name)
 			}
 			response.Success = true
@@ -222,19 +227,21 @@ func (s *Server) handleCommand(conn net.Conn, msg Message) {
 	s.sendResponse(conn, response)
 }
 
-func (s *Server) sendResponse(conn net.Conn, msg Message) {
+func (s *Server) sendResponse(conn *clientConn, msg Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("Failed to marshal response: %v", err)
 		return
 	}
 	data = append(data, '\n')
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
 	if _, err := conn.Write(data); err != nil {
 		log.Printf("Failed to send response: %v", err)
 	}
 }
 
-func (s *Server) removeClient(conn net.Conn) {
+func (s *Server) removeClient(conn *clientConn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -247,6 +254,25 @@ func (s *Server) removeClient(conn net.Conn) {
 	}
 }
 
+func buildStateMessage(state *domain.AppState, pc domain.ProcessController) ([]byte, error) {
+	// Convert processes to ProcessViews
+	processViews := make([]domain.ProcessView, len(state.Processes))
+	for i := range state.Processes {
+		processViews[i] = state.Processes[i].ToView(pc)
+	}
+	msg := Message{
+		Type:         "state",
+		State:        state,
+		ProcessViews: processViews,
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	data = append(data, '\n')
+	return data, nil
+}
+
 func (s *Server) BroadcastState(state *domain.AppState, pc domain.ProcessController) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -255,90 +281,32 @@ func (s *Server) BroadcastState(state *domain.AppState, pc domain.ProcessControl
 		return
 	}
 
-	// Convert processes to ProcessViews
-	processViews := make([]domain.ProcessView, len(state.Processes))
-	for i := range state.Processes {
-		processViews[i] = state.Processes[i].ToView(pc)
-	}
-
-	msg := Message{
-		Type:         "state",
-		State:        state,
-		ProcessViews: processViews,
-	}
-
-	data, err := json.Marshal(msg)
+	data, err := buildStateMessage(state, pc)
 	if err != nil {
 		log.Printf("Failed to marshal state message: %v", err)
 		return
 	}
-
-	data = append(data, '\n')
-
-	for _, conn := range s.clients {
-		if _, err := conn.Write(data); err != nil {
+	for _, cc := range s.clients {
+		cc.mu.Lock()
+		if _, err := cc.Write(data); err != nil {
 			log.Printf("Failed to broadcast state to IPC client: %v", err)
 		}
+		cc.mu.Unlock()
 	}
 }
 
 // sendInitialState sends the current state to a newly connected client
-func (s *Server) sendInitialState(conn net.Conn, state *domain.AppState, pc domain.ProcessController) {
-	// Convert processes to ProcessViews
-	processViews := make([]domain.ProcessView, len(state.Processes))
-	for i := range state.Processes {
-		processViews[i] = state.Processes[i].ToView(pc)
-	}
-
-	msg := Message{
-		Type:         "state",
-		State:        state,
-		ProcessViews: processViews,
-	}
-
-	data, err := json.Marshal(msg)
+func (s *Server) sendInitialState(conn *clientConn, state *domain.AppState, pc domain.ProcessController) {
+	data, err := buildStateMessage(state, pc)
 	if err != nil {
 		log.Printf("Failed to marshal initial state message: %v", err)
 		return
 	}
-
-	data = append(data, '\n')
-
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
 	if _, err := conn.Write(data); err != nil {
 		log.Printf("Failed to send initial state to IPC client: %v", err)
 	}
-}
-
-func (s *Server) SendCommand(action string, procID int, config *config.ProcessConfig) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if len(s.clients) == 0 {
-		return fmt.Errorf("no connected viewers to send command")
-	}
-
-	msg := Message{
-		Type:      "user_action",
-		Action:    action,
-		ProcessID: procID,
-		Config:    config,
-	}
-
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal command: %w", err)
-	}
-
-	data = append(data, '\n')
-
-	for _, conn := range s.clients {
-		if _, err := conn.Write(data); err != nil {
-			log.Printf("Failed to send command to IPC client: %v", err)
-		}
-	}
-
-	log.Printf("Sent command '%s' for process %d to %d clients", action, procID, len(s.clients))
-	return nil
 }
 
 func (s *Server) SetPrimaryServer(primary interface {
@@ -360,7 +328,7 @@ func (s *Server) Stop() {
 	for _, conn := range s.clients {
 		conn.Close()
 	}
-	s.clients = []net.Conn{}
+	s.clients = []*clientConn{}
 
 	if s.listener != nil {
 		s.listener.Close()
