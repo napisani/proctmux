@@ -8,7 +8,7 @@ import (
 	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/domain"
 	"github.com/nick/proctmux/internal/ipc"
-	"github.com/nick/proctmux/internal/proctmux"
+	"github.com/nick/proctmux/internal/tui"
 )
 
 // RunClient starts the application in client mode, connecting to a running primary server
@@ -36,7 +36,7 @@ func RunClient(cfg *config.ProcTmuxConfig) error {
 
 	// Create client UI model
 	state := domain.NewAppState(cfg)
-	clientModel := proctmux.NewClientModel(client, &state)
+	clientModel := tui.NewClientModel(client, &state)
 	p := tea.NewProgram(clientModel, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running proctmux client: %v\n", err)
