@@ -260,6 +260,57 @@ Notes:
 - [ ] mouse support 
 
 
+## Development
+
+### Running Tests
+
+```bash
+make test
+```
+
+### Building from Source
+
+```bash
+make build
+# Binary will be in ./bin/proctmux
+```
+
+### Creating a Release
+
+Releases are automated via GitHub Actions. When you push a git tag, the workflow will:
+
+1. Run all tests (`make test`)
+2. Build binaries for multiple platforms (Linux, macOS, Windows; amd64 and arm64)
+3. Create a GitHub Release with all artifacts
+
+To create a new release:
+
+```bash
+# 1. Update version in Makefile if needed
+vim Makefile  # Update VERSION=x.y.z
+
+# 2. Commit any changes
+git add .
+git commit -m "Prepare release vX.Y.Z"
+
+# 3. Create and push a tag
+git tag v1.0.0
+git push origin v1.0.0
+
+# 4. Watch GitHub Actions build and publish the release
+# Visit: https://github.com/YOUR_USERNAME/proctmux/actions
+```
+
+The release will include:
+- `proctmux-linux-amd64.tar.gz` - Linux (Intel/AMD 64-bit)
+- `proctmux-linux-arm64.tar.gz` - Linux (ARM 64-bit)
+- `proctmux-darwin-amd64.tar.gz` - macOS (Intel)
+- `proctmux-darwin-arm64.tar.gz` - macOS (Apple Silicon)
+- `proctmux-windows-amd64.exe.zip` - Windows (64-bit)
+
+Tags with hyphens (e.g., `v1.0.0-beta`, `v2.0.0-rc1`) are automatically marked as prereleases.
+
+
 ## License
 
 MIT
