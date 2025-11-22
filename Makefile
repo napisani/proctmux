@@ -18,6 +18,18 @@ build:
 	@echo "Building the application..."
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./$(SRC_DIR)
 
+# Build for all supported Unix platforms
+.PHONY: build-all
+build-all:
+	@echo "Building for all Unix platforms..."
+	@mkdir -p $(BUILD_DIR)
+	GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 ./$(SRC_DIR)
+	GOOS=linux GOARCH=arm64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 ./$(SRC_DIR)
+	GOOS=darwin GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 ./$(SRC_DIR)
+	GOOS=darwin GOARCH=arm64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./$(SRC_DIR)
+	@echo "Built binaries:"
+	@ls -lh $(BUILD_DIR)/$(BINARY_NAME)-*
+
 
 # Clean build artifacts
 .PHONY: clean
@@ -76,7 +88,8 @@ watch-test:
 .PHONY: help
 help:
 	@echo "Makefile commands:"
-	@echo "  make build      - Build the application"
+	@echo "  make build      - Build the application for current platform"
+	@echo "  make build-all  - Build for all supported Unix platforms (Linux, macOS)"
 	@echo "  make run        - Build and run the application"
 	@echo "  make clean      - Clean up build artifacts"
 	@echo "  make dist       - Create a distribution archive"

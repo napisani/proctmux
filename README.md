@@ -8,8 +8,9 @@ Inspired by https://github.com/napisani/procmux, but using tmux as the terminal 
 ## Requirements
 
 - tmux >= 3.x installed and available on PATH
-- Run proctmux inside an existing tmux session (it needs the “current pane”/“current session”)
+- Run proctmux inside an existing tmux session (it needs the "current pane"/"current session")
 - Go 1.22+ to build from source (or use the provided Makefile)
+- **Unix-like operating system** (Linux, macOS, BSD) - Windows is not supported
 
 
 ## Installation
@@ -271,7 +272,12 @@ make test
 ### Building from Source
 
 ```bash
+# Build for current platform
 make build
+
+# Build for all supported Unix platforms (Linux amd64/arm64, macOS amd64/arm64)
+make build-all
+
 # Binary will be in ./bin/proctmux
 ```
 
@@ -306,7 +312,8 @@ The release will include:
 - `proctmux-linux-arm64.tar.gz` - Linux (ARM 64-bit)
 - `proctmux-darwin-amd64.tar.gz` - macOS (Intel)
 - `proctmux-darwin-arm64.tar.gz` - macOS (Apple Silicon)
-- `proctmux-windows-amd64.exe.zip` - Windows (64-bit)
+
+**Note:** Windows is not supported as proctmux requires Unix-specific terminal and tmux features.
 
 Tags with hyphens (e.g., `v1.0.0-beta`, `v2.0.0-rc1`) are automatically marked as prereleases.
 

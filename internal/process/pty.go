@@ -1,3 +1,5 @@
+//go:build unix
+
 package process
 
 import (
@@ -45,8 +47,8 @@ const (
 // suitable for programs that want to handle all terminal control themselves.
 func setRawMode(f *os.File) error {
 	fd := int(f.Fd())
-	const ioctlReadTermios = unix.TIOCGETA  // OSX/Darwin ioctl to get terminal attributes
-	const ioctlWriteTermios = unix.TIOCSETA // OSX/Darwin ioctl to set terminal attributes
+	// ioctlReadTermios and ioctlWriteTermios are defined in platform-specific files
+	// (pty_darwin.go, pty_linux.go) to handle platform differences
 
 	// Read current terminal settings
 	termios, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
@@ -84,7 +86,7 @@ func setRawMode(f *os.File) error {
 
 // IsTerminal checks if a file descriptor is a terminal
 func IsTerminal(fd int) bool {
-	_, err := unix.IoctlGetTermios(fd, unix.TIOCGETA)
+	_, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
 	return err == nil
 }
 
@@ -92,9 +94,6 @@ func IsTerminal(fd int) bool {
 // This is used for the primary server's stdin to allow interactive input while keeping
 // proper output formatting. Returns the old state for restoration.
 func MakeRawInput(fd int) (*unix.Termios, error) {
-	const ioctlReadTermios = unix.TIOCGETA
-	const ioctlWriteTermios = unix.TIOCSETA
-
 	// Get current terminal settings
 	oldState, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
 	if err != nil {
@@ -128,5 +127,5 @@ func MakeRawInput(fd int) (*unix.Termios, error) {
 
 // RestoreTerminal restores the terminal to its previous state
 func RestoreTerminal(fd int, oldState *unix.Termios) error {
-	return unix.IoctlSetTermios(fd, unix.TIOCSETA, oldState)
+	return unix.IoctlSetTermios(fd, ioctlWriteTermios, oldState)
 }

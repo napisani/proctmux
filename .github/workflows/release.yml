@@ -49,10 +49,6 @@ jobs:
             goos: darwin
             goarch: arm64
             artifact_name: proctmux-darwin-arm64
-          - os: windows-latest
-            goos: windows
-            goarch: amd64
-            artifact_name: proctmux-windows-amd64.exe
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -95,20 +91,9 @@ jobs:
       - name: Create tarball archives (for Unix platforms)
         run: |
           cd artifacts
-          for dir in proctmux-linux-* proctmux-darwin-*; do
+          for dir in proctmux-*; do
             if [ -d "$dir" ]; then
               tar -czf "${dir}.tar.gz" -C "$dir" .
-            fi
-          done
-
-      - name: Create zip archives (for Windows)
-        run: |
-          cd artifacts
-          for dir in proctmux-windows-*; do
-            if [ -d "$dir" ]; then
-              cd "$dir"
-              zip -r "../${dir}.zip" .
-              cd ..
             fi
           done
 
@@ -128,15 +113,16 @@ jobs:
           - **Linux (arm64)**: `proctmux-linux-arm64.tar.gz`
           - **macOS (Intel)**: `proctmux-darwin-amd64.tar.gz`
           - **macOS (Apple Silicon)**: `proctmux-darwin-arm64.tar.gz`
-          - **Windows (amd64)**: `proctmux-windows-amd64.exe.zip`
+
+          **Note:** proctmux requires tmux and is designed for Unix-like systems (Linux, macOS, BSD). Windows is not currently supported.
 
           ### Quick Start
 
           ```bash
-          # Extract the archive (Linux/macOS)
+          # Extract the archive
           tar -xzf proctmux-*.tar.gz
 
-          # Make executable (Linux/macOS)
+          # Make executable
           chmod +x proctmux-*
 
           # Run (must be inside a tmux session)
@@ -154,7 +140,6 @@ jobs:
             artifacts/proctmux-linux-arm64.tar.gz
             artifacts/proctmux-darwin-amd64.tar.gz
             artifacts/proctmux-darwin-arm64.tar.gz
-            artifacts/proctmux-windows-amd64.exe.zip
           body_path: release_notes.md
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
