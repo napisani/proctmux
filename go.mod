@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/bubbletea v0.25.0
 	github.com/charmbracelet/lipgloss v0.10.0
 	github.com/creack/pty v1.1.24
+	github.com/sahilm/fuzzy v0.1.1
 	golang.org/x/sys v0.33.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -26,7 +27,6 @@ require (
 	github.com/muesli/reflow v0.3.0 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/sahilm/fuzzy v0.1.1-0.20230530133925-c48e322e2a8f // indirect
 	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/term v0.6.0 // indirect
 	golang.org/x/text v0.3.8 // indirect
