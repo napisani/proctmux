@@ -253,8 +253,6 @@ Notes:
 - Colors: `status_*_color` accepts common names (`red`, `brightblue`, `ansigreen`) and hex (`#rrggbb`).
 
 ## Feature wishlist
-- [ ] better socket timeout / waiting fmt.print 
-
 - [ ] add stop command for each process command 
 - [ ] better tui ui placement of help text, process description, etc.
 - [ ] support for templated processes 
