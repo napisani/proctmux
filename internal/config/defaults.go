@@ -69,6 +69,9 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	if cfg.Style.StatusRunningColor == "" {
 		cfg.Style.StatusRunningColor = "green"
 	}
+	if cfg.Style.StatusHaltingColor == "" {
+		cfg.Style.StatusHaltingColor = "yellow"
+	}
 	if cfg.Style.StatusStoppedColor == "" {
 		cfg.Style.StatusStoppedColor = "red"
 	}

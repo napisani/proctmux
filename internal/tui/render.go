@@ -16,6 +16,69 @@ import (
 
 // Process list (bubbles/list) and filter input (bubbles/textinput)
 
+// colorToLipgloss translates color names and values to lipgloss-compatible color strings
+func colorToLipgloss(color string) string {
+	if color == "" || color == "none" {
+		return ""
+	}
+
+	// Map common color names to ANSI color codes
+	colorMap := map[string]string{
+		"black":   "0",
+		"red":     "1",
+		"green":   "2",
+		"yellow":  "3",
+		"blue":    "4",
+		"magenta": "5",
+		"cyan":    "6",
+		"white":   "7",
+
+		// Bright variants
+		"brightblack":   "8",
+		"brightred":     "9",
+		"brightgreen":   "10",
+		"brightyellow":  "11",
+		"brightblue":    "12",
+		"brightmagenta": "13",
+		"brightcyan":    "14",
+		"brightwhite":   "15",
+
+		// Alternative names
+		"gray":       "8",
+		"grey":       "8",
+		"lightred":   "9",
+		"lightgreen": "10",
+
+		// ANSI color names (from prompt_toolkit style)
+		"ansiblack":         "0",
+		"ansired":           "1",
+		"ansigreen":         "2",
+		"ansiyellow":        "3",
+		"ansiblue":          "4",
+		"ansimagenta":       "5",
+		"ansicyan":          "6",
+		"ansiwhite":         "7",
+		"ansibrightblack":   "8",
+		"ansibrightred":     "9",
+		"ansibrightgreen":   "10",
+		"ansibrightyellow":  "11",
+		"ansibrightblue":    "12",
+		"ansibrightmagenta": "13",
+		"ansibrightcyan":    "14",
+		"ansibrightwhite":   "15",
+		"ansigray":          "8",
+		"ansigrey":          "8",
+	}
+
+	// Check if it's a named color
+	if code, ok := colorMap[strings.ToLower(color)]; ok {
+		return code
+	}
+
+	// Otherwise, assume it's already a valid color value (hex, ANSI code, etc.)
+	return color
+}
+
 type processListComponent struct {
 	cfg         *config.ProcTmuxConfig
 	list        list.Model
@@ -45,27 +108,30 @@ func (d procDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	}
 	selected := index == m.Index()
 
-	// Set marker and color based on process status
+	// Set marker and color based on process status using config values
 	var marker string
 	var markerColor string
 
 	switch it.view.Status {
 	case domain.StatusRunning:
 		marker = "●"
-		markerColor = "2" // Green
+		markerColor = colorToLipgloss(d.cfg.Style.StatusRunningColor)
 	case domain.StatusHalting:
 		marker = "◐"
-		markerColor = "3" // Yellow
+		markerColor = colorToLipgloss(d.cfg.Style.StatusHaltingColor)
 	case domain.StatusHalted, domain.StatusExited, domain.StatusUnknown:
 		marker = "■"
-		markerColor = "1" // Red
+		markerColor = colorToLipgloss(d.cfg.Style.StatusStoppedColor)
 	default:
 		marker = "■"
-		markerColor = "1" // Red
+		markerColor = colorToLipgloss(d.cfg.Style.StatusStoppedColor)
 	}
 
 	// Create style for the status marker
-	markerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(markerColor))
+	markerStyle := lipgloss.NewStyle()
+	if markerColor != "" {
+		markerStyle = markerStyle.Foreground(lipgloss.Color(markerColor))
+	}
 
 	// Pointer for selected item
 	pointer := "  "
@@ -82,10 +148,10 @@ func (d procDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	}
 	style := lipgloss.NewStyle()
 	if fg != "" && fg != "none" {
-		style = style.Foreground(lipgloss.Color(fg))
+		style = style.Foreground(lipgloss.Color(colorToLipgloss(fg)))
 	}
 	if bg != "" && bg != "none" {
-		style = style.Background(lipgloss.Color(bg))
+		style = style.Background(lipgloss.Color(colorToLipgloss(bg)))
 	}
 
 	text := it.view.Label

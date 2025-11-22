@@ -87,6 +87,14 @@ procs:
     categories:
       - 'echo'
 
+  "interactive name":
+    shell: "echo 'Hello, what is your name?' && read name && echo \"Nice to meet you, $name!\""
+    autostart: false
+    description: 'Interactive prompt that asks for your name and greets you'
+    categories:
+      - 'interactive'
+      - 'echo'
+
   "print envs":
     shell: "echo $SOME_TEST"
     description: 'this command will print env vars that are configured in the child pid'

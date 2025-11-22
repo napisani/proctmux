@@ -36,6 +36,7 @@ type StyleConfig struct {
 	SelectedProcessBgColor     string            `yaml:"selected_process_bg_color"`
 	UnselectedProcessColor     string            `yaml:"unselected_process_color"`
 	StatusRunningColor         string            `yaml:"status_running_color"`
+	StatusHaltingColor         string            `yaml:"status_halting_color"`
 	StatusStoppedColor         string            `yaml:"status_stopped_color"`
 	PlaceholderTerminalBgColor string            `yaml:"placeholder_terminal_bg_color"`
 	PointerChar                string            `yaml:"pointer_char"`
