@@ -35,6 +35,7 @@ type ClientModel struct {
 	ui           UIState
 	termWidth    int
 	termHeight   int
+	initialized  bool // Track if we've received the first state update
 
 	procList processListComponent
 	filterUI filterComponent
@@ -101,6 +102,7 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clientStateUpdateMsg:
 		m.domain = msg.state
 		m.processViews = msg.processViews
+		m.initialized = true // Mark as initialized on first update
 		m.rebuildProcessList()
 		m.updateLayout()
 		return m, m.subscribeToStateUpdates()

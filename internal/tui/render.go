@@ -320,6 +320,20 @@ func processDescriptionPanel(cfg *config.ProcTmuxConfig, proc *domain.Process) s
 }
 
 func (m ClientModel) View() string {
+	// Show loading state until first update is received
+	if !m.initialized {
+		loadingStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("6")). // cyan
+			Bold(true)
+
+		msg := loadingStyle.Render("Loading process list...")
+
+		if m.termHeight > 0 {
+			return lipgloss.PlaceVertical(m.termHeight, lipgloss.Center, msg)
+		}
+		return msg
+	}
+
 	// Build all panels - each component is responsible for its own content
 	var panels []string
 

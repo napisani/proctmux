@@ -253,9 +253,6 @@ Notes:
 - Colors: `status_*_color` accepts common names (`red`, `brightblue`, `ansigreen`) and hex (`#rrggbb`).
 
 ## Feature wishlist
-- [ ] support graceful shutdown of all processes managed by proctmux 
-- [ ] support taking input (maybe break with a leader combo?) in the viewer 
-- [ ] fzf for filtering 
 - [ ] better socket timeout / waiting fmt.print 
 
 - [ ] add stop command for each process command 

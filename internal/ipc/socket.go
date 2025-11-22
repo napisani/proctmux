@@ -49,6 +49,13 @@ func GetSocket(config *config.ProcTmuxConfig) (string, error) {
 // WaitForSocket waits for the socket to be created, up to a timeout.
 // Returns the socket path when it becomes available.
 func WaitForSocket(config *config.ProcTmuxConfig) (string, error) {
+	return WaitForSocketWithProgress(config, nil)
+}
+
+// WaitForSocketWithProgress waits for the socket to be created, up to a timeout,
+// calling progressCallback periodically with elapsed and total duration.
+// Returns the socket path when it becomes available.
+func WaitForSocketWithProgress(config *config.ProcTmuxConfig, progressCallback func(elapsed, total time.Duration)) (string, error) {
 	hash, err := config.ToHash()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate config hash: %w", err)
@@ -56,10 +63,13 @@ func WaitForSocket(config *config.ProcTmuxConfig) (string, error) {
 
 	socketPath := fmt.Sprintf("%s/proctmux-%s.socket", getTmpDir(), hash)
 
-	// Wait up to 5 seconds for the socket to be created
-	timeout := time.After(5 * time.Second)
+	// Wait up to 30 seconds for the socket to be created
+	totalDuration := 30 * time.Second
+	timeout := time.After(totalDuration)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+
+	startTime := time.Now()
 
 	for {
 		select {
@@ -68,6 +78,11 @@ func WaitForSocket(config *config.ProcTmuxConfig) (string, error) {
 		case <-ticker.C:
 			if _, err := os.Stat(socketPath); err == nil {
 				return socketPath, nil
+			}
+			// Call progress callback if provided
+			if progressCallback != nil {
+				elapsed := time.Since(startTime)
+				progressCallback(elapsed, totalDuration)
 			}
 		}
 	}
