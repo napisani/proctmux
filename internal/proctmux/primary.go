@@ -13,6 +13,7 @@ import (
 	"github.com/nick/proctmux/internal/domain"
 	"github.com/nick/proctmux/internal/process"
 	"github.com/nick/proctmux/internal/viewer"
+	"golang.org/x/sys/unix"
 )
 
 // PrimaryServer is the main process server that manages all processes and state
@@ -25,6 +26,13 @@ type PrimaryServer struct {
 	cfg               *config.ProcTmuxConfig
 	done              chan struct{}
 	stdOutDebugWriter io.Writer
+
+	// stdin pass-through management - just track which process has stdin
+	currentStdinProcID int
+	stdinMu            sync.Mutex
+
+	// terminal state management
+	originalTermState *unix.Termios
 }
 
 // IPCServerInterface defines the interface for IPC server operations
@@ -100,6 +108,19 @@ func (m *PrimaryServer) Start(socketPath string) error {
 	// Set up IPC server to handle commands
 	m.ipcServer.SetPrimaryServer(m)
 
+	// Set stdin to raw mode for interactive input
+	if process.IsTerminal(int(os.Stdin.Fd())) {
+		oldState, err := process.MakeRawInput(int(os.Stdin.Fd()))
+		if err != nil {
+			log.Printf("Warning: failed to set stdin to raw mode: %v", err)
+		} else {
+			m.originalTermState = oldState
+		}
+	}
+
+	// Start single stdin forwarder
+	m.startStdinForwarder()
+
 	// Auto-start processes
 	m.autoStartProcesses()
 
@@ -172,6 +193,62 @@ func (m *PrimaryServer) GetViewer() *viewer.Viewer {
 	return m.viewer
 }
 
+// startStdinForwarder starts a single goroutine that reads from stdin
+// and forwards to whichever process is current
+func (m *PrimaryServer) startStdinForwarder() {
+	go func() {
+		buf := make([]byte, 3) // 3 bytes to handle escape sequences
+
+		for {
+			n, err := os.Stdin.Read(buf)
+			if err != nil {
+				log.Printf("stdin read error: %v", err)
+				return
+			}
+			if n == 0 {
+				continue
+			}
+
+			// Detect Ctrl+C (0x03) and exit the server
+			if n == 1 && buf[0] == 0x03 {
+				log.Println("Ctrl+C detected, shutting down...")
+				m.Stop()
+				os.Exit(0)
+			}
+
+			// Filter out tmux focus events: ESC[I (focus in) and ESC[O (focus out)
+			// These are 3-byte sequences: 0x1b 0x5b 0x49 and 0x1b 0x5b 0x4f
+			if n >= 3 && buf[0] == 0x1b && buf[1] == '[' && (buf[2] == 'I' || buf[2] == 'O') {
+				// Skip focus event sequences
+				continue
+			}
+
+			// Get current process and send bytes
+			m.stdinMu.Lock()
+			procID := m.currentStdinProcID
+			m.stdinMu.Unlock()
+
+			if procID > 0 && m.processController.IsRunning(procID) {
+				instance, err := m.processController.GetProcess(procID)
+				if err == nil {
+					instance.SendBytes(buf[:n])
+				}
+			}
+		}
+	}()
+}
+
+// attachStdinToProcess marks a process as the stdin target
+func (m *PrimaryServer) attachStdinToProcess(procID int) {
+	m.stdinMu.Lock()
+	defer m.stdinMu.Unlock()
+
+	if m.currentStdinProcID != procID {
+		log.Printf("Attaching stdin to process %d", procID)
+		m.currentStdinProcID = procID
+	}
+}
+
 func (m *PrimaryServer) switchToProcessLocked(procID int) error {
 	proc := m.state.GetProcessByID(procID)
 	if proc == nil {
@@ -186,6 +263,9 @@ func (m *PrimaryServer) switchToProcessLocked(procID int) error {
 	if err := m.viewer.SwitchToProcess(proc.ID); err != nil {
 		log.Printf("Warning: failed to switch viewer to process %d: %v", proc.ID, err)
 	}
+
+	// Attach stdin to the new process
+	m.attachStdinToProcess(proc.ID)
 
 	return nil
 }
@@ -224,6 +304,8 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 	if m.viewer.GetCurrentProcessID() == procID {
 		log.Printf("Refreshing viewer for newly started process %d", procID)
 		go m.viewer.RefreshCurrentProcess()
+		// Also attach stdin since this process is being viewed
+		m.attachStdinToProcess(procID)
 	}
 
 	// Watch for process exit
@@ -270,6 +352,15 @@ func (m *PrimaryServer) stopProcessLocked(procID int) error {
 
 func (m *PrimaryServer) Stop() {
 	log.Println("Stopping primary server...")
+
+	// Restore terminal state
+	if m.originalTermState != nil {
+		if err := process.RestoreTerminal(int(os.Stdin.Fd()), m.originalTermState); err != nil {
+			log.Printf("Warning: failed to restore terminal: %v", err)
+		}
+		m.originalTermState = nil
+	}
+
 	if m.stdOutDebugWriter != nil {
 		if closer, ok := m.stdOutDebugWriter.(io.Closer); ok {
 			closer.Close()

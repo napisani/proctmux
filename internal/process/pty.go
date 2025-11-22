@@ -56,9 +56,18 @@ func setRawMode(f *os.File) error {
 
 	// Clear flags to disable all input/output/local processing (raw mode)
 	// &^= is the "bit clear" operator: x &^= y means x = x & ^y (clear bits set in y)
-	termios.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
-	termios.Oflag &^= unix.OPOST
-	termios.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
+	// NOTE: We keep ICRNL enabled so CR (\r) gets translated to NL (\n) for shell compatibility
+	termios.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.IXON
+	// Keep ICRNL for CR->NL translation: termios.Iflag &^= unix.ICRNL
+
+	// Keep OPOST enabled for output processing (NL -> CR+NL)
+	// termios.Oflag &^= unix.OPOST
+
+	// Keep ECHO enabled so the shell echoes input characters back
+	// Disable other local processing but keep echo
+	termios.Lflag &^= unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
+	// Keep ECHO: termios.Lflag &^= unix.ECHO
+
 	termios.Cflag &^= unix.CSIZE | unix.PARENB
 	termios.Cflag |= unix.CS8
 
@@ -71,4 +80,53 @@ func setRawMode(f *os.File) error {
 
 	// Write the modified terminal settings back
 	return unix.IoctlSetTermios(fd, ioctlWriteTermios, termios)
+}
+
+// IsTerminal checks if a file descriptor is a terminal
+func IsTerminal(fd int) bool {
+	_, err := unix.IoctlGetTermios(fd, unix.TIOCGETA)
+	return err == nil
+}
+
+// MakeRawInput sets the terminal to raw mode for input only (keeps output processing)
+// This is used for the primary server's stdin to allow interactive input while keeping
+// proper output formatting. Returns the old state for restoration.
+func MakeRawInput(fd int) (*unix.Termios, error) {
+	const ioctlReadTermios = unix.TIOCGETA
+	const ioctlWriteTermios = unix.TIOCSETA
+
+	// Get current terminal settings
+	oldState, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
+	if err != nil {
+		return nil, err
+	}
+
+	// Make a copy to modify
+	newState := *oldState
+
+	// Raw mode for INPUT: disable input processing and local processing
+	newState.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
+	newState.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
+
+	// IMPORTANT: Keep OPOST enabled for output processing (NL -> CR+NL translation)
+	// DO NOT clear: newState.Oflag &^= unix.OPOST
+
+	newState.Cflag &^= unix.CSIZE | unix.PARENB
+	newState.Cflag |= unix.CS8
+
+	// Read one byte at a time
+	newState.Cc[unix.VMIN] = 1
+	newState.Cc[unix.VTIME] = 0
+
+	// Apply new settings
+	if err := unix.IoctlSetTermios(fd, ioctlWriteTermios, &newState); err != nil {
+		return nil, err
+	}
+
+	return oldState, nil
+}
+
+// RestoreTerminal restores the terminal to its previous state
+func RestoreTerminal(fd int, oldState *unix.Termios) error {
+	return unix.IoctlSetTermios(fd, unix.TIOCSETA, oldState)
 }

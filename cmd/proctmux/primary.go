@@ -27,6 +27,7 @@ func RunPrimary(cfg *config.ProcTmuxConfig) error {
 	if err := primaryServer.Start(ipcSocketPath); err != nil {
 		log.Fatal("Failed to start primary server:", err)
 	}
+
 	defer primaryServer.Stop()
 
 	// Just pause until ctrl-c
