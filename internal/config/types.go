@@ -74,4 +74,5 @@ type ProcessConfig struct {
 	AddPath      []string          `yaml:"add_path"`
 	TerminalRows int               `yaml:"terminal_rows"`
 	TerminalCols int               `yaml:"terminal_cols"`
+	OnKill       []string          `yaml:"on_kill"`
 }

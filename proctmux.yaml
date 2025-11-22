@@ -77,6 +77,14 @@ procs:
     description: 'Test ANSI color codes'
     terminal_rows: 24
     terminal_cols: 80
+  "test on-kill":
+    shell: "echo 'Process running...' && sleep 60"
+    autostart: false
+    description: 'Test on-kill command functionality'
+    on_kill:
+      - '/bin/bash'
+      - '-c'
+      - 'echo "ON-KILL TRIGGERED at $(date)" >> /tmp/on-kill-test.log'
   "tail log":
     shell: "tail -f /tmp/proctmux.log"
     autostart: false

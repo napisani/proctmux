@@ -1,10 +1,13 @@
 package process
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
+	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/nick/proctmux/internal/buffer"
@@ -143,6 +146,18 @@ func (pc *Controller) StopProcess(id int) error {
 				return fmt.Errorf("failed to kill process: %w", err)
 			}
 		}
+
+		// Wait for process to exit (with timeout), then run on-kill command
+		go func() {
+			select {
+			case <-instance.exitChan:
+				log.Printf("Process %d exited, triggering on-kill command", id)
+				executeOnKillCommand(instance.config, id)
+			case <-time.After(5 * time.Second):
+				log.Printf("Process %d did not exit within timeout, running on-kill command anyway", id)
+				executeOnKillCommand(instance.config, id)
+			}
+		}()
 	}
 
 	if instance.File != nil {
@@ -255,4 +270,36 @@ func (pc *Controller) GetProcessStatus(id int) domain.ProcessStatus {
 	}
 
 	return domain.StatusHalted
+}
+
+// executeOnKillCommand runs the on-kill command in the background with a timeout
+func executeOnKillCommand(cfg *config.ProcessConfig, processID int) {
+	if len(cfg.OnKill) == 0 {
+		return
+	}
+
+	go func() {
+		log.Printf("Executing on-kill command for process %d: %v", processID, cfg.OnKill)
+
+		// Create command with 30 second timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, cfg.OnKill[0], cfg.OnKill[1:]...)
+
+		// Use same working directory as original process
+		if cfg.Cwd != "" {
+			cmd.Dir = cfg.Cwd
+		}
+
+		// Use same environment as original process
+		cmd.Env = buildEnvironment(cfg)
+
+		// Run the command
+		if err := cmd.Run(); err != nil {
+			log.Printf("On-kill command for process %d failed: %v", processID, err)
+		} else {
+			log.Printf("On-kill command for process %d completed successfully", processID)
+		}
+	}()
 }
