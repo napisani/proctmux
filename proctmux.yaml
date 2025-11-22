@@ -71,18 +71,28 @@ shell_cmd:
 # if this property is defined, the app will log all debug, info, error level logs to the designated file
 enable_mouse: true
 procs:
-  # each key will show up as its own process/script in the process list
-  "tail log":
-    # the shell command to run when this process is started
-    shell: "tail -f /tmp/proctmux.log"
-    # whether to start this process when ProcMux starts
+  "test ansi":
+    shell: "while true; do echo -e '\\033[31mRed\\033[0m \\033[32mGreen\\033[0m \\033[33mYellow\\033[0m \\033[34mBlue\\033[0m'; sleep 1; done"
     autostart: true
-    # a short description of what this process/command does - will be displayed at the bottom of the screen when selected
+    description: 'Test ANSI color codes'
+    terminal_rows: 24
+    terminal_cols: 80
+  "tail log":
+    shell: "tail -f /tmp/proctmux.log"
+    autostart: false
     description: 'tail the app log'
     meta_tags:
       - 'follow'
       - '-f'
     categories:
+      - 'echo'
+
+  "interactive name":
+    shell: "echo 'Hello, what is your name?' && read name && echo \"Nice to meet you, $name!\""
+    autostart: false
+    description: 'Interactive prompt that asks for your name and greets you'
+    categories:
+      - 'interactive'
       - 'echo'
 
   "print envs":
@@ -108,6 +118,12 @@ procs:
     shell: "echo 'some text here' && sleep 3 && echo 'still running'  && sleep 3 && echo 'final text'"
     autostart: true 
     description: 'print a using sleeps in between'
+    categories:
+      - 'echo'
+  "print1-10":
+    shell: "for i in {1..10}; do echo $i; sleep 3; done"
+    autostart: false
+    description: 'print numbers 1 to 10 with a sleep in between'
     categories:
       - 'echo'
   "print colors":
@@ -137,3 +153,4 @@ procs:
 signal_server:
   enable: true
 log_file: "/tmp/proctmux.log"
+stdout_debug_log_file: "/tmp/proctmux_stdout.log"

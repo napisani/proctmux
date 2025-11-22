@@ -1,4 +1,4 @@
-package proctmux
+package config
 
 import (
 	"os"

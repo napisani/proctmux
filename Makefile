@@ -10,13 +10,13 @@ INTERNAL_DIR=internal
 PHONY: run 
 run: 
 	@echo "Running the application..."
-	go run $(SRC_DIR)/main.go
+	go run ./$(SRC_DIR)
 
 # Build the binary
 .PHONY: build
 build:
 	@echo "Building the application..."
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) $(SRC_DIR)/main.go
+	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./$(SRC_DIR)
 
 
 # Clean build artifacts
