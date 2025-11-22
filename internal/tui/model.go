@@ -35,8 +35,6 @@ type ClientModel struct {
 	ui           UIState
 	termWidth    int
 	termHeight   int
-	filterSeq    int
-	selectSeq    int
 
 	procList processListComponent
 	filterUI filterComponent
@@ -115,23 +113,8 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateLayout()
 		return m, nil
 	case tea.KeyMsg:
-		cmd := m.handleKey(msg.String())
+		cmd := m.handleKey(msg)
 		return m, cmd
-	case applyFilterMsg:
-		if msg.seq != m.filterSeq {
-			return m, nil
-		}
-		procs := domain.FilterProcesses(m.domain.Config, m.processViews, m.ui.FilterText)
-		if len(procs) > 0 {
-			m.ui.ActiveProcID = procs[0].ID
-			m.rebuildProcessList()
-			m.selectSeq++
-			return m, m.sendSelectionToPrimary(m.activeProcLabel())
-		}
-		m.ui.ActiveProcID = 0
-		m.rebuildProcessList()
-		m.selectSeq++
-		return m, m.sendSelectionToPrimary("Dummy")
 	}
 	return m, nil
 }

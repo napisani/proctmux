@@ -4,33 +4,17 @@ import (
 	"fmt"
 	"log"
 	"slices"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nick/proctmux/internal/domain"
 )
 
-// Error and input/debounce messages
+// Error message type
 
 type errMsg struct{ err error }
 
 func (e errMsg) Error() string { return e.err.Error() }
-
-type applyFilterMsg struct{ seq int }
-
-type applySelectionMsg struct {
-	seq    int
-	procID int
-}
-
-func debounceFilter(seq int) tea.Cmd {
-	return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return applyFilterMsg{seq: seq} })
-}
-
-func debounceSelection(seq, procID int) tea.Cmd {
-	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return applySelectionMsg{seq: seq, procID: procID} })
-}
 
 // Input handlers and actions
 
@@ -39,21 +23,37 @@ func (m *ClientModel) syncFilterComponent() {
 	m.filterUI.SetValue(m.ui.FilterText)
 }
 
-func (m *ClientModel) handleKey(key string) tea.Cmd {
+// applyFilterNow applies the current filter text immediately without debouncing
+func (m *ClientModel) applyFilterNow() tea.Cmd {
+	procs := domain.FilterProcesses(m.domain.Config, m.processViews, m.ui.FilterText)
+	if len(procs) > 0 {
+		m.ui.ActiveProcID = procs[0].ID
+		m.rebuildProcessList()
+		return m.sendSelectionToPrimary(m.activeProcLabel())
+	}
+	m.ui.ActiveProcID = 0
+	m.rebuildProcessList()
+	return nil
+}
+
+func (m *ClientModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	cfg := m.domain.Config
 	kb := cfg.Keybinding
 
 	if m.ui.EnteringFilterText {
+		key := msg.String()
 		switch {
 		case slices.Contains(kb.FilterSubmit, key):
 			m.ui.EnteringFilterText = false
 			m.ui.Mode = domain.NormalMode
+			m.ui.FilterText = m.filterUI.ti.Value()
 			m.syncFilterComponent()
-			m.filterSeq++
-			return debounceFilter(m.filterSeq)
+			// Apply filter immediately on submit
+			return m.applyFilterNow()
 		case slices.Contains(kb.Filter, key):
 			m.ui.EnteringFilterText = false
 			m.ui.Mode = domain.NormalMode
+			m.ui.FilterText = m.filterUI.ti.Value()
 			m.syncFilterComponent()
 			return nil
 		case key == "esc":
@@ -61,26 +61,19 @@ func (m *ClientModel) handleKey(key string) tea.Cmd {
 			m.ui.Mode = domain.NormalMode
 			m.ui.FilterText = ""
 			m.syncFilterComponent()
-			m.filterSeq++
-			return debounceFilter(m.filterSeq)
-		case key == "backspace" || key == "ctrl+h":
-			if len(m.ui.FilterText) > 0 {
-				m.ui.FilterText = m.ui.FilterText[:len(m.ui.FilterText)-1]
-				m.syncFilterComponent()
-				m.filterSeq++
-				return debounceFilter(m.filterSeq)
-			}
+			// Apply filter immediately to clear it
+			return m.applyFilterNow()
 		default:
-			if len(key) == 1 {
-				m.ui.FilterText += key
-				m.syncFilterComponent()
-				m.filterSeq++
-				return debounceFilter(m.filterSeq)
-			}
+			// Delegate all other key handling to the textinput component
+			var cmd tea.Cmd
+			m.filterUI.ti, cmd = m.filterUI.ti.Update(msg)
+			m.ui.FilterText = m.filterUI.ti.Value()
+			// Apply filter as user types
+			return tea.Batch(cmd, m.applyFilterNow())
 		}
-		return nil
 	}
 
+	key := msg.String()
 	switch {
 	case slices.Contains(kb.Quit, key):
 		log.Printf("Client quitting, sending stop-running to primary")
@@ -96,17 +89,14 @@ func (m *ClientModel) handleKey(key string) tea.Cmd {
 		m.ui.ActiveProcID = 0
 		m.syncFilterComponent()
 		m.rebuildProcessList()
-		m.selectSeq++
-		return debounceSelection(m.selectSeq, 0)
+		return nil
 	case slices.Contains(kb.Down, key):
 		m.moveSelection(+1)
 		m.procList.SetActiveID(m.ui.ActiveProcID)
-		m.selectSeq++
 		return m.sendSelectionToPrimary(m.activeProcLabel())
 	case slices.Contains(kb.Up, key):
 		m.moveSelection(-1)
 		m.procList.SetActiveID(m.ui.ActiveProcID)
-		m.selectSeq++
 		return m.sendSelectionToPrimary(m.activeProcLabel())
 	case slices.Contains(kb.Start, key):
 		return m.sendCommandToPrimary("start")

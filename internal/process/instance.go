@@ -2,6 +2,7 @@ package process
 
 import (
 	"io"
+	"log"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -152,7 +153,12 @@ func (pi *Instance) SendKey(key string) {
 // This is used for sending input that may include control characters,
 // multi-byte sequences (UTF-8), or binary data
 func (pi *Instance) SendBytes(bytes []byte) {
-	pi.File.Write(bytes)
+	n, err := pi.File.Write(bytes)
+	if err != nil {
+		log.Printf("process %d: error writing to PTY: %v", pi.ID, err)
+	} else if n != len(bytes) {
+		log.Printf("process %d: partial write to PTY: wrote %d of %d bytes", pi.ID, n, len(bytes))
+	}
 }
 
 // WithArgs sets command line arguments for the program (builder pattern)

@@ -110,12 +110,16 @@ func (m *PrimaryServer) Start(socketPath string) error {
 
 	// Set stdin to raw mode for interactive input
 	if process.IsTerminal(int(os.Stdin.Fd())) {
+		log.Println("stdin: setting terminal to raw input mode")
 		oldState, err := process.MakeRawInput(int(os.Stdin.Fd()))
 		if err != nil {
-			log.Printf("Warning: failed to set stdin to raw mode: %v", err)
+			log.Printf("stdin: warning: failed to set stdin to raw mode: %v", err)
 		} else {
 			m.originalTermState = oldState
+			log.Println("stdin: terminal set to raw input mode successfully")
 		}
+	} else {
+		log.Println("stdin: not a terminal, skipping raw mode setup")
 	}
 
 	// Start single stdin forwarder
@@ -197,6 +201,7 @@ func (m *PrimaryServer) GetViewer() *viewer.Viewer {
 // and forwards to whichever process is current
 func (m *PrimaryServer) startStdinForwarder() {
 	go func() {
+		log.Println("stdin forwarder started")
 		buf := make([]byte, 3) // 3 bytes to handle escape sequences
 
 		for {
@@ -211,7 +216,7 @@ func (m *PrimaryServer) startStdinForwarder() {
 
 			// Detect Ctrl+C (0x03) and exit the server
 			if n == 1 && buf[0] == 0x03 {
-				log.Println("Ctrl+C detected, shutting down...")
+				log.Println("stdin: Ctrl+C detected, shutting down...")
 				m.Stop()
 				os.Exit(0)
 			}
@@ -219,7 +224,7 @@ func (m *PrimaryServer) startStdinForwarder() {
 			// Filter out tmux focus events: ESC[I (focus in) and ESC[O (focus out)
 			// These are 3-byte sequences: 0x1b 0x5b 0x49 and 0x1b 0x5b 0x4f
 			if n >= 3 && buf[0] == 0x1b && buf[1] == '[' && (buf[2] == 'I' || buf[2] == 'O') {
-				// Skip focus event sequences
+				log.Printf("stdin: filtered tmux focus event: %c", buf[2])
 				continue
 			}
 
@@ -232,7 +237,13 @@ func (m *PrimaryServer) startStdinForwarder() {
 				instance, err := m.processController.GetProcess(procID)
 				if err == nil {
 					instance.SendBytes(buf[:n])
+				} else {
+					log.Printf("stdin: failed to get process %d: %v", procID, err)
 				}
+			} else if procID > 0 {
+				log.Printf("stdin: process %d not running, dropping input", procID)
+			} else {
+				log.Printf("stdin: no process attached, dropping input")
 			}
 		}
 	}()
@@ -244,8 +255,13 @@ func (m *PrimaryServer) attachStdinToProcess(procID int) {
 	defer m.stdinMu.Unlock()
 
 	if m.currentStdinProcID != procID {
-		log.Printf("Attaching stdin to process %d", procID)
+		oldProcID := m.currentStdinProcID
 		m.currentStdinProcID = procID
+		if oldProcID > 0 {
+			log.Printf("stdin: detached from process %d, attached to process %d", oldProcID, procID)
+		} else {
+			log.Printf("stdin: attached to process %d", procID)
+		}
 	}
 }
 
@@ -355,8 +371,11 @@ func (m *PrimaryServer) Stop() {
 
 	// Restore terminal state
 	if m.originalTermState != nil {
+		log.Println("stdin: restoring terminal to original state")
 		if err := process.RestoreTerminal(int(os.Stdin.Fd()), m.originalTermState); err != nil {
-			log.Printf("Warning: failed to restore terminal: %v", err)
+			log.Printf("stdin: warning: failed to restore terminal: %v", err)
+		} else {
+			log.Println("stdin: terminal restored successfully")
 		}
 		m.originalTermState = nil
 	}
