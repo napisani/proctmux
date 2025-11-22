@@ -32,14 +32,14 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	if len(cfg.Keybinding.FilterSubmit) == 0 {
 		cfg.Keybinding.FilterSubmit = []string{"enter"}
 	}
-	if len(cfg.Keybinding.SwitchFocus) == 0 {
-		cfg.Keybinding.SwitchFocus = []string{"tab"}
+	if len(cfg.Keybinding.ToggleRunning) == 0 {
+		cfg.Keybinding.ToggleRunning = []string{"R"}
 	}
-	if len(cfg.Keybinding.Zoom) == 0 {
-		cfg.Keybinding.Zoom = []string{"z"}
+	if len(cfg.Keybinding.ToggleHelp) == 0 {
+		cfg.Keybinding.ToggleHelp = []string{"?"}
 	}
 	if len(cfg.Keybinding.Docs) == 0 {
-		cfg.Keybinding.Docs = []string{"?"}
+		cfg.Keybinding.Docs = []string{"d"}
 	}
 
 	if cfg.Layout.CategorySearchPrefix == "" {

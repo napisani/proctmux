@@ -1,15 +1,17 @@
 package config
 
 type KeybindingConfig struct {
-	Quit         []string `yaml:"quit"`
-	Up           []string `yaml:"up"`
-	Down         []string `yaml:"down"`
-	Start        []string `yaml:"start"`
-	Stop         []string `yaml:"stop"`
-	Restart      []string `yaml:"restart"`
-	Filter       []string `yaml:"filter"`
-	FilterSubmit []string `yaml:"submit_filter"`
-	Docs         []string `yaml:"docs"`
+	Quit          []string `yaml:"quit"`
+	Up            []string `yaml:"up"`
+	Down          []string `yaml:"down"`
+	Start         []string `yaml:"start"`
+	Stop          []string `yaml:"stop"`
+	Restart       []string `yaml:"restart"`
+	Filter        []string `yaml:"filter"`
+	FilterSubmit  []string `yaml:"submit_filter"`
+	ToggleRunning []string `yaml:"toggle_running"`
+	ToggleHelp    []string `yaml:"toggle_help"`
+	Docs          []string `yaml:"docs"`
 
 	// TODO not used in the tmux implementation
 	Zoom        []string `yaml:"zoom"`
@@ -19,7 +21,6 @@ type KeybindingConfig struct {
 
 type LayoutConfig struct {
 	CategorySearchPrefix string `yaml:"category_search_prefix"`
-	HideHelp             bool   `yaml:"hide_help"`
 	ProcessesListWidth   int    `yaml:"processes_list_width"`
 
 	// TODO implement this

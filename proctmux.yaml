@@ -1,8 +1,6 @@
 general:
   kill_existing_session: true
 layout:
-  # hide or show the help window that show all keybindings and actions at the bottom of the screen
-  hide_help: false
   # hide or show the window second from the bottom that shows the full command name and the description
   hide_process_description_panel: false
   # the prompt_toolkit width of the sidebar (containing all the process names)
@@ -56,12 +54,10 @@ keybinding:
   down:
     - down
     - j
-  switch_focus:
-    - 'c-w'
-  zoom:
-    - 'c-z'
-  toggle_scroll:
-    - 'c-s'
+  toggle_running:
+    - 'R'
+  toggle_help:
+    - '?'
 shell_cmd:
   # this is the command used for all 'procs' that are defined with a 'shell' property.
   # by default the configured "$SHELL" environment variable will be used.

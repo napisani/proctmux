@@ -28,15 +28,19 @@ func fuzzyMatch(a, b string) bool {
 }
 
 // FilterProcesses is a pure helper to compute a filtered/sorted view from ProcessViews and UI filter text.
-func FilterProcesses(cfg *config.ProcTmuxConfig, processes []ProcessView, filterText string) []*ProcessView {
+// If showOnlyRunning is true, only running processes are included.
+func FilterProcesses(cfg *config.ProcTmuxConfig, processes []ProcessView, filterText string, showOnlyRunning bool) []*ProcessView {
 	var out []*ProcessView
 	prefix := cfg.Layout.CategorySearchPrefix
 	ft := strings.TrimSpace(filterText)
 
 	if ft == "" {
-		// No filter - return all non-dummy processes
+		// No filter - return all non-dummy processes (optionally filtered by running status)
 		for i := range processes {
 			if processes[i].ID != DummyProcessID {
+				if showOnlyRunning && processes[i].Status != StatusRunning {
+					continue
+				}
 				out = append(out, &processes[i])
 			}
 		}
@@ -45,6 +49,9 @@ func FilterProcesses(cfg *config.ProcTmuxConfig, processes []ProcessView, filter
 		cats := strings.Split(strings.TrimPrefix(ft, prefix), ",")
 		for i := range processes {
 			if processes[i].ID == DummyProcessID {
+				continue
+			}
+			if showOnlyRunning && processes[i].Status != StatusRunning {
 				continue
 			}
 			match := true
@@ -72,6 +79,9 @@ func FilterProcesses(cfg *config.ProcTmuxConfig, processes []ProcessView, filter
 		var validProcesses []ProcessView
 		for i := range processes {
 			if processes[i].ID != DummyProcessID {
+				if showOnlyRunning && processes[i].Status != StatusRunning {
+					continue
+				}
 				validProcesses = append(validProcesses, processes[i])
 			}
 		}

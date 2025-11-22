@@ -246,11 +246,9 @@ func (f filterComponent) View() string {
 
 // Panels and View
 
+// helpPanel renders keybinding help (legacy implementation - not currently used)
+// The helpPanelBubbleTea function is used instead for idiomatic Bubble Tea rendering
 func helpPanel(cfg *config.ProcTmuxConfig) string {
-	if cfg.Layout.HideHelp {
-		return ""
-	}
-
 	// Create style for key bindings
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // cyan
 	descStyle := lipgloss.NewStyle()
@@ -269,6 +267,23 @@ func helpPanel(cfg *config.ProcTmuxConfig) string {
 	modeInfo := lipgloss.NewStyle().Faint(true).Render("[Client Mode - Connected to Primary]")
 
 	return lipgloss.JoinVertical(lipgloss.Left, helpLine, modeInfo)
+}
+
+// helpPanelBubbleTea renders help using bubble tea's help component
+// Always shows the full help view when visible
+// Toggled on/off with '?' keybinding
+func (m ClientModel) helpPanelBubbleTea() string {
+	if !m.ui.ShowHelp {
+		return ""
+	}
+
+	// Always show full help
+	m.help.ShowAll = true
+	helpView := m.help.View(m.keys)
+
+	modeInfo := lipgloss.NewStyle().Faint(true).Render("[Client Mode - Connected to Primary]")
+
+	return lipgloss.JoinVertical(lipgloss.Left, helpView, modeInfo)
 }
 
 func messagesPanel(info string, msgs []string) string {
@@ -337,7 +352,8 @@ func (m ClientModel) View() string {
 	// Build all panels - each component is responsible for its own content
 	var panels []string
 
-	help := helpPanel(m.domain.Config)
+	// Help panel - hidden by default, toggled with '?'
+	help := m.helpPanelBubbleTea()
 	if help != "" {
 		panels = append(panels, help)
 	}

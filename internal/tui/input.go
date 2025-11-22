@@ -3,8 +3,8 @@ package tui
 import (
 	"fmt"
 	"log"
-	"slices"
 
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nick/proctmux/internal/domain"
@@ -25,7 +25,7 @@ func (m *ClientModel) syncFilterComponent() {
 
 // applyFilterNow applies the current filter text immediately without debouncing
 func (m *ClientModel) applyFilterNow() tea.Cmd {
-	procs := domain.FilterProcesses(m.domain.Config, m.processViews, m.ui.FilterText)
+	procs := domain.FilterProcesses(m.domain.Config, m.processViews, m.ui.FilterText, m.ui.ShowOnlyRunning)
 	if len(procs) > 0 {
 		m.ui.ActiveProcID = procs[0].ID
 		m.rebuildProcessList()
@@ -37,32 +37,35 @@ func (m *ClientModel) applyFilterNow() tea.Cmd {
 }
 
 func (m *ClientModel) handleKey(msg tea.KeyMsg) tea.Cmd {
-	cfg := m.domain.Config
-	kb := cfg.Keybinding
-
+	// Handle filter mode separately
 	if m.ui.EnteringFilterText {
-		key := msg.String()
 		switch {
-		case slices.Contains(kb.FilterSubmit, key):
+		case key.Matches(msg, m.keys.FilterSubmit):
+			// Submit filter and exit filter mode
 			m.ui.EnteringFilterText = false
 			m.ui.Mode = domain.NormalMode
 			m.ui.FilterText = m.filterUI.ti.Value()
 			m.syncFilterComponent()
 			// Apply filter immediately on submit
 			return m.applyFilterNow()
-		case slices.Contains(kb.Filter, key):
+
+		case key.Matches(msg, m.keys.Filter):
+			// Toggle filter mode off
 			m.ui.EnteringFilterText = false
 			m.ui.Mode = domain.NormalMode
 			m.ui.FilterText = m.filterUI.ti.Value()
 			m.syncFilterComponent()
 			return nil
-		case key == "esc":
+
+		case key.Matches(msg, m.keys.FilterEscape):
+			// Cancel filter and clear text
 			m.ui.EnteringFilterText = false
 			m.ui.Mode = domain.NormalMode
 			m.ui.FilterText = ""
 			m.syncFilterComponent()
 			// Apply filter immediately to clear it
 			return m.applyFilterNow()
+
 		default:
 			// Delegate all other key handling to the textinput component
 			var cmd tea.Cmd
@@ -73,16 +76,17 @@ func (m *ClientModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 
-	key := msg.String()
+	// Normal mode keybindings
 	switch {
-	case slices.Contains(kb.Quit, key):
+	case key.Matches(msg, m.keys.Quit):
 		log.Printf("Client quitting, sending stop-running to primary")
 		return tea.Sequence(
 			m.sendCommandToPrimary("stop-running"),
 			tea.ExitAltScreen,
 			tea.Quit,
 		)
-	case slices.Contains(kb.Filter, key):
+
+	case key.Matches(msg, m.keys.Filter):
 		m.ui.EnteringFilterText = true
 		m.ui.Mode = domain.FilterMode
 		m.ui.FilterText = ""
@@ -90,21 +94,37 @@ func (m *ClientModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.syncFilterComponent()
 		m.rebuildProcessList()
 		return nil
-	case slices.Contains(kb.Down, key):
+
+	case key.Matches(msg, m.keys.Down):
 		m.moveSelection(+1)
 		m.procList.SetActiveID(m.ui.ActiveProcID)
 		return m.sendSelectionToPrimary(m.activeProcLabel())
-	case slices.Contains(kb.Up, key):
+
+	case key.Matches(msg, m.keys.Up):
 		m.moveSelection(-1)
 		m.procList.SetActiveID(m.ui.ActiveProcID)
 		return m.sendSelectionToPrimary(m.activeProcLabel())
-	case slices.Contains(kb.Start, key):
+
+	case key.Matches(msg, m.keys.Start):
 		return m.sendCommandToPrimary("start")
-	case slices.Contains(kb.Stop, key):
+
+	case key.Matches(msg, m.keys.Stop):
 		return m.sendCommandToPrimary("stop")
-	case slices.Contains(kb.Restart, key):
+
+	case key.Matches(msg, m.keys.Restart):
 		return m.sendCommandToPrimary("restart")
+
+	case key.Matches(msg, m.keys.ToggleRunning):
+		m.ui.ShowOnlyRunning = !m.ui.ShowOnlyRunning
+		m.rebuildProcessList()
+		return m.applyFilterNow()
+
+	case key.Matches(msg, m.keys.ToggleHelp):
+		m.ui.ShowHelp = !m.ui.ShowHelp
+		m.updateLayout()
+		return nil
 	}
+
 	return nil
 }
 
@@ -118,7 +138,7 @@ func (m *ClientModel) activeProcLabel() string {
 }
 
 func (m *ClientModel) moveSelection(delta int) {
-	procs := domain.FilterProcesses(m.domain.Config, m.processViews, m.ui.FilterText)
+	procs := domain.FilterProcesses(m.domain.Config, m.processViews, m.ui.FilterText, m.ui.ShowOnlyRunning)
 	if len(procs) == 0 {
 		m.ui.ActiveProcID = 0
 		return

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/charmbracelet/bubbles/help"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -12,6 +13,8 @@ type UIState struct {
 	Messages           []string
 	FilterText         string
 	EnteringFilterText bool
+	ShowOnlyRunning    bool // Toggle between showing all processes vs only running ones
+	ShowHelp           bool // Toggle help panel visibility with '?'
 	Info               string
 	Mode               domain.Mode
 	ActiveProcID       int
@@ -39,6 +42,8 @@ type ClientModel struct {
 
 	procList processListComponent
 	filterUI filterComponent
+	keys     KeyMap
+	help     help.Model
 }
 
 type clientStateUpdateMsg struct {
@@ -52,9 +57,11 @@ func NewClientModel(client IPCClient, state *domain.AppState) ClientModel {
 		domain:       state,
 		processViews: []domain.ProcessView{},
 		ui:           UIState{Messages: []string{}, ActiveProcID: state.CurrentProcID},
+		keys:         NewKeyMap(state.Config.Keybinding),
+		help:         help.New(),
 	}
 	m.procList.SetConfig(state.Config)
-	m.procList.SetItems(domain.FilterProcesses(state.Config, m.processViews, m.ui.FilterText))
+	m.procList.SetItems(domain.FilterProcesses(state.Config, m.processViews, m.ui.FilterText, m.ui.ShowOnlyRunning))
 	m.procList.SetActiveID(m.ui.ActiveProcID)
 	m.filterUI = newFilterComponent()
 	return m
@@ -69,7 +76,7 @@ func (m ClientModel) subscribeToStateUpdates() tea.Cmd {
 
 func (m *ClientModel) rebuildProcessList() {
 	m.procList.SetConfig(m.domain.Config)
-	procs := domain.FilterProcesses(m.domain.Config, m.processViews, m.ui.FilterText)
+	procs := domain.FilterProcesses(m.domain.Config, m.processViews, m.ui.FilterText, m.ui.ShowOnlyRunning)
 	m.procList.SetItems(procs)
 	m.procList.SetActiveID(m.ui.ActiveProcID)
 }
