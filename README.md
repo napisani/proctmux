@@ -6,6 +6,8 @@ A terminal-based process manager with an interactive TUI for managing long-runni
 
 Inspired by https://github.com/napisani/procmux.
 
+![proctmux demo](demo.gif)
+
 
 ## Requirements
 
