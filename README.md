@@ -59,8 +59,9 @@ keybinding:
   restart: ["r"]
   filter: ["/"]
   submit_filter: ["enter"]
-  docs: ["?"]
-  # Note: switch_focus/zoom/focus are currently not used by the TUI
+  toggle_running: ["R"]            # Toggle showing only running processes
+  toggle_help: ["?"]               # Toggle help/footer visibility
+  docs: ["d"]                      # Show process documentation popup
 
 signal_server:
   enable: true
@@ -106,11 +107,10 @@ Run proctmux inside tmux and use the keybindings below to start/stop and filter.
 - Up/Down: `k`/`up`, `j`/`down`
 - Filter: `/` (type text; `enter` to apply)
 - Quit: `q` or `ctrl+c`
-- Docs: `?` (opens a popup with the process docs text)
+- Toggle Running: `R` (show only running processes)
+- Toggle Help: `?` (show/hide help footer)
+- Docs: `d` (opens a popup with the process docs text)
 - Enter also attaches focus to the selected process pane after starting (if halted)
-
-Notes:
-- `switch_focus`, `zoom`, and `focus` keybindings exist in config for future parity but are not used by the current TUI.
 
 
 ## What’s New (since last commit)
@@ -158,7 +158,7 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
   - `status_running_color`, `status_stopped_color` (string): Colors for list icons/pointer. Accepts names like `red`, `brightmagenta`, `ansiblue`, or hex `#ff00ff`.
   - Other fields exist for future parity and may not currently affect the UI: `selected_process_color`, `selected_process_bg_color`, `unselected_process_color`, `placeholder_terminal_bg_color`, `style_classes`, `color_level`.
 - `keybinding` (each value is a list of keys):
-  - `quit`, `up`, `down`, `start`, `stop`, `restart`, `filter`, `submit_filter`, `docs`. Unused (for now): `switch_focus`, `zoom`, `focus`.
+  - `quit`, `up`, `down`, `start`, `stop`, `restart`, `filter`, `submit_filter`, `toggle_running`, `toggle_help`, `docs`.
 - `signal_server`:
   - `enable` (bool): Start the HTTP server alongside the UI.
   - `host` (string): Bind host (e.g. `localhost`). Default `localhost` when enabled.

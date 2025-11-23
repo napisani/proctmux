@@ -12,11 +12,6 @@ type KeybindingConfig struct {
 	ToggleRunning []string `yaml:"toggle_running"`
 	ToggleHelp    []string `yaml:"toggle_help"`
 	Docs          []string `yaml:"docs"`
-
-	// TODO not used in the tmux implementation
-	Zoom        []string `yaml:"zoom"`
-	SwitchFocus []string `yaml:"switch_focus"`
-	Focus       []string `yaml:"focus"`
 }
 
 type LayoutConfig struct {
