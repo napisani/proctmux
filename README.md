@@ -1,16 +1,17 @@
 # proctmux
 
-A terminal-based process manager with an interactive TUI for managing long‑running processes and scripts. While it can integrate with tmux for advanced features (split panes, session management), proctmux works in any modern terminal. It provides a searchable list of defined processes, manages their lifecycle, and exposes an optional HTTP signal server and CLI for remote control.
+A terminal-based process manager with an interactive TUI for managing long-running processes and scripts. proctmux provides a searchable list of defined processes, manages their lifecycle, and exposes an optional HTTP signal server and CLI for remote control.
 
-Inspired by https://github.com/napisani/procmux, with optional tmux integration for users who want native tmux features (split panes, remain‑on‑exit, detached sessions, etc.).
+**Note**: proctmux is intentionally not a terminal emulator. It relies on your existing terminal emulator (iTerm2, Alacritty, Kitty, GNOME Terminal, etc.) to display process output and provide terminal features.
+
+Inspired by https://github.com/napisani/procmux.
 
 
 ## Requirements
 
 - **Unix-like operating system** (Linux, macOS, BSD) - Windows is not supported
-- **Optional**: tmux >= 3.x for tmux integration features
-  - If using tmux mode: Run proctmux inside an existing tmux session
-- Go 1.22+ to build from source (if not using pre-built binaries)
+- **Terminal emulator** - Any modern terminal (iTerm2, Alacritty, Kitty, GNOME Terminal, etc.)
+- Go 1.24+ to build from source (if not using pre-built binaries)
 
 
 ## Installation
@@ -24,7 +25,7 @@ brew tap napisani/proctmux
 # Install proctmux
 brew install proctmux
 
-# Run (works in any terminal; tmux optional)
+# Run in your terminal
 proctmux
 ```
 
@@ -34,7 +35,7 @@ proctmux
 # Build a local binary
 make build
 
-# Run (works in any terminal; tmux optional)
+# Run in your terminal
 ./bin/proctmux        # same as: proctmux start
 ```
 
@@ -212,12 +213,14 @@ procs:
 - Default stop escalation: when `stop` is omitted, SIGTERM is sent first; if still running after ~3s, proctmux sends SIGKILL.
 
 
-## How It Works (tmux‑first)
+## How It Works
 
-- proctmux runs inside your current tmux session and creates a separate detached tmux session (name from `general.detached_session_name`).
-- Autostart processes are started in the detached session so they run in the background immediately.
-- When you start a process from the UI, its pane is created and can be joined into your main tmux window. Switching selection breaks/joins panes to keep the view consistent.
-- Panes use tmux’s global `remain-on-exit on` while proctmux runs (restored on exit).
+- proctmux manages processes in the background and displays their status in an interactive TUI
+- Autostart processes are started immediately when proctmux launches
+- Process output is displayed in your terminal emulator's native rendering
+- When you start a process from the UI, its output becomes visible in the right pane
+- Switching between processes updates the display to show the selected process's output
+- proctmux uses your terminal's native features (scrolling, copy/paste, colors, etc.)
 
 
 ## Configuration Reference
@@ -256,18 +259,18 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
 
 ### Process definition (`procs.<name>`) fields
 
-- `shell` (string): A shell command line executed by tmux for this process. Example: `"tail -f /var/log/syslog"`.
+- `shell` (string): A shell command line to execute for this process. Example: `"tail -f /var/log/syslog"`.
 - `cmd` (string list): Alternative to `shell`. proctmux will build a command line by quoting each element. Example: `["/bin/bash", "-c", "echo DONE"]`.
   - Use either `shell` or `cmd`.
 - `cwd` (string): Working directory for the process.
 - `env` (map[string]string): Extra environment variables for the child process.
 - `add_path` (string list): Paths appended to `PATH` for the child process. Merged with any `env.PATH` or the current `PATH`.
 - `stop` (int): POSIX signal number to send when stopping (default 15/SIGTERM). Example: `2` for SIGINT.
-- `autostart` (bool): Start automatically when proctmux launches (runs in the detached session).
-- `autofocus` (bool): After starting via keybinding, focus the process pane.
+- `autostart` (bool): Start automatically when proctmux launches.
+- `autofocus` (bool): After starting via keybinding, focus the process output.
 - `description` (string): Short description shown in the UI footer.
-- `docs` (string): Free‑form text displayed in a tmux popup (`less -R`). Plain text and ANSI escapes work.
-- `categories` (string list): Tags for category filtering. Filter with `cat:<tag>` (comma‑separate for AND matching, e.g. `cat:build,backend`).
+- `docs` (string): Free-form text displayed in a popup (`less -R`). Plain text and ANSI escapes work.
+- `categories` (string list): Tags for category filtering. Filter with `cat:<tag>` (comma-separate for AND matching, e.g. `cat:build,backend`).
 - `meta_tags` (string list): Present for parity; not currently used by filtering logic.
 
 
