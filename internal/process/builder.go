@@ -10,10 +10,18 @@ import (
 )
 
 // buildCommand creates an exec.Cmd from a ProcessConfig
-// It supports either shell commands (using sh -c) or direct command execution
-func buildCommand(cfg *config.ProcessConfig) *exec.Cmd {
+// It supports either shell commands (using configured shell or sh -c) or direct command execution
+func buildCommand(cfg *config.ProcessConfig, globalConfig *config.ProcTmuxConfig) *exec.Cmd {
 	if cfg.Shell != "" {
-		return exec.Command("sh", "-c", cfg.Shell)
+		// Use global shell_cmd if configured, otherwise default to sh -c
+		shellCmd := []string{"sh", "-c"}
+		if globalConfig != nil && len(globalConfig.ShellCmd) > 0 {
+			shellCmd = globalConfig.ShellCmd
+		}
+
+		// Build command: shellCmd[0] shellCmd[1]... cfg.Shell
+		args := append(shellCmd[1:], cfg.Shell)
+		return exec.Command(shellCmd[0], args...)
 	}
 
 	if len(cfg.Cmd) > 0 {

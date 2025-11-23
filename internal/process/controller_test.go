@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewController(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 
 	if ctrl == nil {
 		t.Fatal("Expected controller to be created")
@@ -23,7 +23,7 @@ func TestNewController(t *testing.T) {
 }
 
 func TestController_GetProcess_NotFound(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 
 	_, err := ctrl.GetProcess(999)
 	if err == nil {
@@ -37,7 +37,7 @@ func TestController_GetProcess_NotFound(t *testing.T) {
 }
 
 func TestController_GetPID_NotFound(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 
 	pid := ctrl.GetPID(999)
 	if pid != -1 {
@@ -46,7 +46,7 @@ func TestController_GetPID_NotFound(t *testing.T) {
 }
 
 func TestController_GetProcessStatus_NotFound(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 
 	status := ctrl.GetProcessStatus(999)
 	if status != domain.StatusHalted {
@@ -55,7 +55,7 @@ func TestController_GetProcessStatus_NotFound(t *testing.T) {
 }
 
 func TestController_IsRunning_NotFound(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 
 	running := ctrl.IsRunning(999)
 	if running {
@@ -64,7 +64,7 @@ func TestController_IsRunning_NotFound(t *testing.T) {
 }
 
 func TestController_GetAllProcessIDs_Empty(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 
 	ids := ctrl.GetAllProcessIDs()
 	if len(ids) != 0 {
@@ -78,7 +78,7 @@ func TestController_GetAllProcessIDs_Empty(t *testing.T) {
 }
 
 func TestController_StopProcess_NotFound(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 
 	err := ctrl.StopProcess(999)
 	if err == nil {
@@ -92,7 +92,7 @@ func TestController_StopProcess_NotFound(t *testing.T) {
 }
 
 func TestController_GetScrollback_NotFound(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 
 	_, err := ctrl.GetScrollback(999)
 	if err == nil {
@@ -101,7 +101,7 @@ func TestController_GetScrollback_NotFound(t *testing.T) {
 }
 
 func TestController_GetReader_NotFound(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 
 	_, err := ctrl.GetReader(999)
 	if err == nil {
@@ -110,7 +110,7 @@ func TestController_GetReader_NotFound(t *testing.T) {
 }
 
 func TestController_GetWriter_NotFound(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 
 	_, err := ctrl.GetWriter(999)
 	if err == nil {

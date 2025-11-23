@@ -13,7 +13,7 @@ func TestBuildCommand_Shell(t *testing.T) {
 		Shell: "echo hello world",
 	}
 
-	cmd := buildCommand(cfg)
+	cmd := buildCommand(cfg, nil)
 
 	if cmd == nil {
 		t.Fatal("Expected command to be created")
@@ -43,7 +43,7 @@ func TestBuildCommand_CmdArray(t *testing.T) {
 		Cmd: []string{"/bin/ls", "-la", "/tmp"},
 	}
 
-	cmd := buildCommand(cfg)
+	cmd := buildCommand(cfg, nil)
 
 	if cmd == nil {
 		t.Fatal("Expected command to be created")
@@ -73,7 +73,7 @@ func TestBuildCommand_ShellPriority(t *testing.T) {
 		Cmd:   []string{"cmd", "array"},
 	}
 
-	cmd := buildCommand(cfg)
+	cmd := buildCommand(cfg, nil)
 
 	if cmd == nil {
 		t.Fatal("Expected command to be created")
@@ -100,7 +100,7 @@ func TestBuildCommand_ShellPriority(t *testing.T) {
 func TestBuildCommand_NeitherShellNorCmd(t *testing.T) {
 	cfg := &config.ProcessConfig{}
 
-	cmd := buildCommand(cfg)
+	cmd := buildCommand(cfg, nil)
 
 	if cmd != nil {
 		t.Error("Expected nil command when neither Shell nor Cmd is set")
@@ -112,7 +112,7 @@ func TestBuildCommand_EmptyCmdArray(t *testing.T) {
 		Cmd: []string{},
 	}
 
-	cmd := buildCommand(cfg)
+	cmd := buildCommand(cfg, nil)
 
 	if cmd != nil {
 		t.Error("Expected nil command when Cmd array is empty")
@@ -124,7 +124,7 @@ func TestBuildCommand_SingleElementCmd(t *testing.T) {
 		Cmd: []string{"/usr/bin/whoami"},
 	}
 
-	cmd := buildCommand(cfg)
+	cmd := buildCommand(cfg, nil)
 
 	if cmd == nil {
 		t.Fatal("Expected command to be created")
@@ -136,6 +136,57 @@ func TestBuildCommand_SingleElementCmd(t *testing.T) {
 
 	if len(cmd.Args) != 1 {
 		t.Errorf("Expected 1 arg, got %d", len(cmd.Args))
+	}
+}
+
+func TestBuildCommand_CustomShellCmd(t *testing.T) {
+	cfg := &config.ProcessConfig{
+		Shell: "echo -e '\\033[31mRed\\033[0m'",
+	}
+
+	globalConfig := &config.ProcTmuxConfig{
+		ShellCmd: []string{"/bin/bash", "-c"},
+	}
+
+	cmd := buildCommand(cfg, globalConfig)
+
+	if cmd == nil {
+		t.Fatal("Expected command to be created")
+	}
+
+	// Should use bash instead of sh
+	if !strings.Contains(cmd.Path, "bash") {
+		t.Errorf("Expected bash command, got %q", cmd.Path)
+	}
+
+	// Should have bash -c "shell command"
+	if len(cmd.Args) < 3 {
+		t.Fatalf("Expected at least 3 args, got %d", len(cmd.Args))
+	}
+
+	if cmd.Args[1] != "-c" {
+		t.Errorf("Expected second arg to be '-c', got %q", cmd.Args[1])
+	}
+
+	if cmd.Args[2] != cfg.Shell {
+		t.Errorf("Expected shell command as third arg, got %q", cmd.Args[2])
+	}
+}
+
+func TestBuildCommand_DefaultShellWhenNoGlobalConfig(t *testing.T) {
+	cfg := &config.ProcessConfig{
+		Shell: "echo test",
+	}
+
+	cmd := buildCommand(cfg, nil)
+
+	if cmd == nil {
+		t.Fatal("Expected command to be created")
+	}
+
+	// Should default to sh
+	if !strings.Contains(cmd.Path, "sh") {
+		t.Errorf("Expected sh command, got %q", cmd.Path)
 	}
 }
 

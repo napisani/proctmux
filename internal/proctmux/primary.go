@@ -69,7 +69,7 @@ func setupLogger(
 
 func NewPrimaryServer(cfg *config.ProcTmuxConfig, ipcServer IPCServerInterface) *PrimaryServer {
 	state := domain.NewAppState(cfg)
-	processController := process.NewController()
+	processController := process.NewController(cfg)
 
 	logWriter, err := setupLogger(cfg)
 	if err != nil {

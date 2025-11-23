@@ -17,14 +17,16 @@ import (
 
 // Controller manages a collection of process instances and controls their lifecycle
 type Controller struct {
-	processes map[int]*Instance
-	mu        sync.RWMutex
+	processes    map[int]*Instance
+	mu           sync.RWMutex
+	globalConfig *config.ProcTmuxConfig
 }
 
 // NewController creates a new process controller
-func NewController() *Controller {
+func NewController(globalConfig *config.ProcTmuxConfig) *Controller {
 	return &Controller{
-		processes: make(map[int]*Instance),
+		processes:    make(map[int]*Instance),
+		globalConfig: globalConfig,
 	}
 }
 
@@ -37,7 +39,7 @@ func (pc *Controller) StartProcess(id int, cfg *config.ProcessConfig) (*Instance
 		return nil, fmt.Errorf("process %d already exists", id)
 	}
 
-	cmd := buildCommand(cfg)
+	cmd := buildCommand(cfg, pc.globalConfig)
 	if cmd == nil {
 		return nil, fmt.Errorf("invalid process config: no shell or cmd specified")
 	}

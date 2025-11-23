@@ -122,8 +122,8 @@ Full example with all configuration options:
 
 ```yaml
 general:
-  detached_session_name: _proctmux   # Detached tmux session hosting background panes
-  kill_existing_session: true        # Replace existing detached session if present
+  detached_session_name: _proctmux   # Session name for background processes
+  kill_existing_session: true        # Replace existing session if present
 
 layout:
   processes_list_width: 31           # Left list width (percentage 1–99)
@@ -230,8 +230,8 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
 ### Top‑level
 
 - `general`:
-  - `detached_session_name` (string): Name of the detached session used for background panes. Default `_proctmux`.
-  - `kill_existing_session` (bool): If the detached session already exists, kill and recreate it. If false and it exists, startup fails.
+  - `detached_session_name` (string): Name for the background process session. Default `_proctmux`.
+  - `kill_existing_session` (bool): If a session with this name already exists, kill and recreate it. If false and it exists, startup fails.
 - `layout`:
   - `processes_list_width` (int): Percent width of the left process list (1-99). The right pane uses the remainder.
   - `hide_help` (bool): Hide the help/footer text in the UI.
@@ -239,7 +239,7 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
   - `sort_process_list_alpha` (bool): Sort the list alphabetically.
   - `sort_process_list_running_first` (bool): When sorting, place running processes first.
   - `category_search_prefix` (string): Prefix to activate category filtering. Default `cat:`.
-  - `placeholder_banner` (string): Optional ASCII banner for the right pane before any pane joins.
+  - `placeholder_banner` (string): Optional ASCII banner for the right pane before selecting a process.
   - `enable_debug_process_info` (bool): Show extra details (e.g., categories) in the process list.
 - `style`:
   - `pointer_char` (string): Selection indicator in the list (default `>`).
@@ -335,11 +335,10 @@ Notes:
 
 ## Tips & Troubleshooting
 
-- Session already exists: if the detached session name is already in use and `kill_existing_session` is false, startup fails. Set it to true to replace the session.
-- Run inside tmux: proctmux requires a current tmux pane and session (it calls `tmux display-message -p`).
-- Remain‑on‑exit: proctmux enables tmux `remain-on-exit` globally while running; it restores the previous setting on exit.
-- Stop behavior: `stop` uses a numeric signal. If not specified, proctmux sends SIGTERM (15) and, if the process is still running after ~3s, escalates to SIGKILL (9). Set `stop: 2` for Ctrl‑C‑like behavior and no auto-escalation.
-- Colors: `status_*_color` accepts common names (`red`, `brightblue`, `ansigreen`) and hex (`#rrggbb`).
+- **Process output**: Process output is displayed using your terminal emulator's native rendering. Use your terminal's built-in features for scrolling, copy/paste, and searching.
+- **Stop behavior**: `stop` uses a numeric signal. If not specified, proctmux sends SIGTERM (15) and, if the process is still running after ~3s, escalates to SIGKILL (9). Set `stop: 2` for Ctrl-C-like behavior and no auto-escalation.
+- **Colors**: `status_*_color` accepts common names (`red`, `brightblue`, `ansigreen`) and hex (`#rrggbb`).
+- **Client/Server mode**: Both terminals must be in the same directory with the same `proctmux.yaml` file for synchronized operation.
 
 ## Feature wishlist
 - [ ] support for templated processes 
