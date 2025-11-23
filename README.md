@@ -41,14 +41,83 @@ make build
 ### Nix
 
 ```bash
-# Run directly via nix
-nix run github:napisani/proctmux
+# Temporary shell session (recommended for trying it out)
+nix shell github:napisani/proctmux --refresh
+
+# After the above command, proctmux is available in your current shell
+proctmux
+
+# Run directly without shell session (one-off execution)
+nix run github:napisani/proctmux --refresh
+
+# Permanent installation
+nix profile install github:napisani/proctmux
+
+# Update installed version
+nix profile upgrade '.*proctmux.*'
+
+# Run a specific version
+nix shell github:napisani/proctmux/v0.1.0
 ```
 
 
-## Quickstart
+## Getting Started
 
-Create `proctmux.yaml` in your project directory:
+### 1. Create a Configuration File
+
+Create `proctmux.yaml` in your project directory (or any directory where you want to manage processes):
+
+```yaml
+procs:
+  "example process":
+    shell: "echo 'Hello from proctmux' && sleep 10"
+    autostart: true
+    description: "A simple example process"
+```
+
+See the [Configuration Reference](#configuration-reference) below for all available options.
+
+### 2. Start proctmux
+
+proctmux can run in two modes:
+
+**Single Terminal Mode (Simple)**
+```bash
+# Just run proctmux - it will start with a TUI
+proctmux
+```
+
+**Split Terminal Mode (Advanced)**
+
+For a split-screen setup with separate client/server:
+
+Terminal 1 (Primary/Server):
+```bash
+proctmux
+```
+
+Terminal 2 (Client - in the same directory):
+```bash
+proctmux --client
+```
+
+Both terminals will show the same TUI and stay synchronized. This is useful for monitoring processes from multiple locations.
+
+### 3. Use the TUI
+
+Once running, use these keybindings to control your processes:
+- **Start**: `s` or `enter`
+- **Stop**: `x`
+- **Restart**: `r`
+- **Filter**: `/` (fuzzy search)
+- **Quit**: `q` or `ctrl+c`
+
+See [Keybindings](#keybindings-defaults) for the full list.
+
+
+## Example Configuration
+
+Full example with all configuration options:
 
 ```yaml
 general:
@@ -113,8 +182,6 @@ procs:
     description: "Run using cmd array"
     categories: ["demo"]
 ```
-
-Run proctmux inside tmux and use the keybindings below to start/stop and filter.
 
 
 ## Keybindings (defaults)
