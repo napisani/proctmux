@@ -1,29 +1,47 @@
 # proctmux
 
-A Go TUI for managing long‑running processes and scripts, built on top of tmux. It provides a searchable list of defined processes, starts them in real tmux panes/windows, and exposes an optional HTTP signal server and CLI for remote control.
+A terminal-based process manager with an interactive TUI for managing long‑running processes and scripts. While it can integrate with tmux for advanced features (split panes, session management), proctmux works in any modern terminal. It provides a searchable list of defined processes, manages their lifecycle, and exposes an optional HTTP signal server and CLI for remote control.
 
-Inspired by https://github.com/napisani/procmux, but using tmux as the terminal engine so you get native tmux features (split panes, remain‑on‑exit, etc.).
+Inspired by https://github.com/napisani/procmux, with optional tmux integration for users who want native tmux features (split panes, remain‑on‑exit, detached sessions, etc.).
 
 
 ## Requirements
 
-- tmux >= 3.x installed and available on PATH
-- Run proctmux inside an existing tmux session (it needs the "current pane"/"current session")
-- Go 1.22+ to build from source (or use the provided Makefile)
 - **Unix-like operating system** (Linux, macOS, BSD) - Windows is not supported
+- **Optional**: tmux >= 3.x for tmux integration features
+  - If using tmux mode: Run proctmux inside an existing tmux session
+- Go 1.22+ to build from source (if not using pre-built binaries)
 
 
 ## Installation
+
+### macOS (Homebrew)
+
+```bash
+# Add the proctmux tap
+brew tap napisani/proctmux
+
+# Install proctmux
+brew install proctmux
+
+# Run (works in any terminal; tmux optional)
+proctmux
+```
+
+### Linux / Build from Source
 
 ```bash
 # Build a local binary
 make build
 
-# Run (inside an existing tmux session)
+# Run (works in any terminal; tmux optional)
 ./bin/proctmux        # same as: proctmux start
+```
 
+### Nix
 
-# Or use nix to run 
+```bash
+# Run directly via nix
 nix run github:napisani/proctmux
 ```
 
@@ -267,6 +285,19 @@ Notes:
 make test
 ```
 
+### Setting Up Development Environment
+
+Install git hooks to automate common tasks:
+
+```bash
+make install-hooks
+```
+
+This installs:
+- **pre-commit hook**: Automatically runs `make update-vendor-hash` when you commit changes to `go.mod` or `go.sum`
+
+See [.githooks/README.md](.githooks/README.md) for more details.
+
 ### Building from Source
 
 ```bash
@@ -278,6 +309,22 @@ make build-all
 
 # Binary will be in ./bin/proctmux
 ```
+
+### Updating Nix Flake Dependencies
+
+If you update Go dependencies (via `go get` or `go mod tidy`), you must update the `vendorHash` in `flake.nix`:
+
+```bash
+# After updating go.mod/go.sum
+make update-vendor-hash
+```
+
+This command:
+- Automatically calculates the correct vendorHash for your dependencies
+- Updates `flake.nix` with the new hash
+- Verifies the Nix build works
+
+**Important**: Run this before creating a release if dependencies have changed, otherwise Nix users will get build errors.
 
 ### Creating a Release
 
@@ -293,15 +340,18 @@ To create a new release:
 # 1. Update version in Makefile if needed
 vim Makefile  # Update VERSION=x.y.z
 
-# 2. Commit any changes
+# 2. If you've updated dependencies, update the Nix vendorHash
+make update-vendor-hash
+
+# 3. Commit any changes
 git add .
 git commit -m "Prepare release vX.Y.Z"
 
-# 3. Create and push a tag
+# 4. Create and push a tag
 git tag v1.0.0
 git push origin v1.0.0
 
-# 4. Watch GitHub Actions build and publish the release
+# 5. Watch GitHub Actions build and publish the release
 # Visit: https://github.com/YOUR_USERNAME/proctmux/actions
 ```
 

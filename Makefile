@@ -60,6 +60,50 @@ tidy:
 	@echo "Tidying up dependencies..."
 	go mod tidy 
 
+# Update the vendorHash in flake.nix to match current dependencies
+# This is needed when go.mod/go.sum change and Nix builds fail with hash mismatch
+# Usage: make update-vendor-hash
+.PHONY: update-vendor-hash
+update-vendor-hash:
+	@echo "Updating vendorHash in flake.nix..."
+	@echo "Step 1: Setting vendorHash to pkgs.lib.fakeHash..."
+	@sed -i.bak 's/vendorHash = ".*";/vendorHash = pkgs.lib.fakeHash;/' flake.nix
+	@echo "Step 2: Building flake to get correct hash (this will fail, that's expected)..."
+	@CORRECT_HASH=$$(nix build .#default 2>&1 | grep -E '^\s+got:\s+' | sed 's/.*got:[[:space:]]*//'); \
+	if [ -z "$$CORRECT_HASH" ]; then \
+		echo "Error: Could not extract hash from nix build output"; \
+		echo "Restoring original flake.nix..."; \
+		mv flake.nix.bak flake.nix; \
+		exit 1; \
+	fi; \
+	echo "Step 3: Updating flake.nix with correct hash: $$CORRECT_HASH"; \
+	sed -i.bak2 "s|vendorHash = pkgs.lib.fakeHash;|vendorHash = \"$$CORRECT_HASH\";|" flake.nix; \
+	rm -f flake.nix.bak flake.nix.bak2
+	@echo "Step 4: Verifying the build works..."
+	@nix build .#default && echo "✓ vendorHash updated successfully!" || (echo "✗ Build failed, please check flake.nix"; exit 1)
+
+# Install git hooks from .githooks/ directory
+.PHONY: install-hooks
+install-hooks:
+	@echo "Installing git hooks..."
+	@if [ ! -d .githooks ]; then \
+		echo "Error: .githooks directory not found"; \
+		exit 1; \
+	fi
+	@for hook in .githooks/*; do \
+		if [ -f "$$hook" ] && [ "$$(basename "$$hook")" != "README.md" ]; then \
+			hook_name=$$(basename "$$hook"); \
+			echo "Installing $$hook_name..."; \
+			cp "$$hook" .git/hooks/; \
+			chmod +x .git/hooks/$$hook_name; \
+		fi; \
+	done
+	@echo "✓ Git hooks installed successfully!"
+	@echo ""
+	@echo "Installed hooks:"
+	@ls -1 .githooks/ | grep -v README.md
+
+
 .PHONY: test
 test:
 	@echo "Running tests..."
@@ -105,6 +149,8 @@ help:
 	@echo "  make tidy       - Tidy up dependencies"
 	@echo "  make test       - Run tests"
 	@echo "  make test-race  - Run tests with race detector"
+	@echo "  make update-vendor-hash - Update vendorHash in flake.nix for Nix builds"
+	@echo "  make install-hooks - Install git hooks from .githooks/ directory"
 	@echo "  make help       - Show this help message"
 
 

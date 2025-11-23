@@ -1,0 +1,31 @@
+#!/bin/bash
+# Pre-commit hook to update vendorHash in flake.nix when Go dependencies change
+
+# Check if go.mod or go.sum are being committed
+if git diff --cached --name-only | grep -qE '^go\.(mod|sum)$'; then
+    echo "🔍 Detected changes to go.mod or go.sum"
+    echo "📦 Updating vendorHash in flake.nix..."
+    
+    # Run make update-vendor-hash
+    if make update-vendor-hash; then
+        echo "✅ vendorHash updated successfully"
+        
+        # Check if flake.nix was modified
+        if git diff --name-only | grep -q "flake.nix"; then
+            echo "📝 Staging updated flake.nix"
+            git add flake.nix
+        fi
+    else
+        echo "❌ Failed to update vendorHash"
+        echo "   You may need to run 'make update-vendor-hash' manually"
+        echo "   Continue with commit anyway? (y/n)"
+        read -r response
+        if [[ ! "$response" =~ ^[Yy]$ ]]; then
+            echo "Commit aborted."
+            exit 1
+        fi
+    fi
+else
+    # No go.mod/go.sum changes, skip the check
+    exit 0
+fi

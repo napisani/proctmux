@@ -26,9 +26,7 @@
       in {
         packages.default = pkgs.buildGoModule {
           pname = "proctmux";
-          inherit version;
-          # Use Go 1.24 instead of default Go
-          go = go;
+          inherit version go;
           # In 'nix develop', we don't need a copy of the source tree
           # in the Nix store.
           src = ./.;
@@ -43,7 +41,7 @@
           # remeber to bump this hash when your dependencies change.
           #vendorSha256 = pkgs.lib.fakeSha256;
 
-          vendorHash = "sha256-Md8d9cSv4EaHbdARfXE7sLdqq1uveCH+3rfZqufB4tA=";
+          vendorHash = "sha256-ZTI2KhE9xzUzUlotogZYi7APcsJmd9y/SZm3Kr9/GOc=";
         };
 
         devShells.default = pkgs.mkShell {
