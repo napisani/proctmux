@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/nick/proctmux/internal/config"
 )
@@ -27,18 +28,29 @@ func buildCommand(cfg *config.ProcessConfig) *exec.Cmd {
 func buildEnvironment(cfg *config.ProcessConfig) []string {
 	env := os.Environ()
 
-	if cfg.Env != nil {
-		for k, v := range cfg.Env {
-			env = append(env, fmt.Sprintf("%s=%s", k, v))
-		}
-	}
-
+	// Handle AddPath - need to remove existing PATH and add modified one
 	if len(cfg.AddPath) > 0 {
 		currentPath := os.Getenv("PATH")
 		for _, p := range cfg.AddPath {
 			currentPath = fmt.Sprintf("%s:%s", currentPath, p)
 		}
+
+		// Filter out existing PATH entry
+		filteredEnv := make([]string, 0, len(env))
+		for _, e := range env {
+			if !strings.HasPrefix(e, "PATH=") {
+				filteredEnv = append(filteredEnv, e)
+			}
+		}
+		env = filteredEnv
 		env = append(env, fmt.Sprintf("PATH=%s", currentPath))
+	}
+
+	// Add/override custom environment variables
+	if cfg.Env != nil {
+		for k, v := range cfg.Env {
+			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		}
 	}
 
 	return env

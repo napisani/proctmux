@@ -84,6 +84,13 @@ watch-test:
 	@echo "Listing current tmux pane..."
 	@tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'
 
+# Run in tmux split - client in current pane, primary to the right
+.PHONY: tmux-run
+tmux-run: build
+	@echo "Starting proctmux in tmux split..."
+	@tmux split-window -h "./bin/$(BINARY_NAME)"
+	@./bin/$(BINARY_NAME) --client
+
 # Help command
 .PHONY: help
 help:
