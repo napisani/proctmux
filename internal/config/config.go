@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -36,7 +37,11 @@ func LoadConfig(path string) (*ProcTmuxConfig, error) {
 	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
 		return nil, err
 	}
-
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	cfg.FilePath = absPath
 	cfg = applyDefaults(cfg)
 	return &cfg, nil
 }

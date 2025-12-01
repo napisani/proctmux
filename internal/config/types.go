@@ -41,6 +41,7 @@ type StyleConfig struct {
 }
 
 type ProcTmuxConfig struct {
+	FilePath   string
 	Keybinding KeybindingConfig         `yaml:"keybinding"`
 	Layout     LayoutConfig             `yaml:"layout"`
 	Style      StyleConfig              `yaml:"style"`

@@ -163,7 +163,7 @@ func (d procDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		text = fmt.Sprintf("%s [%s] PID:%d%s", it.view.Label, it.view.Status.String(), it.view.PID, cat)
 	}
 
-	fmt.Fprintf(w, "%s%s %s\n", pointer, markerStyle.Render(marker), style.Render(text))
+	fmt.Fprintf(w, "%s%s %s", pointer, markerStyle.Render(marker), style.Render(text))
 }
 
 func (c *processListComponent) ensure() {
