@@ -330,7 +330,9 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 		log.Printf("Process %d (PID: %d) exited", procID, pid)
 		// even though the processes has exited, its not clear if it was stopped via the proctmux app
 		// or crashed/terminated externally, so ensure to stop it properly here.
-		m.processController.StopProcess(procID)
+		if err := m.processController.CleanupProcess(procID); err != nil {
+			log.Printf("Cleanup of process %d after exit failed: %v", procID, err)
+		}
 
 		// Broadcast state change to notify clients that process has exited
 		m.stateMu.Lock()

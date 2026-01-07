@@ -62,6 +62,7 @@ type ProcessConfig struct {
 	Cwd          string            `yaml:"cwd"`
 	Env          map[string]string `yaml:"env"`
 	Stop         int               `yaml:"stop"`
+	StopTimeout  int               `yaml:"stop_timeout_ms"`
 	Autostart    bool              `yaml:"autostart"`
 	Autofocus    bool              `yaml:"autofocus"`
 	Description  string            `yaml:"description"`

@@ -181,7 +181,9 @@ procs:
   "echo cmd list":
     cmd: ["/bin/bash", "-c", "echo DONE!"]
     cwd: "/tmp"
-    stop: 2         # SIGINT
+    stop: 2              # SIGINT on stop
+    stop_timeout_ms: 5000 # Escalate to SIGKILL after 5s if still running
+    on_kill: ["docker", "kill", "example-stack"]
     description: "Run using cmd array"
     categories: ["demo"]
 ```
@@ -268,6 +270,8 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
 - `env` (map[string]string): Extra environment variables for the child process.
 - `add_path` (string list): Paths appended to `PATH` for the child process. Merged with any `env.PATH` or the current `PATH`.
 - `stop` (int): POSIX signal number to send when stopping (default 15/SIGTERM). Example: `2` for SIGINT.
+- `stop_timeout_ms` (int): How long to wait after sending the stop signal before escalating to SIGKILL (default 3000ms).
+- `on_kill` (string list): Command executed once after a user stops the process. Runs with the process's `cwd`/`env`. Example: `["docker", "kill", "web"]`.
 - `autostart` (bool): Start automatically when proctmux launches.
 - `autofocus` (bool): After starting via keybinding, focus the process output.
 - `description` (string): Short description shown in the UI footer.
@@ -338,7 +342,7 @@ Notes:
 ## Tips & Troubleshooting
 
 - **Process output**: Process output is displayed using your terminal emulator's native rendering. Use your terminal's built-in features for scrolling, copy/paste, and searching.
-- **Stop behavior**: `stop` uses a numeric signal. If not specified, proctmux sends SIGTERM (15) and, if the process is still running after ~3s, escalates to SIGKILL (9). Set `stop: 2` for Ctrl-C-like behavior and no auto-escalation.
+- **Stop behavior**: `stop` uses a numeric signal. If unspecified, proctmux sends SIGTERM (15) and waits `stop_timeout_ms` (default 3000ms) before escalating to SIGKILL (9). Override the signal/timeout per process and optionally run an `on_kill` command for post-stop cleanup.
 - **Colors**: `status_*_color` accepts common names (`red`, `brightblue`, `ansigreen`) and hex (`#rrggbb`).
 - **Client/Server mode**: Both terminals must be in the same directory with the same `proctmux.yaml` file for synchronized operation.
 

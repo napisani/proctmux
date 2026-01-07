@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/nick/proctmux/internal/buffer"
@@ -85,6 +86,15 @@ type Instance struct {
 	// This allows users to see recent output when switching between processes
 	// The ring buffer also supports live readers for streaming new data
 	scrollback *buffer.RingBuffer
+
+	// stopMu guards process shutdown and cleanup to prevent double execution
+	stopMu sync.Mutex
+
+	// cleaned indicates whether the instance has been fully cleaned up
+	cleaned bool
+
+	// onKillOnce ensures we only execute the on-kill hook a single time
+	onKillOnce sync.Once
 }
 
 // GetPID returns the process ID of the running process, or -1 if not started

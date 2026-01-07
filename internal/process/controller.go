@@ -2,11 +2,14 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -14,6 +17,16 @@ import (
 	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/domain"
 )
+
+const (
+	defaultStopTimeout = 3 * time.Second
+)
+
+type stopOptions struct {
+	sendSignal   bool
+	runOnKill    bool
+	allowMissing bool
+}
 
 // Controller manages a collection of process instances and controls their lifecycle
 type Controller struct {
@@ -130,46 +143,103 @@ func (pc *Controller) GetProcess(id int) (*Instance, error) {
 	return instance, nil
 }
 
-// StopProcess stops the process with the given ID
+// StopProcess stops the process with the given ID, sending a graceful signal
+// and executing any configured on-kill hook exactly once.
 func (pc *Controller) StopProcess(id int) error {
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
+	return pc.stopProcess(id, stopOptions{
+		sendSignal:   true,
+		runOnKill:    true,
+		allowMissing: false,
+	})
+}
 
+// CleanupProcess releases controller state for a process that has already
+// exited externally. This does not trigger on-kill hooks.
+func (pc *Controller) CleanupProcess(id int) error {
+	return pc.stopProcess(id, stopOptions{
+		sendSignal:   false,
+		runOnKill:    false,
+		allowMissing: true,
+	})
+}
+
+func (pc *Controller) stopProcess(id int, opts stopOptions) error {
+	pc.mu.RLock()
 	instance, exists := pc.processes[id]
+	pc.mu.RUnlock()
+
 	if !exists {
+		if opts.allowMissing {
+			return nil
+		}
 		return fmt.Errorf("process %d not found", id)
 	}
 
-	if instance.cmd.Process != nil {
-		if err := instance.cmd.Process.Kill(); err != nil {
-			if err.Error() == "os: process already finished" {
-				log.Printf("Process %d already finished", id)
-			} else {
-				return fmt.Errorf("failed to kill process: %w", err)
-			}
+	instance.stopMu.Lock()
+	if instance.cleaned {
+		instance.stopMu.Unlock()
+		return nil
+	}
+
+	cfg := instance.config
+	process := instance.cmd.Process
+	pid := -1
+	if process != nil {
+		pid = process.Pid
+	}
+
+	if process != nil && opts.sendSignal {
+		sig := resolveStopSignal(cfg)
+		log.Printf("Sending signal %d to process %d (PID: %d)", sig, id, pid)
+		if err := process.Signal(sig); err != nil && !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+			log.Printf("Failed to send signal %d to process %d: %v", sig, id, err)
 		}
 
-		// Wait for process to exit (with timeout), then run on-kill command
-		go func() {
-			select {
-			case <-instance.exitChan:
-				log.Printf("Process %d exited, triggering on-kill command", id)
-				executeOnKillCommand(instance.config, id)
-			case <-time.After(5 * time.Second):
-				log.Printf("Process %d did not exit within timeout, running on-kill command anyway", id)
-				executeOnKillCommand(instance.config, id)
+		timeout := resolveStopTimeout(cfg)
+		if !waitForExit(instance.exitChan, timeout) {
+			log.Printf("Process %d did not exit after %s; escalating to SIGKILL", id, timeout)
+			if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+				log.Printf("Failed to kill process %d: %v", id, err)
+			} else {
+				if !waitForExit(instance.exitChan, 2*time.Second) {
+					log.Printf("Process %d still running after SIGKILL escalation", id)
+				}
 			}
-		}()
+		}
+	} else if process != nil {
+		waitForExit(instance.exitChan, 0)
 	}
 
 	if instance.File != nil {
 		instance.File.Close()
+		instance.File = nil
 	}
 
-	delete(pc.processes, id)
-	log.Printf("Stopped process %d", id)
+	if instance.cmd.Process != nil {
+		instance.cmd.Process.Release()
+		instance.cmd.Process = nil
+	}
 
-	return nil
+	instance.cleaned = true
+
+	pc.mu.Lock()
+	delete(pc.processes, id)
+	pc.mu.Unlock()
+
+	instance.stopMu.Unlock()
+
+	var hookErr error
+	if opts.runOnKill {
+		instance.onKillOnce.Do(func() {
+			hookErr = executeOnKillCommand(cfg, id)
+		})
+		if hookErr != nil {
+			log.Printf("On-kill command for process %d failed: %v", id, hookErr)
+		}
+	}
+
+	log.Printf("Stopped process %d", id)
+	return hookErr
 }
 
 // GetScrollback returns the scrollback buffer contents for the given process
@@ -274,34 +344,68 @@ func (pc *Controller) GetProcessStatus(id int) domain.ProcessStatus {
 	return domain.StatusHalted
 }
 
-// executeOnKillCommand runs the on-kill command in the background with a timeout
-func executeOnKillCommand(cfg *config.ProcessConfig, processID int) {
-	if len(cfg.OnKill) == 0 {
-		return
+func resolveStopSignal(cfg *config.ProcessConfig) syscall.Signal {
+	if cfg != nil && cfg.Stop > 0 {
+		return syscall.Signal(cfg.Stop)
+	}
+	return syscall.SIGTERM
+}
+
+func resolveStopTimeout(cfg *config.ProcessConfig) time.Duration {
+	if cfg != nil && cfg.StopTimeout > 0 {
+		return time.Duration(cfg.StopTimeout) * time.Millisecond
+	}
+	return defaultStopTimeout
+}
+
+func waitForExit(exitCh <-chan error, timeout time.Duration) bool {
+	if exitCh == nil {
+		return true
 	}
 
-	go func() {
-		log.Printf("Executing on-kill command for process %d: %v", processID, cfg.OnKill)
-
-		// Create command with 30 second timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		cmd := exec.CommandContext(ctx, cfg.OnKill[0], cfg.OnKill[1:]...)
-
-		// Use same working directory as original process
-		if cfg.Cwd != "" {
-			cmd.Dir = cfg.Cwd
+	if timeout <= 0 {
+		select {
+		case <-exitCh:
+			return true
+		default:
+			return false
 		}
+	}
 
-		// Use same environment as original process
-		cmd.Env = buildEnvironment(cfg)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
-		// Run the command
-		if err := cmd.Run(); err != nil {
-			log.Printf("On-kill command for process %d failed: %v", processID, err)
-		} else {
-			log.Printf("On-kill command for process %d completed successfully", processID)
-		}
-	}()
+	select {
+	case <-exitCh:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+// executeOnKillCommand runs the on-kill command with a timeout and returns any error
+func executeOnKillCommand(cfg *config.ProcessConfig, processID int) error {
+	if cfg == nil || len(cfg.OnKill) == 0 {
+		return nil
+	}
+
+	log.Printf("Executing on-kill command for process %d: %v", processID, cfg.OnKill)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, cfg.OnKill[0], cfg.OnKill[1:]...)
+
+	if cfg.Cwd != "" {
+		cmd.Dir = cfg.Cwd
+	}
+
+	cmd.Env = buildEnvironment(cfg)
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("on-kill command %v failed: %w", cfg.OnKill, err)
+	}
+
+	log.Printf("On-kill command for process %d completed successfully", processID)
+	return nil
 }
