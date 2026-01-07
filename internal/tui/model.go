@@ -82,12 +82,29 @@ func (m *ClientModel) rebuildProcessList() {
 }
 
 func (m *ClientModel) headerHeight() int {
-	h := 0
-	h += lipgloss.Height(helpPanel(m.domain.Config))
-	h += lipgloss.Height(processDescriptionPanel(m.domain.Config, m.domain.GetProcessByID(m.ui.ActiveProcID)))
-	h += lipgloss.Height(messagesPanel(m.ui.Info, m.ui.Messages))
-	h += lipgloss.Height(m.filterUI.View())
-	return h
+	height := 0
+
+	helpView := m.helpPanelBubbleTea()
+	if helpView != "" {
+		height += lipgloss.Height(helpView)
+	}
+
+	descView := processDescriptionPanel(m.domain.Config, m.domain.GetProcessByID(m.ui.ActiveProcID))
+	if descView != "" {
+		height += lipgloss.Height(descView)
+	}
+
+	messagesView := messagesPanel(m.ui.Info, m.ui.Messages)
+	if messagesView != "" {
+		height += lipgloss.Height(messagesView)
+	}
+
+	filterView := m.filterUI.View()
+	if filterView != "" {
+		height += lipgloss.Height(filterView)
+	}
+
+	return height
 }
 
 func (m *ClientModel) updateLayout() {
