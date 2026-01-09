@@ -100,9 +100,8 @@ func (m *ClientModel) headerHeight() int {
 	}
 
 	filterView := m.filterUI.View()
-	if filterView != "" {
-		height += lipgloss.Height(filterView)
-	}
+	// always include the spot for the filter to prevent shifting
+	height += lipgloss.Height(filterView)
 
 	return height
 }
