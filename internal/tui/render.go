@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/domain"
@@ -297,20 +299,23 @@ func (m ClientModel) helpPanelBubbleTea() string {
 	return lipgloss.JoinVertical(lipgloss.Left, helpView, modeInfo)
 }
 
-func messagesPanel(info string, msgs []string) string {
+func messagesPanel(width int, info string, msgs []string) string {
 	if info == "" && len(msgs) == 0 {
 		return ""
 	}
 
-	var parts []string
-
-	// Info message
-	if info != "" {
-		infoStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
-		parts = append(parts, infoStyle.Render(info))
+	if width < 1 {
+		width = 1
 	}
 
-	// Messages list
+	var parts []string
+
+	if info != "" {
+		wrappedInfo := wordwrap.String(info, width)
+		infoStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
+		parts = append(parts, infoStyle.Render(wrappedInfo))
+	}
+
 	if len(msgs) > 0 {
 		headerStyle := lipgloss.NewStyle().Bold(true)
 		parts = append(parts, headerStyle.Render("Messages:"))
@@ -322,26 +327,65 @@ func messagesPanel(info string, msgs []string) string {
 
 		msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // gray
 		for _, m := range msgs[start:] {
-			parts = append(parts, msgStyle.Render("- "+m))
+			bullet := wrapBulletLine(m, width)
+			parts = append(parts, msgStyle.Render(bullet))
 		}
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-func processDescriptionPanel(cfg *config.ProcTmuxConfig, proc *domain.Process) string {
+func wrapBulletLine(text string, width int) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "- "
+	}
+
+	if width <= 2 {
+		return "- " + text
+	}
+
+	wrapWidth := width - 2
+	if wrapWidth < 1 {
+		wrapWidth = 1
+	}
+
+	wrapped := wordwrap.String(text, wrapWidth)
+	lines := strings.Split(wrapped, "\n")
+	if len(lines) == 0 {
+		return "- "
+	}
+
+	var result []string
+	result = append(result, "- "+lines[0])
+	for _, line := range lines[1:] {
+		result = append(result, "  "+line)
+	}
+
+	return strings.Join(result, "\n")
+}
+
+func processDescriptionPanel(cfg *config.ProcTmuxConfig, proc *domain.Process, width int) string {
 	if cfg.Layout.HideProcessDescriptionPanel {
 		return ""
 	}
-	if proc == nil || proc.Config == nil || len(strings.TrimSpace(proc.Config.Description)) == 0 {
+	if proc == nil || proc.Config == nil {
 		return ""
+	}
+
+	desc := strings.TrimSpace(proc.Config.Description)
+	if desc == "" {
+		return ""
+	}
+
+	if width > 0 {
+		desc = wordwrap.String(desc, width)
 	}
 
 	descStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("7")). // white/light gray
 		Italic(true)
 
-	desc := strings.TrimSpace(proc.Config.Description)
 	return descStyle.Render(desc)
 }
 
@@ -363,18 +407,26 @@ func (m ClientModel) View() string {
 	// Build all panels - each component is responsible for its own content
 	var panels []string
 
+	now := time.Now()
+
+	panelWidth := m.termWidth
+	if panelWidth <= 0 {
+		panelWidth = 80
+	}
+
 	// Help panel - hidden by default, toggled with '?'
 	help := m.helpPanelBubbleTea()
 	if help != "" {
 		panels = append(panels, help)
 	}
 
-	desc := processDescriptionPanel(m.domain.Config, m.domain.GetProcessByID(m.ui.ActiveProcID))
+	desc := processDescriptionPanel(m.domain.Config, m.domain.GetProcessByID(m.ui.ActiveProcID), panelWidth)
 	if desc != "" {
 		panels = append(panels, desc)
 	}
 
-	msgs := messagesPanel(m.ui.Info, m.ui.Messages)
+	visibleMsgs := m.visibleMessages(now)
+	msgs := messagesPanel(panelWidth, m.ui.Info, visibleMsgs)
 	if msgs != "" {
 		panels = append(panels, msgs)
 	}

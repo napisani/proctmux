@@ -157,8 +157,20 @@ procs:
     shell: "echo '<first_echo:some default>' && echo '<second_echo>'"
     autostart: false 
     description: 'test interpolation'
+ 
+  "intentional failure":
+    cmd:
+      - "/bin/bash"
+      - "-c"
+      - "echo 'triggering failure' >&2; exit 1"
+    autostart: false
+    description: 'intentional failure to surface error messages'
+    categories:
+      - 'diagnostic'
+      - 'error'
 
 signal_server:
+
   enable: true
 log_file: "/tmp/proctmux.log"
 stdout_debug_log_file: "/tmp/proctmux_stdout.log"

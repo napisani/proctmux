@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"time"
+
 	"github.com/charmbracelet/bubbles/help"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -8,9 +10,17 @@ import (
 	"github.com/nick/proctmux/internal/domain"
 )
 
+const messageTimeout = 5 * time.Second
+
+// timedMessage tracks temporary UI messages with an expiry.
+type timedMessage struct {
+	Text      string
+	ExpiresAt time.Time
+}
+
 // UIState holds the UI-specific state for the client TUI
 type UIState struct {
-	Messages           []string
+	Messages           []timedMessage
 	FilterText         string
 	EnteringFilterText bool
 	ShowOnlyRunning    bool // Toggle between showing all processes vs only running ones
@@ -51,12 +61,55 @@ type clientStateUpdateMsg struct {
 	processViews []domain.ProcessView
 }
 
+type pruneMessagesMsg struct{}
+
+func (m *ClientModel) addErrorMessage(text string) tea.Cmd {
+	now := time.Now()
+	m.pruneExpiredMessages(now)
+
+	entry := timedMessage{Text: text, ExpiresAt: now.Add(messageTimeout)}
+	m.ui.Messages = append(m.ui.Messages, entry)
+
+	return tea.Tick(messageTimeout, func(time.Time) tea.Msg {
+		return pruneMessagesMsg{}
+	})
+}
+
+func (m *ClientModel) pruneExpiredMessages(now time.Time) {
+	if len(m.ui.Messages) == 0 {
+		return
+	}
+
+	filtered := m.ui.Messages[:0]
+	for _, msg := range m.ui.Messages {
+		if now.Before(msg.ExpiresAt) {
+			filtered = append(filtered, msg)
+		}
+	}
+	m.ui.Messages = filtered
+}
+
+func (m *ClientModel) visibleMessages(now time.Time) []string {
+	if len(m.ui.Messages) == 0 {
+		return nil
+	}
+
+	texts := make([]string, 0, len(m.ui.Messages))
+	for _, msg := range m.ui.Messages {
+		if now.Before(msg.ExpiresAt) {
+			texts = append(texts, msg.Text)
+		}
+	}
+
+	return texts
+}
+
 func NewClientModel(client IPCClient, state *domain.AppState) ClientModel {
 	m := ClientModel{
 		client:       client,
 		domain:       state,
 		processViews: []domain.ProcessView{},
-		ui:           UIState{Messages: []string{}, ActiveProcID: state.CurrentProcID},
+		ui:           UIState{Messages: []timedMessage{}, ActiveProcID: state.CurrentProcID},
 		keys:         NewKeyMap(state.Config.Keybinding),
 		help:         help.New(),
 	}
@@ -84,17 +137,23 @@ func (m *ClientModel) rebuildProcessList() {
 func (m *ClientModel) headerHeight() int {
 	height := 0
 
+	panelWidth := m.termWidth
+	if panelWidth <= 0 {
+		panelWidth = 80
+	}
+
 	helpView := m.helpPanelBubbleTea()
 	if helpView != "" {
 		height += lipgloss.Height(helpView)
 	}
 
-	descView := processDescriptionPanel(m.domain.Config, m.domain.GetProcessByID(m.ui.ActiveProcID))
+	descView := processDescriptionPanel(m.domain.Config, m.domain.GetProcessByID(m.ui.ActiveProcID), panelWidth)
 	if descView != "" {
 		height += lipgloss.Height(descView)
 	}
 
-	messagesView := messagesPanel(m.ui.Info, m.ui.Messages)
+	visibleMsgs := m.visibleMessages(time.Now())
+	messagesView := messagesPanel(panelWidth, m.ui.Info, visibleMsgs)
 	if messagesView != "" {
 		height += lipgloss.Height(messagesView)
 	}
@@ -134,7 +193,11 @@ func (m ClientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateLayout()
 		return m, nil
 	case errMsg:
-		m.ui.Messages = append(m.ui.Messages, msg.Error())
+		cmd := m.addErrorMessage(msg.Error())
+		m.updateLayout()
+		return m, cmd
+	case pruneMessagesMsg:
+		m.pruneExpiredMessages(time.Now())
 		m.updateLayout()
 		return m, nil
 	case tea.KeyMsg:
