@@ -18,6 +18,9 @@ func TestNewKeyMap_AllBindingsCreated(t *testing.T) {
 		FilterSubmit:  []string{"enter"},
 		ToggleRunning: []string{"R"},
 		ToggleHelp:    []string{"?"},
+		ToggleFocus:   []string{"ctrl+w"},
+		FocusClient:   []string{"ctrl+left"},
+		FocusServer:   []string{"ctrl+right"},
 		Docs:          []string{"d"},
 	}
 
@@ -162,6 +165,9 @@ func TestKeyMap_FullHelp_Structure(t *testing.T) {
 		FilterSubmit:  []string{"enter"},
 		ToggleRunning: []string{"R"},
 		ToggleHelp:    []string{"?"},
+		ToggleFocus:   []string{"ctrl+w"},
+		FocusClient:   []string{"ctrl+left"},
+		FocusServer:   []string{"ctrl+right"},
 		Docs:          []string{"d"},
 	}
 
@@ -177,7 +183,7 @@ func TestKeyMap_FullHelp_Structure(t *testing.T) {
 	// 1. Navigation (Up, Down)
 	// 2. Process control (Start, Stop, Restart)
 	// 3. Filtering (Filter, FilterSubmit, ToggleRunning)
-	// 4. Misc (Docs, ToggleHelp, Quit)
+	// 4. Misc (Docs, ToggleHelp, ToggleFocus, FocusClient, FocusServer, Quit)
 	expectedGroups := 4
 	if len(fullHelp) != expectedGroups {
 		t.Errorf("Expected %d groups, got %d", expectedGroups, len(fullHelp))
@@ -199,8 +205,8 @@ func TestKeyMap_FullHelp_Structure(t *testing.T) {
 	}
 
 	// Fourth group should be misc (3 bindings)
-	if len(fullHelp[3]) != 3 {
-		t.Errorf("Expected fourth group to have 3 bindings (Docs, ToggleHelp, Quit), got %d", len(fullHelp[3]))
+	if len(fullHelp[3]) != 6 {
+		t.Errorf("Expected fourth group to have 6 bindings (Docs, ToggleHelp, ToggleFocus, FocusClient, FocusServer, Quit), got %d", len(fullHelp[3]))
 	}
 }
 

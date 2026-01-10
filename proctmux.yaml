@@ -58,6 +58,10 @@ keybinding:
     - 'R'
   toggle_help:
     - '?'
+  focus_server:
+    - 'ctrl+s'
+  focus_client:
+    - 'ctrl+a'
 shell_cmd:
   # this is the command used for all 'procs' that are defined with a 'shell' property.
   # by default the configured "$SHELL" environment variable will be used.

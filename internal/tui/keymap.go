@@ -18,6 +18,9 @@ type KeyMap struct {
 	FilterEscape  key.Binding
 	ToggleRunning key.Binding
 	ToggleHelp    key.Binding
+	ToggleFocus   key.Binding
+	FocusClient   key.Binding
+	FocusServer   key.Binding
 	Docs          key.Binding
 }
 
@@ -33,7 +36,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down},                              // Navigation
 		{k.Start, k.Stop, k.Restart},                // Process control
 		{k.Filter, k.FilterSubmit, k.ToggleRunning}, // Filtering
-		{k.Docs, k.ToggleHelp, k.Quit},              // Misc
+		{k.Docs, k.ToggleHelp, k.ToggleFocus, k.FocusClient, k.FocusServer, k.Quit}, // Misc
 	}
 }
 
@@ -83,6 +86,18 @@ func NewKeyMap(cfg config.KeybindingConfig) KeyMap {
 		ToggleHelp: key.NewBinding(
 			key.WithKeys(cfg.ToggleHelp...),
 			key.WithHelp(joinKeys(cfg.ToggleHelp), "toggle help"),
+		),
+		ToggleFocus: key.NewBinding(
+			key.WithKeys(cfg.ToggleFocus...),
+			key.WithHelp(joinKeys(cfg.ToggleFocus), "toggle focus"),
+		),
+		FocusClient: key.NewBinding(
+			key.WithKeys(cfg.FocusClient...),
+			key.WithHelp(joinKeys(cfg.FocusClient), "focus client"),
+		),
+		FocusServer: key.NewBinding(
+			key.WithKeys(cfg.FocusServer...),
+			key.WithHelp(joinKeys(cfg.FocusServer), "focus server"),
 		),
 		Docs: key.NewBinding(
 			key.WithKeys(cfg.Docs...),

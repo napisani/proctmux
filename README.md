@@ -106,6 +106,16 @@ proctmux --client
 
 Both terminals will show the same TUI and stay synchronized. This is useful for monitoring processes from multiple locations.
 
+**Unified Mode (Embedded server + client)**
+
+Run everything in a single Bubble Tea program with a vertical split. The left pane shows the familiar client UI, and the right pane is an embedded terminal running the primary server. Use `ctrl+left` / `ctrl+right` to switch focus or tap `ctrl+w` (configurable via `keybinding.toggle_focus`) to toggle between panes.
+
+```bash
+proctmux --unified
+```
+
+Unified mode automatically starts the primary server using the current working directory and configuration. The traditional split-terminal workflow remains available when you need to keep processes separated.
+
 ### 3. Use the TUI
 
 Once running, use these keybindings to control your processes:
@@ -151,6 +161,9 @@ keybinding:
   submit_filter: ["enter"]
   toggle_running: ["R"]            # Toggle showing only running processes
   toggle_help: ["?"]               # Toggle help/footer visibility
+  toggle_focus: ["ctrl+w"]         # Toggle between client/server panes in unified mode
+  focus_client: ["ctrl+left"]      # Shortcut for focusing the client pane in unified mode
+  focus_server: ["ctrl+right"]     # Shortcut for focusing the embedded server pane in unified mode
   docs: ["d"]                      # Show process documentation popup
 
 signal_server:
@@ -199,6 +212,9 @@ procs:
 - Quit: `q` or `ctrl+c`
 - Toggle Running: `R` (show only running processes)
 - Toggle Help: `?` (show/hide help footer)
+- Toggle Focus: `ctrl+w` (switch panes in unified mode; configurable via `keybinding.toggle_focus`)
+- Focus Client Pane: `ctrl+left` (move keyboard input to the client pane; configurable via `keybinding.focus_client`)
+- Focus Server Pane: `ctrl+right` (move keyboard input to the embedded server pane; configurable via `keybinding.focus_server`)
 - Docs: `d` (opens a popup with the process docs text)
 - Enter also attaches focus to the selected process pane after starting (if halted)
 
@@ -250,7 +266,7 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
   - `status_running_color`, `status_stopped_color` (string): Colors for list icons/pointer. Accepts names like `red`, `brightmagenta`, `ansiblue`, or hex `#ff00ff`.
   - Other fields exist for future parity and may not currently affect the UI: `selected_process_color`, `selected_process_bg_color`, `unselected_process_color`, `placeholder_terminal_bg_color`, `style_classes`, `color_level`.
 - `keybinding` (each value is a list of keys):
-  - `quit`, `up`, `down`, `start`, `stop`, `restart`, `filter`, `submit_filter`, `toggle_running`, `toggle_help`, `docs`.
+  - `quit`, `up`, `down`, `start`, `stop`, `restart`, `filter`, `submit_filter`, `toggle_running`, `toggle_help`, `toggle_focus`, `focus_client`, `focus_server`, `docs`.
 - `signal_server`:
   - `enable` (bool): Start the HTTP server alongside the UI.
   - `host` (string): Bind host (e.g. `localhost`). Default `localhost` when enabled.

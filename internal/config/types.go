@@ -11,6 +11,9 @@ type KeybindingConfig struct {
 	FilterSubmit  []string `yaml:"submit_filter"`
 	ToggleRunning []string `yaml:"toggle_running"`
 	ToggleHelp    []string `yaml:"toggle_help"`
+	ToggleFocus   []string `yaml:"toggle_focus"`
+	FocusClient   []string `yaml:"focus_client"`
+	FocusServer   []string `yaml:"focus_server"`
 	Docs          []string `yaml:"docs"`
 }
 

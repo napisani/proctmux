@@ -12,6 +12,7 @@ type CLIConfig struct {
 	Mode       string
 	Subcommand string
 	Args       []string
+	Unified    bool
 }
 
 // ParseCLI parses command-line arguments and returns the configuration
@@ -22,6 +23,7 @@ func ParseCLI() *CLIConfig {
 	flag.StringVar(&cfg.ConfigFile, "f", "", "path to config file (default: searches for proctmux.yaml in current directory)")
 	flag.StringVar(&cfg.Mode, "mode", "primary", "mode: primary (process server) or client (UI only)")
 	flag.BoolVar(&clientMode, "client", false, "run in client mode (connects to primary)")
+	flag.BoolVar(&cfg.Unified, "unified", false, "run in unified mode (client + server split view)")
 	flag.Usage = printUsage
 	flag.Parse()
 
@@ -48,6 +50,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "\nModes:\n")
 	fmt.Fprintf(os.Stderr, "  (default)                Run primary server (manages processes)\n")
 	fmt.Fprintf(os.Stderr, "  --client                 Run UI client (connects to primary)\n")
+	fmt.Fprintf(os.Stderr, "  --unified                Run UI client and embedded server in one pane-split view\n")
 	fmt.Fprintf(os.Stderr, "\nCommands:\n")
 	fmt.Fprintf(os.Stderr, "  start                    Start the TUI (default)\n")
 	fmt.Fprintf(os.Stderr, "  signal-list              List all processes and their statuses (tab-delimited)\n")

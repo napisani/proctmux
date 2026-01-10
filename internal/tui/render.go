@@ -260,8 +260,19 @@ func helpPanel(cfg *config.ProcTmuxConfig) string {
 		keyStyle.Render("["+strings.Join(cfg.Keybinding.Up, "/")+"]") + descStyle.Render(" Up  "),
 		keyStyle.Render("["+strings.Join(cfg.Keybinding.Down, "/")+"]") + descStyle.Render(" Down  "),
 		keyStyle.Render("["+strings.Join(cfg.Keybinding.Filter, "/")+"]") + descStyle.Render(" Filter  "),
-		keyStyle.Render("["+strings.Join(cfg.Keybinding.Quit, "/")+"]") + descStyle.Render(" Quit"),
 	}
+
+	if len(cfg.Keybinding.ToggleFocus) > 0 {
+		items = append(items, keyStyle.Render("["+strings.Join(cfg.Keybinding.ToggleFocus, "/")+"]")+descStyle.Render(" Focus  "))
+	}
+	if len(cfg.Keybinding.FocusClient) > 0 {
+		items = append(items, keyStyle.Render("["+strings.Join(cfg.Keybinding.FocusClient, "/")+"]")+descStyle.Render(" Client "))
+	}
+	if len(cfg.Keybinding.FocusServer) > 0 {
+		items = append(items, keyStyle.Render("["+strings.Join(cfg.Keybinding.FocusServer, "/")+"]")+descStyle.Render(" Server "))
+	}
+
+	items = append(items, keyStyle.Render("["+strings.Join(cfg.Keybinding.Quit, "/")+"]")+descStyle.Render(" Quit"))
 
 	helpLine := lipgloss.JoinHorizontal(lipgloss.Left, items...)
 	modeInfo := lipgloss.NewStyle().Faint(true).Render("[Client Mode - Connected to Primary]")

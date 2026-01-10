@@ -63,6 +63,13 @@ func main() {
 
 	log.Printf("Command-line args: %+v", cliCfg.Args)
 
+	if cliCfg.Unified {
+		if err := RunUnified(cfg, cliCfg); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	// Route to appropriate mode/command
 	if cliCfg.Mode == "client" {
 		if err := RunClient(cfg); err != nil {

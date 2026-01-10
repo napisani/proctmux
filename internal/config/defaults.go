@@ -38,6 +38,15 @@ func applyDefaults(cfg ProcTmuxConfig) ProcTmuxConfig {
 	if len(cfg.Keybinding.ToggleHelp) == 0 {
 		cfg.Keybinding.ToggleHelp = []string{"?"}
 	}
+	if len(cfg.Keybinding.ToggleFocus) == 0 {
+		cfg.Keybinding.ToggleFocus = []string{"ctrl+w"}
+	}
+	if len(cfg.Keybinding.FocusClient) == 0 {
+		cfg.Keybinding.FocusClient = []string{"ctrl+left"}
+	}
+	if len(cfg.Keybinding.FocusServer) == 0 {
+		cfg.Keybinding.FocusServer = []string{"ctrl+right"}
+	}
 	if len(cfg.Keybinding.Docs) == 0 {
 		cfg.Keybinding.Docs = []string{"d"}
 	}

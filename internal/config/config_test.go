@@ -356,6 +356,7 @@ func TestApplyDefaults_AllKeybindings(t *testing.T) {
 		{"FilterSubmit", cfg.Keybinding.FilterSubmit},
 		{"ToggleRunning", cfg.Keybinding.ToggleRunning},
 		{"ToggleHelp", cfg.Keybinding.ToggleHelp},
+		{"ToggleFocus", cfg.Keybinding.ToggleFocus},
 		{"Docs", cfg.Keybinding.Docs},
 	}
 
@@ -383,6 +384,9 @@ func TestApplyDefaults_SpecificKeybindingValues(t *testing.T) {
 	}
 	if cfg.Keybinding.ToggleHelp[0] != "?" {
 		t.Errorf("Expected toggle help binding to be '?', got %q", cfg.Keybinding.ToggleHelp[0])
+	}
+	if cfg.Keybinding.ToggleFocus[0] != "ctrl+w" {
+		t.Errorf("Expected toggle focus binding to be 'ctrl+w', got %q", cfg.Keybinding.ToggleFocus[0])
 	}
 	if cfg.Keybinding.Docs[0] != "d" {
 		t.Errorf("Expected docs binding to be 'd', got %q", cfg.Keybinding.Docs[0])
