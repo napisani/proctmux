@@ -18,6 +18,17 @@ const (
 	minClientWidth      = 24
 	minTerminalWidth    = 32
 	clientWidthPadding  = 6
+	minClientHeight     = 8
+	minTerminalHeight   = 10
+)
+
+type SplitOrientation int
+
+const (
+	SplitLeft SplitOrientation = iota
+	SplitRight
+	SplitTop
+	SplitBottom
 )
 
 type focusPane int
@@ -48,18 +59,23 @@ type UnifiedModel struct {
 	focusClientLabel string
 	focusServerLabel string
 
+	orientation SplitOrientation
+
 	terminalRows   []string
 	terminalExited bool
 
 	statusHeight  int
+	contentWidth  int
 	contentHeight int
-	leftWidth     int
-	rightWidth    int
+	clientWidth   int
+	serverWidth   int
+	clientHeight  int
+	serverHeight  int
 }
 
 // NewUnifiedModel constructs a unified TUI model from an existing client model
 // and an initialized bubbleterm emulator.
-func NewUnifiedModel(client ClientModel, emu *emulator.Emulator) UnifiedModel {
+func NewUnifiedModel(client ClientModel, emu *emulator.Emulator, orientation SplitOrientation) UnifiedModel {
 	toggleFocus := client.keys.ToggleFocus
 	toggleLabel := joinKeys(toggleFocus.Keys())
 
@@ -79,6 +95,7 @@ func NewUnifiedModel(client ClientModel, emu *emulator.Emulator) UnifiedModel {
 		focusServer:      focusServerBinding,
 		focusClientLabel: focusClientLabel,
 		focusServerLabel: focusServerLabel,
+		orientation:      orientation,
 		statusHeight:     unifiedStatusLines,
 	}
 }
@@ -134,42 +151,91 @@ func (m UnifiedModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	}
 	m.statusHeight = statusLines
 
+	m.contentWidth = msg.Width
 	contentHeight := msg.Height - statusLines
 	if contentHeight < 0 {
 		contentHeight = 0
 	}
 	m.contentHeight = contentHeight
 
-	leftWidth := m.desiredClientWidth(msg.Width)
-	if leftWidth <= 0 {
-		leftWidth = (msg.Width * unifiedClientRatio) / 100
-	}
-	if leftWidth >= msg.Width {
-		leftWidth = msg.Width / 2
-	}
-	m.leftWidth = leftWidth
-	m.rightWidth = msg.Width - leftWidth
-	if m.rightWidth < 0 {
-		m.rightWidth = 0
-	}
+	var clientCmd tea.Cmd
 
-	if m.clientModel != nil {
-		childMsg := tea.WindowSizeMsg{Width: leftWidth, Height: contentHeight}
-		var cmd tea.Cmd
-		m.clientModel, cmd = m.clientModel.Update(childMsg)
-		if cmd != nil {
-			if m.emu != nil {
-				_ = m.emu.Resize(max(1, m.rightWidth), max(1, m.contentHeight))
-			}
-			return m, cmd
+	switch m.orientation {
+	case SplitLeft, SplitRight:
+		clientWidth := m.desiredClientWidth(msg.Width)
+		if clientWidth <= 0 {
+			clientWidth = (msg.Width * unifiedClientRatio) / 100
 		}
+		if clientWidth < minClientWidth && msg.Width >= minClientWidth {
+			clientWidth = minClientWidth
+		}
+		if clientWidth >= msg.Width {
+			clientWidth = msg.Width / 2
+		}
+
+		serverWidth := msg.Width - clientWidth
+		if serverWidth < minTerminalWidth && msg.Width >= minClientWidth+minTerminalWidth {
+			serverWidth = minTerminalWidth
+			clientWidth = msg.Width - serverWidth
+		}
+		if serverWidth < 0 {
+			serverWidth = 0
+			clientWidth = msg.Width
+		}
+
+		m.clientWidth = clientWidth
+		m.serverWidth = serverWidth
+		m.clientHeight = contentHeight
+		m.serverHeight = contentHeight
+
+		if m.clientModel != nil {
+			childMsg := tea.WindowSizeMsg{Width: clientWidth, Height: contentHeight}
+			m.clientModel, clientCmd = m.clientModel.Update(childMsg)
+		}
+		if m.emu != nil {
+			_ = m.emu.Resize(max(1, serverWidth), max(1, contentHeight))
+		}
+
+	case SplitTop, SplitBottom:
+		clientHeight := m.desiredClientHeight(contentHeight)
+		if clientHeight <= 0 {
+			clientHeight = (contentHeight * unifiedClientRatio) / 100
+		}
+		if clientHeight < minClientHeight && contentHeight >= minClientHeight {
+			clientHeight = minClientHeight
+		}
+		if clientHeight >= contentHeight {
+			clientHeight = contentHeight / 2
+		}
+
+		serverHeight := contentHeight - clientHeight
+		if serverHeight < minTerminalHeight && contentHeight >= minClientHeight+minTerminalHeight {
+			serverHeight = minTerminalHeight
+			clientHeight = contentHeight - serverHeight
+		}
+		if serverHeight < 0 {
+			serverHeight = 0
+		}
+
+		m.clientWidth = msg.Width
+		m.serverWidth = msg.Width
+		m.clientHeight = clientHeight
+		m.serverHeight = serverHeight
+
+		if m.clientModel != nil {
+			childMsg := tea.WindowSizeMsg{Width: msg.Width, Height: clientHeight}
+			m.clientModel, clientCmd = m.clientModel.Update(childMsg)
+		}
+		if m.emu != nil {
+			_ = m.emu.Resize(max(1, msg.Width), max(1, serverHeight))
+		}
+	default:
+		// fallback to left layout if unset
+		m.orientation = SplitLeft
+		return m.handleResize(msg)
 	}
 
-	if m.emu != nil {
-		_ = m.emu.Resize(max(1, m.rightWidth), max(1, m.contentHeight))
-	}
-
-	return m, nil
+	return m, clientCmd
 }
 
 func (m UnifiedModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -223,37 +289,62 @@ func (m UnifiedModel) forwardToClient(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m UnifiedModel) View() string {
-	leftView := ""
+	clientView := ""
 	if m.clientModel != nil {
-		leftView = m.clientModel.View()
+		clientView = m.clientModel.View()
 	}
 
-	rightView := ""
+	serverView := ""
 	if len(m.terminalRows) > 0 {
-		rightView = strings.Join(m.terminalRows, "\n")
+		serverView = strings.Join(m.terminalRows, "\n")
 	} else if m.focus == focusServer {
-		rightView = "Connecting to embedded server..."
+		serverView = "Connecting to embedded server..."
 	}
 
-	leftStyle := lipgloss.NewStyle().Width(max(m.leftWidth, 0)).Height(max(m.contentHeight, 0))
-	rightStyle := lipgloss.NewStyle().Width(max(m.rightWidth, 0)).Height(max(m.contentHeight, 0))
+	clientStyle := lipgloss.NewStyle().Width(max(m.clientWidth, 0)).Height(max(m.clientHeight, 0))
+	serverStyle := lipgloss.NewStyle().Width(max(m.serverWidth, 0)).Height(max(m.serverHeight, 0))
 
-	split := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		leftStyle.Render(leftView),
-		rightStyle.Render(rightView),
-	)
+	var layout string
+	switch m.orientation {
+	case SplitRight:
+		layout = lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			serverStyle.Render(serverView),
+			clientStyle.Render(clientView),
+		)
+	case SplitTop:
+		layout = lipgloss.JoinVertical(
+			lipgloss.Left,
+			clientStyle.Render(clientView),
+			serverStyle.Render(serverView),
+		)
+	case SplitBottom:
+		layout = lipgloss.JoinVertical(
+			lipgloss.Left,
+			serverStyle.Render(serverView),
+			clientStyle.Render(clientView),
+		)
+	default:
+		layout = lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			clientStyle.Render(clientView),
+			serverStyle.Render(serverView),
+		)
+	}
 
 	status := m.statusBar()
 	if status == "" {
-		return split
+		return layout
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, split, status)
+	return lipgloss.JoinVertical(lipgloss.Left, layout, status)
 }
 
 func (m UnifiedModel) statusBar() string {
-	totalWidth := m.leftWidth + m.rightWidth
+	totalWidth := m.contentWidth
+	if totalWidth <= 0 {
+		totalWidth = max(m.clientWidth, m.serverWidth)
+	}
 	if totalWidth <= 0 || m.statusHeight == 0 {
 		return ""
 	}
@@ -328,6 +419,20 @@ func (m UnifiedModel) desiredClientWidth(totalWidth int) int {
 	}
 	if desired > totalWidth {
 		desired = totalWidth
+	}
+	return desired
+}
+
+func (m UnifiedModel) desiredClientHeight(totalHeight int) int {
+	desired := (totalHeight * unifiedClientRatio) / 100
+	if desired < minClientHeight {
+		desired = minClientHeight
+	}
+	if desired > totalHeight-minTerminalHeight {
+		desired = totalHeight - minTerminalHeight
+	}
+	if desired <= 0 {
+		desired = totalHeight / 2
 	}
 	return desired
 }

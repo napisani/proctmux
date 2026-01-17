@@ -65,7 +65,18 @@ func RunUnified(cfg *config.ProcTmuxConfig, cliCfg *CLIConfig) error {
 
 	state := domain.NewAppState(cfg)
 	clientModel := tui.NewClientModel(client, &state)
-	unified := tui.NewUnifiedModel(clientModel, emu)
+
+	orientation := tui.SplitLeft
+	switch cliCfg.UnifiedOrientation {
+	case UnifiedSplitRight:
+		orientation = tui.SplitRight
+	case UnifiedSplitTop:
+		orientation = tui.SplitTop
+	case UnifiedSplitBottom:
+		orientation = tui.SplitBottom
+	}
+
+	unified := tui.NewUnifiedModel(clientModel, emu, orientation)
 
 	program := tea.NewProgram(unified, bubbleTeaProgramOptions()...)
 	if _, err := program.Run(); err != nil {
@@ -100,6 +111,14 @@ func unifiedChildArgs() []string {
 			}
 			continue
 		case strings.HasPrefix(lower, "--mode="):
+			continue
+		case lower == "--unified-left", lower == "-unified-left":
+			continue
+		case lower == "--unified-right", lower == "-unified-right":
+			continue
+		case lower == "--unified-top", lower == "-unified-top":
+			continue
+		case lower == "--unified-bottom", lower == "-unified-bottom":
 			continue
 		}
 

@@ -108,10 +108,13 @@ Both terminals will show the same TUI and stay synchronized. This is useful for 
 
 **Unified Mode (Embedded server + client)**
 
-Run everything in a single Bubble Tea program with a vertical split. The left pane shows the familiar client UI, and the right pane is an embedded terminal running the primary server. Use `ctrl+left` / `ctrl+right` to switch focus or tap `ctrl+w` (configurable via `keybinding.toggle_focus`) to toggle between panes.
+Run everything in a single Bubble Tea program with a split view. By default the process list is on the left and the process output is on the right. Use `ctrl+left` / `ctrl+right` to switch focus or tap `ctrl+w` (configurable via `keybinding.toggle_focus`) to toggle between panes.
 
 ```bash
-proctmux --unified
+proctmux --unified            # same as --unified-left
+proctmux --unified-right      # process list on the right
+proctmux --unified-top        # process list above the output
+proctmux --unified-bottom     # process list below the output
 ```
 
 Unified mode automatically starts the primary server using the current working directory and configuration. The traditional split-terminal workflow remains available when you need to keep processes separated.
