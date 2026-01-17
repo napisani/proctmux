@@ -67,7 +67,7 @@ func RunUnified(cfg *config.ProcTmuxConfig, cliCfg *CLIConfig) error {
 	clientModel := tui.NewClientModel(client, &state)
 	unified := tui.NewUnifiedModel(clientModel, emu)
 
-	program := tea.NewProgram(unified, tea.WithAltScreen())
+	program := tea.NewProgram(unified, bubbleTeaProgramOptions()...)
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("unified program exited with error: %w", err)
 	}

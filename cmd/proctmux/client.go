@@ -55,7 +55,7 @@ func RunClient(cfg *config.ProcTmuxConfig) error {
 	// Create client UI model
 	state := domain.NewAppState(cfg)
 	clientModel := tui.NewClientModel(client, &state)
-	p := tea.NewProgram(clientModel, tea.WithAltScreen())
+	p := tea.NewProgram(clientModel, bubbleTeaProgramOptions()...)
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running proctmux client: %v\n", err)
 		log.Fatal(err)

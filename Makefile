@@ -109,10 +109,16 @@ test:
 	@echo "Running tests..."
 	go test ./... -v
 
+.PHONY: test-e2e
+test-e2e:
+	@echo "Running integration (e2e) tests..."
+	go test -tags=integration ./tests/e2e -v
+
 .PHONY: test-race
 test-race:
 	@echo "Running race detector tests..."
 	go test -race ./... -v
+
 
 .PHONY: watch-test 
 watch-test:
@@ -148,6 +154,7 @@ help:
 	@echo "  make inspect    - Inspect the application with Model Context Protocol"
 	@echo "  make tidy       - Tidy up dependencies"
 	@echo "  make test       - Run tests"
+	@echo "  make test-e2e   - Run integration (e2e) tests"
 	@echo "  make test-race  - Run tests with race detector"
 	@echo "  make update-vendor-hash - Update vendorHash in flake.nix for Nix builds"
 	@echo "  make install-hooks - Install git hooks from .githooks/ directory"
