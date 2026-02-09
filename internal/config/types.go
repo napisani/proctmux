@@ -50,8 +50,10 @@ type ProcTmuxConfig struct {
 	Style      StyleConfig              `yaml:"style"`
 	Procs      map[string]ProcessConfig `yaml:"procs"`
 	General    struct {
-		DetachedSessionName string `yaml:"detached_session_name"`
-		KillExistingSession bool   `yaml:"kill_existing_session"`
+		DetachedSessionName  string `yaml:"detached_session_name"`
+		KillExistingSession  bool   `yaml:"kill_existing_session"`
+		ProcsFromMakeTargets bool   `yaml:"procs_from_make_targets"`
+		ProcsFromPackageJSON bool   `yaml:"procs_from_package_json"`
 	} `yaml:"general"`
 	ShellCmd           []string `yaml:"shell_cmd"`
 	LogFile            string   `yaml:"log_file"`

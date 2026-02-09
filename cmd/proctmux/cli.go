@@ -104,6 +104,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  --unified-top            Unified mode with process list above the output\n")
 	fmt.Fprintf(os.Stderr, "  --unified-bottom         Unified mode with process list below the output\n")
 	fmt.Fprintf(os.Stderr, "\nCommands:\n")
+	fmt.Fprintf(os.Stderr, "  config-init [path]       Create a starter proctmux.yaml configuration file\n")
 	fmt.Fprintf(os.Stderr, "  start                    Start the TUI (default)\n")
 	fmt.Fprintf(os.Stderr, "  signal-list              List all processes and their statuses (tab-delimited)\n")
 	fmt.Fprintf(os.Stderr, "  signal-start <name>      Start a process\n")

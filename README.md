@@ -68,14 +68,11 @@ nix shell github:napisani/proctmux/v0.1.0
 
 ### 1. Create a Configuration File
 
-Create `proctmux.yaml` in your project directory (or any directory where you want to manage processes):
+Generate a starter configuration with helpful comments:
 
-```yaml
-procs:
-  "example process":
-    shell: "echo 'Hello from proctmux' && sleep 10"
-    autostart: true
-    description: "A simple example process"
+```bash
+proctmux config-init           # writes ./proctmux.yaml
+proctmux config-init path/to/proctmux.yaml
 ```
 
 See the [Configuration Reference](#configuration-reference) below for all available options.
@@ -234,6 +231,7 @@ procs:
 - Enter behavior: pressing `enter` both triggers Start (if halted) and attaches focus to the pane.
 - New keybinding: `restart` (default `r`) stops then starts the selected process.
 - Default stop escalation: when `stop` is omitted, SIGTERM is sent first; if still running after ~3s, proctmux sends SIGKILL.
+- Auto-discovery of processes: set `general.procs_from_make_targets` or `general.procs_from_package_json` to generate `make:<target>` and `<manager>:<script>` processes automatically (package.json scripts detect pnpm, bun, yarn, npm, or deno).
 
 
 ## How It Works
@@ -255,6 +253,8 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
 - `general`:
   - `detached_session_name` (string): Name for the background process session. Default `_proctmux`.
   - `kill_existing_session` (bool): If a session with this name already exists, kill and recreate it. If false and it exists, startup fails.
+  - `procs_from_make_targets` (bool): When true, add a process for each Makefile target (`make:<target>`).
+  - `procs_from_package_json` (bool): When true, add a process for each script in `package.json`. The package manager is inferred from lock/config files (pnpm, bun, yarn, npm, or deno) and the generated process names follow `<manager>:<script>`.
 - `layout`:
   - `processes_list_width` (int): Percent width of the left process list (1-99). The right pane uses the remainder.
   - `hide_help` (bool): Hide the help/footer text in the UI.

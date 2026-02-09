@@ -192,25 +192,13 @@ func TestLoadConfig_InvalidPermissions(t *testing.T) {
 }
 
 func TestToHash_SameConfig_SameHash(t *testing.T) {
-	cfg1 := &ProcTmuxConfig{
-		General: struct {
-			DetachedSessionName string `yaml:"detached_session_name"`
-			KillExistingSession bool   `yaml:"kill_existing_session"`
-		}{
-			DetachedSessionName: "test",
-			KillExistingSession: true,
-		},
-	}
+	cfg1 := &ProcTmuxConfig{}
+	cfg1.General.DetachedSessionName = "test"
+	cfg1.General.KillExistingSession = true
 
-	cfg2 := &ProcTmuxConfig{
-		General: struct {
-			DetachedSessionName string `yaml:"detached_session_name"`
-			KillExistingSession bool   `yaml:"kill_existing_session"`
-		}{
-			DetachedSessionName: "test",
-			KillExistingSession: true,
-		},
-	}
+	cfg2 := &ProcTmuxConfig{}
+	cfg2.General.DetachedSessionName = "test"
+	cfg2.General.KillExistingSession = true
 
 	hash1, err := cfg1.ToHash()
 	if err != nil {
@@ -228,23 +216,11 @@ func TestToHash_SameConfig_SameHash(t *testing.T) {
 }
 
 func TestToHash_DifferentConfig_DifferentHash(t *testing.T) {
-	cfg1 := &ProcTmuxConfig{
-		General: struct {
-			DetachedSessionName string `yaml:"detached_session_name"`
-			KillExistingSession bool   `yaml:"kill_existing_session"`
-		}{
-			DetachedSessionName: "session1",
-		},
-	}
+	cfg1 := &ProcTmuxConfig{}
+	cfg1.General.DetachedSessionName = "session1"
 
-	cfg2 := &ProcTmuxConfig{
-		General: struct {
-			DetachedSessionName string `yaml:"detached_session_name"`
-			KillExistingSession bool   `yaml:"kill_existing_session"`
-		}{
-			DetachedSessionName: "session2",
-		},
-	}
+	cfg2 := &ProcTmuxConfig{}
+	cfg2.General.DetachedSessionName = "session2"
 
 	hash1, err := cfg1.ToHash()
 	if err != nil {
