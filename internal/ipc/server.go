@@ -3,15 +3,18 @@ package ipc
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"sync"
+	"time"
 
 	"slices"
 
 	"github.com/nick/proctmux/internal/domain"
+	"github.com/nick/proctmux/internal/redact"
 )
 
 type clientConn struct {
@@ -25,6 +28,8 @@ type Server struct {
 	clients       []*clientConn
 	mu            sync.RWMutex
 	done          chan struct{}
+	allowedUID    int
+	writeTimeout  time.Duration
 	primaryServer interface {
 		HandleCommand(action, label string) error
 		GetState() *domain.AppState
@@ -32,6 +37,12 @@ type Server struct {
 	}
 	// currentProcID removed
 }
+
+var (
+	authorizePeerConn      = defaultAuthorizePeerConn
+	errPeerCredUnsupported = errors.New("peer credential inspection unsupported")
+	peerCredWarningOnce    sync.Once
+)
 
 type Message struct {
 	Type         string               `json:"type"`
@@ -47,10 +58,13 @@ type Message struct {
 
 func NewServer() *Server {
 	return &Server{
-		clients: []*clientConn{},
-		done:    make(chan struct{}),
+		clients:      []*clientConn{},
+		done:         make(chan struct{}),
+		writeTimeout: defaultClientWriteTimeout,
 	}
 }
+
+const defaultClientWriteTimeout = 2 * time.Second
 
 func (s *Server) Start(socketPath string) error {
 	if err := os.RemoveAll(socketPath); err != nil {
@@ -61,9 +75,14 @@ func (s *Server) Start(socketPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create unix socket: %w", err)
 	}
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		listener.Close()
+		return fmt.Errorf("failed to set unix socket permissions: %w", err)
+	}
 
 	s.socketPath = socketPath
 	s.listener = listener
+	s.allowedUID = os.Geteuid()
 
 	go s.acceptClients()
 
@@ -88,12 +107,14 @@ func (s *Server) acceptClients() {
 				}
 			}
 
-			s.mu.Lock()
-			cc := &clientConn{Conn: conn}
-			s.clients = append(s.clients, cc)
-			s.mu.Unlock()
+			cc, err := s.registerClient(conn)
+			if err != nil {
+				log.Printf("Rejected IPC client: %v", err)
+				conn.Close()
+				continue
+			}
 
-			log.Printf("IPC client connected (total: %d)", len(s.clients))
+			log.Printf("IPC client connected (total: %d)", s.clientCount())
 
 			// Send initial state to the new client
 			if s.primaryServer != nil {
@@ -105,6 +126,65 @@ func (s *Server) acceptClients() {
 			go s.handleClient(cc)
 		}
 	}
+}
+
+func (s *Server) registerClient(conn net.Conn) (*clientConn, error) {
+	if err := authorizePeerConn(conn, s.allowedUID); err != nil {
+		return nil, err
+	}
+
+	cc := &clientConn{Conn: conn}
+	s.mu.Lock()
+	s.clients = append(s.clients, cc)
+	s.mu.Unlock()
+	return cc, nil
+}
+
+func (s *Server) clientCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.clients)
+}
+
+func defaultAuthorizePeerConn(conn net.Conn, expectedUID int) error {
+	unixConn, ok := conn.(*net.UnixConn)
+	if !ok {
+		return fmt.Errorf("unexpected connection type %T", conn)
+	}
+
+	if expectedUID == 0 {
+		expectedUID = os.Geteuid()
+	}
+
+	sysConn, err := unixConn.SyscallConn()
+	if err != nil {
+		return fmt.Errorf("failed to access unix connection: %w", err)
+	}
+
+	var (
+		peerUIDVal uint32
+		credErr    error
+	)
+	if ctrlErr := sysConn.Control(func(fd uintptr) {
+		peerUIDVal, credErr = peerUID(fd)
+	}); ctrlErr != nil {
+		return fmt.Errorf("failed to inspect peer credentials: %w", ctrlErr)
+	}
+	if credErr != nil {
+		if errors.Is(credErr, errPeerCredUnsupported) {
+			peerCredWarningOnce.Do(func() {
+				log.Printf("Peer credential checks not supported on this platform; relying on socket permissions only")
+			})
+			return nil
+		}
+		return fmt.Errorf("failed to read peer credentials: %w", credErr)
+	}
+
+	if int(peerUIDVal) != expectedUID {
+		return fmt.Errorf("unauthorized peer uid %d (expected %d)", peerUIDVal, expectedUID)
+	}
+
+	return nil
 }
 
 func (s *Server) handleClient(conn *clientConn) {
@@ -255,15 +335,11 @@ func (s *Server) removeClient(conn *clientConn) {
 }
 
 func buildStateMessage(state *domain.AppState, pc domain.ProcessController) ([]byte, error) {
-	// Convert processes to ProcessViews
-	processViews := make([]domain.ProcessView, len(state.Processes))
-	for i := range state.Processes {
-		processViews[i] = state.Processes[i].ToView(pc)
-	}
+	redactedState, redactedViews := redact.StateForIPC(state, pc)
 	msg := Message{
 		Type:         "state",
-		State:        state,
-		ProcessViews: processViews,
+		State:        redactedState,
+		ProcessViews: redactedViews,
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -274,10 +350,8 @@ func buildStateMessage(state *domain.AppState, pc domain.ProcessController) ([]b
 }
 
 func (s *Server) BroadcastState(state *domain.AppState, pc domain.ProcessController) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if len(s.clients) == 0 {
+	clients := s.snapshotClients()
+	if len(clients) == 0 {
 		return
 	}
 
@@ -286,12 +360,13 @@ func (s *Server) BroadcastState(state *domain.AppState, pc domain.ProcessControl
 		log.Printf("Failed to marshal state message: %v", err)
 		return
 	}
-	for _, cc := range s.clients {
-		cc.mu.Lock()
-		if _, err := cc.Write(data); err != nil {
+
+	for _, cc := range clients {
+		if err := writeWithDeadline(cc, data, s.writeTimeout); err != nil {
 			log.Printf("Failed to broadcast state to IPC client: %v", err)
+			// Remove misbehaving client from the active set
+			s.removeClient(cc)
 		}
-		cc.mu.Unlock()
 	}
 }
 
@@ -302,11 +377,36 @@ func (s *Server) sendInitialState(conn *clientConn, state *domain.AppState, pc d
 		log.Printf("Failed to marshal initial state message: %v", err)
 		return
 	}
+	if err := writeWithDeadline(conn, data, s.writeTimeout); err != nil {
+		log.Printf("Failed to send initial state to IPC client: %v", err)
+		s.removeClient(conn)
+	}
+}
+
+func (s *Server) snapshotClients() []*clientConn {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if len(s.clients) == 0 {
+		return nil
+	}
+	copyClients := make([]*clientConn, len(s.clients))
+	copy(copyClients, s.clients)
+	return copyClients
+}
+
+func writeWithDeadline(conn *clientConn, data []byte, timeout time.Duration) error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
-	if _, err := conn.Write(data); err != nil {
-		log.Printf("Failed to send initial state to IPC client: %v", err)
+
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("set write deadline: %w", err)
 	}
+	_, err := conn.Write(data)
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		return fmt.Errorf("IPC client write timeout: %w", err)
+	}
+	return err
 }
 
 func (s *Server) SetPrimaryServer(primary interface {

@@ -35,6 +35,8 @@ type Controller struct {
 	globalConfig *config.ProcTmuxConfig
 }
 
+var configurePTYRawMode = setRawMode
+
 // NewController creates a new process controller
 func NewController(globalConfig *config.ProcTmuxConfig) *Controller {
 	return &Controller{
@@ -91,9 +93,9 @@ func (pc *Controller) StartProcess(id int, cfg *config.ProcessConfig) (*Instance
 	// This ensures no processing happens on the master side
 	// Child still has a proper PTY with all terminal features
 	log.Printf("Setting PTY to raw mode for process %d", id)
-	if err := setRawMode(ptmx); err != nil {
-		ptmx.Close()
-		log.Printf("Warning: failed to set PTY to raw mode: %v", err)
+	if err := configurePTYRawMode(ptmx); err != nil {
+		cleanupStartFailure(cmd, ptmx)
+		return nil, fmt.Errorf("failed to configure PTY for process %d: %w", id, err)
 	}
 
 	instance := &Instance{
@@ -128,6 +130,26 @@ func (pc *Controller) StartProcess(id int, cfg *config.ProcessConfig) (*Instance
 	}()
 
 	return i, err
+}
+
+func cleanupStartFailure(cmd *exec.Cmd, ptmx *os.File) {
+	if ptmx != nil {
+		if err := ptmx.Close(); err != nil {
+			log.Printf("failed to close PTY during startup cleanup: %v", err)
+		}
+	}
+
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+
+	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+		log.Printf("failed to kill process %d during startup cleanup: %v", cmd.Process.Pid, err)
+	}
+
+	if err := cmd.Wait(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		log.Printf("process wait during startup cleanup returned error: %v", err)
+	}
 }
 
 // GetProcess returns the process instance with the given ID

@@ -95,26 +95,72 @@ func TestNewAppState_DummyBannerGeneration(t *testing.T) {
 		t.Fatal("First process should be dummy")
 	}
 
-	// Check the command contains echo statements
-	cmd := dummy.Command()
-	if !strings.Contains(cmd, "echo") {
-		t.Error("Dummy command should contain echo statements")
-	}
-	if !strings.Contains(cmd, "LINE1") {
-		t.Error("Dummy command should include banner line 1")
-	}
-	if !strings.Contains(cmd, "LINE2") {
-		t.Error("Dummy command should include banner line 2")
-	}
-	if !strings.Contains(cmd, "LINE3") {
-		t.Error("Dummy command should include banner line 3")
+	if dummy.Config.Shell != "" {
+		t.Fatal("Dummy process should not rely on shell execution")
 	}
 
-	// Empty lines should be skipped
-	lines := strings.Count(cmd, "echo")
-	// Should have echo statements for non-empty lines + one initial empty echo
-	if lines < 3 {
-		t.Errorf("Expected at least 3 echo statements, got %d", lines)
+	if len(dummy.Config.Cmd) < 2 {
+		t.Fatalf("Expected printf format and arguments, got %#v", dummy.Config.Cmd)
+	}
+
+	if dummy.Config.Cmd[0] != "printf" {
+		t.Fatalf("Expected printf command, got %q", dummy.Config.Cmd[0])
+	}
+
+	format := dummy.Config.Cmd[1]
+	if strings.Count(format, "%s\n") != len(dummy.Config.Cmd)-2 {
+		t.Fatalf("Format specifiers should match arguments, got %q (args=%d)", format, len(dummy.Config.Cmd)-2)
+	}
+
+	args := dummy.Config.Cmd[2:]
+	expectedArgs := []string{"", "LINE1", "LINE2", "LINE3"}
+	if len(args) != len(expectedArgs) {
+		t.Fatalf("Expected %d printf arguments, got %d", len(expectedArgs), len(args))
+	}
+	for i, expected := range expectedArgs {
+		if args[i] != expected {
+			t.Fatalf("Argument %d: expected %q, got %q", i, expected, args[i])
+		}
+	}
+}
+
+func TestNewAppState_DummyBannerUsesPrintfWithoutShell(t *testing.T) {
+	cfg := &config.ProcTmuxConfig{
+		Layout: config.LayoutConfig{PlaceholderBanner: "LINE1\nLINE2"},
+		Procs:  map[string]config.ProcessConfig{},
+	}
+
+	state := NewAppState(cfg)
+
+	dummy := state.Processes[0]
+	if dummy.ID != DummyProcessID {
+		t.Fatalf("Expected dummy process first, got ID %d", dummy.ID)
+	}
+
+	if dummy.Config.Shell != "" {
+		t.Fatalf("Dummy process should not rely on shell, got %q", dummy.Config.Shell)
+	}
+
+	if len(dummy.Config.Cmd) < 2 {
+		t.Fatalf("Dummy command should invoke printf with format and args, got %#v", dummy.Config.Cmd)
+	}
+
+	if dummy.Config.Cmd[0] != "printf" {
+		t.Fatalf("Expected dummy command to start with printf, got %q", dummy.Config.Cmd[0])
+	}
+
+	format := dummy.Config.Cmd[1]
+	if strings.Count(format, "%s\n") != len(dummy.Config.Cmd)-2 {
+		// There should be one %s per banner line argument (including initial blank)
+		t.Fatalf("Format specifiers should match argument count, got format %q args %d", format, len(dummy.Config.Cmd)-2)
+	}
+
+	if dummy.Config.Cmd[2] != "" {
+		t.Fatalf("First printf argument should be blank spacer, got %q", dummy.Config.Cmd[2])
+	}
+
+	if dummy.Config.Cmd[len(dummy.Config.Cmd)-1] != "LINE2" {
+		t.Fatalf("Expected final banner argument to equal last line, got %q", dummy.Config.Cmd[len(dummy.Config.Cmd)-1])
 	}
 }
 
@@ -178,6 +224,50 @@ func TestNewAppState_NoAlphabeticalSort(t *testing.T) {
 	}
 	if !labels["apple"] {
 		t.Error("apple process not found")
+	}
+}
+
+func TestNewAppState_ProcessConfigsRemainDistinct(t *testing.T) {
+	cfg := &config.ProcTmuxConfig{
+		Procs: map[string]config.ProcessConfig{
+			"api": {
+				Shell: "echo api",
+				Env:   map[string]string{"ROLE": "api"},
+			},
+			"worker": {
+				Shell: "echo worker",
+				Env:   map[string]string{"ROLE": "worker"},
+			},
+		},
+	}
+
+	state := NewAppState(cfg)
+
+	api := state.GetProcessByLabel("api")
+	worker := state.GetProcessByLabel("worker")
+
+	if api == nil || worker == nil {
+		t.Fatalf("Expected both api and worker processes to be present")
+	}
+
+	if api.Config == worker.Config {
+		t.Fatal("Processes should not share the same config pointer")
+	}
+
+	if api.Config.Shell != "echo api" {
+		t.Fatalf("Expected api shell to remain intact, got %q", api.Config.Shell)
+	}
+
+	if worker.Config.Shell != "echo worker" {
+		t.Fatalf("Expected worker shell to remain intact, got %q", worker.Config.Shell)
+	}
+
+	if api.Config.Env["ROLE"] != "api" {
+		t.Fatalf("Expected api env to remain distinct, got %q", api.Config.Env["ROLE"])
+	}
+
+	if worker.Config.Env["ROLE"] != "worker" {
+		t.Fatalf("Expected worker env to remain distinct, got %q", worker.Config.Env["ROLE"])
 	}
 }
 

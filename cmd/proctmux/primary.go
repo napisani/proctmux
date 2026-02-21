@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/ipc"
@@ -12,7 +16,10 @@ import (
 func RunPrimary(cfg *config.ProcTmuxConfig) error {
 	log.SetPrefix("[PRIMARY] ")
 	log.Println("Starting proctmux primary server...")
-	log.Printf("Loaded config: %+v", cfg)
+	log.Printf("Loaded config from %s with %d processes", cfg.FilePath, len(cfg.Procs))
+
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 
 	// Create IPC server
 	ipcServer := ipc.NewServer()
@@ -28,8 +35,17 @@ func RunPrimary(cfg *config.ProcTmuxConfig) error {
 		log.Fatal("Failed to start primary server:", err)
 	}
 
-	defer primaryServer.Stop()
+	log.Println("Primary server running; waiting for shutdown signal (Ctrl+C)")
+	waitForShutdown(ctx, primaryServer.Stop)
+	return nil
+}
 
-	// Just pause until ctrl-c
-	select {}
+func waitForShutdown(ctx context.Context, stop func()) {
+	<-ctx.Done()
+	if err := ctx.Err(); err != nil {
+		log.Printf("Shutdown signal received: %v", err)
+	} else {
+		log.Printf("Shutdown signal received")
+	}
+	stop()
 }

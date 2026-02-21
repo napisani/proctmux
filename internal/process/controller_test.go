@@ -125,6 +125,35 @@ func TestController_GetWriter_NotFound(t *testing.T) {
 	}
 }
 
+func TestStartProcessFailsWhenRawModeConfigurationFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX shell")
+	}
+
+	originalConfigure := configurePTYRawMode
+	configurePTYRawMode = func(f *os.File) error {
+		return fmt.Errorf("boom")
+	}
+	t.Cleanup(func() {
+		configurePTYRawMode = originalConfigure
+	})
+
+	ctrl := NewController(nil)
+	cfg := &config.ProcessConfig{
+		Cmd: []string{"sh", "-c", "sleep 1"},
+	}
+
+	if _, err := ctrl.StartProcess(1, cfg); err == nil {
+		t.Fatalf("expected StartProcess to fail when raw mode configuration fails")
+	} else if !strings.Contains(err.Error(), "configure PTY") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := ctrl.GetProcess(1); err == nil {
+		t.Fatalf("process should not remain registered after startup failure")
+	}
+}
+
 // Note: Full lifecycle tests (StartProcess, StopProcess with actual processes)
 // are more suitable for integration tests as they require PTY/process management.
 // These tests focus on the controller's behavior when processes don't exist.

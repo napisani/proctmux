@@ -79,7 +79,7 @@ func main() {
 			}
 		}
 		procdiscover.Apply(cfg, discoveryCwd)
-		log.Printf("Config loaded: %+v", cfg)
+		log.Printf("Config loaded from %s with %d processes", cfg.FilePath, len(cfg.Procs))
 	} else {
 		panic(cfgLoadErr)
 	}

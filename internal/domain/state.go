@@ -38,23 +38,41 @@ func NewAppState(cfg *config.ProcTmuxConfig) AppState {
 		Autostart: true,
 	})
 
-	var echo strings.Builder
-	echo.WriteString(" echo \"\"; ")
-
+	lines := []string{""}
 	banner := cfg.Layout.PlaceholderBanner
-	for line := range strings.SplitSeq(banner, "\n") {
-		if strings.TrimSpace(line) != "" {
-			echo.WriteString("echo \"" + line + "\"; ")
+	if banner != "" {
+		for _, rawLine := range strings.Split(banner, "\n") {
+			line := strings.TrimSuffix(rawLine, "\r")
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			lines = append(lines, line)
 		}
 	}
 
-	proc.Config.Cmd = []string{"bash", "-c", echo.String()}
+	if len(lines) == 0 {
+		lines = append(lines, "")
+	}
+
+	var format strings.Builder
+	for range lines {
+		format.WriteString("%s\n")
+	}
+
+	proc.Config.Cmd = append([]string{"printf", format.String()}, lines...)
 
 	s.Processes = append(s.Processes, proc)
 
+	keys := make([]string, 0, len(cfg.Procs))
+	for label := range cfg.Procs {
+		keys = append(keys, label)
+	}
+	sort.Strings(keys)
+
 	i := 2
-	for k, proc := range cfg.Procs {
-		proc := NewFromProcessConfig(i, k, &proc)
+	for _, label := range keys {
+		procCfg := cfg.Procs[label]
+		proc := NewFromProcessConfig(i, label, &procCfg)
 		s.Processes = append(s.Processes, proc)
 		i++
 	}
