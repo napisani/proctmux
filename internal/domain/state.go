@@ -38,16 +38,17 @@ func NewAppState(cfg *config.ProcTmuxConfig) AppState {
 		Autostart: true,
 	})
 
-	echo := " echo \"\"; "
+	var echo strings.Builder
+	echo.WriteString(" echo \"\"; ")
 
 	banner := cfg.Layout.PlaceholderBanner
-	for _, line := range strings.Split(banner, "\n") {
+	for line := range strings.SplitSeq(banner, "\n") {
 		if strings.TrimSpace(line) != "" {
-			echo += "echo \"" + line + "\"; "
+			echo.WriteString("echo \"" + line + "\"; ")
 		}
 	}
 
-	proc.Config.Cmd = []string{"bash", "-c", echo}
+	proc.Config.Cmd = []string{"bash", "-c", echo.String()}
 
 	s.Processes = append(s.Processes, proc)
 

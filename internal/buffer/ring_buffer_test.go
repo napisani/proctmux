@@ -185,9 +185,9 @@ func TestRingBuffer_ConcurrentWrites(t *testing.T) {
 
 	// Write concurrently from multiple goroutines
 	done := make(chan bool)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		go func(id int) {
-			for j := 0; j < 10; j++ {
+			for range 10 {
 				rb.Write([]byte{byte(id)})
 			}
 			done <- true
@@ -195,7 +195,7 @@ func TestRingBuffer_ConcurrentWrites(t *testing.T) {
 	}
 
 	// Wait for all goroutines
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 

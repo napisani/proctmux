@@ -2,6 +2,7 @@ package process
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,13 +86,7 @@ func TestBuildCommand_ShellPriority(t *testing.T) {
 	}
 
 	// The shell command should be in the args
-	found := false
-	for _, arg := range cmd.Args {
-		if arg == "shell command" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(cmd.Args, "shell command")
 	if !found {
 		t.Error("Expected shell command in args")
 	}
@@ -253,8 +248,8 @@ func TestBuildEnvironment_AddPath_Single(t *testing.T) {
 	// Find PATH variable
 	var pathValue string
 	for _, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			pathValue = strings.TrimPrefix(e, "PATH=")
+		if after, ok := strings.CutPrefix(e, "PATH="); ok {
+			pathValue = after
 			break
 		}
 	}
@@ -276,13 +271,7 @@ func TestBuildEnvironment_AddPath_Single(t *testing.T) {
 
 	// Verify it's appended (appears after original PATH)
 	parts := strings.Split(pathValue, ":")
-	found := false
-	for _, part := range parts {
-		if part == "/custom/bin" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(parts, "/custom/bin")
 	if !found {
 		t.Error("Custom path should be in PATH as a separate entry")
 	}
@@ -297,8 +286,8 @@ func TestBuildEnvironment_AddPath_Multiple(t *testing.T) {
 
 	var pathValue string
 	for _, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			pathValue = strings.TrimPrefix(e, "PATH=")
+		if after, ok := strings.CutPrefix(e, "PATH="); ok {
+			pathValue = after
 			break
 		}
 	}
@@ -324,8 +313,8 @@ func TestBuildEnvironment_AddPath_Format(t *testing.T) {
 
 	var pathValue string
 	for _, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			pathValue = strings.TrimPrefix(e, "PATH=")
+		if after, ok := strings.CutPrefix(e, "PATH="); ok {
+			pathValue = after
 			break
 		}
 	}
@@ -384,13 +373,7 @@ func TestBuildEnvironment_OverrideExistingVar(t *testing.T) {
 
 	env := buildEnvironment(cfg)
 
-	customHomeFound := false
-	for _, e := range env {
-		if e == "HOME=/custom/home" {
-			customHomeFound = true
-			break
-		}
-	}
+	customHomeFound := slices.Contains(env, "HOME=/custom/home")
 
 	if !customHomeFound {
 		t.Error("Expected custom HOME to be added to environment")

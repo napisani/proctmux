@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/nick/proctmux/internal/config"
@@ -95,13 +96,7 @@ func TestFilterProcesses_CategorySearch_Single(t *testing.T) {
 	}
 
 	for _, p := range result {
-		found := false
-		for _, cat := range p.Config.Categories {
-			if cat == "server" {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(p.Config.Categories, "server")
 		if !found {
 			t.Errorf("Process %q should have 'server' category", p.Label)
 		}

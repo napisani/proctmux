@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nick/proctmux/internal/config"
 )
@@ -54,11 +55,11 @@ func (p *Process) Command() string {
 		return ""
 	}
 
-	var result string
+	var result strings.Builder
 	for _, s := range p.Config.Cmd {
-		result += fmt.Sprintf("'%s' ", s)
+		result.WriteString(fmt.Sprintf("'%s' ", s))
 	}
-	return result
+	return result.String()
 }
 
 // ProcessView combines static process configuration with live runtime state
@@ -82,11 +83,11 @@ func (pv *ProcessView) Command() string {
 		return ""
 	}
 
-	var result string
+	var result strings.Builder
 	for _, s := range pv.Config.Cmd {
-		result += fmt.Sprintf("'%s' ", s)
+		result.WriteString(fmt.Sprintf("'%s' ", s))
 	}
-	return result
+	return result.String()
 }
 
 // ProcessController defines the interface for querying live process state

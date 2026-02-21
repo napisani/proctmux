@@ -91,7 +91,7 @@ func unifiedChildArgs() []string {
 	filtered := make([]string, 0, len(args)+2)
 	skipNext := false
 
-	for i := 0; i < len(args); i++ {
+	for i := range args {
 		if skipNext {
 			skipNext = false
 			continue

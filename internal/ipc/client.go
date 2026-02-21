@@ -214,7 +214,7 @@ func (c *Client) GetProcessList() ([]byte, error) {
 		return nil, err
 	}
 	// Return JSON in same format as signal server
-	data, err := json.Marshal(map[string]interface{}{
+	data, err := json.Marshal(map[string]any{
 		"process_list": resp.ProcessList,
 	})
 	return data, err

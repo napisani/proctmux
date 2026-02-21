@@ -3,30 +3,48 @@
 
   # Nixpkgs / NixOS version to use.
   inputs = {
-    nixpkgs.url =
-      "github:NixOS/nixpkgs/648f70160c03151bc2121d179291337ad6bc564b";
+    nixpkgs.url = "github:NixOS/nixpkgs/d1c15b7d5806069da59e819999d70e1cec0760bf";
     flake-utils.url = "github:numtide/flake-utils";
     goflake.url = "github:sagikazarmark/go-flake";
     goflake.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils, goflake, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      goflake,
+      ...
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # Use go_1_24 instead of the default go package
-        go = pkgs.go_1_24;
-        buildDeps = with pkgs; [ git go gnumake ];
-        devDeps = with pkgs; buildDeps ++ [ gotools goreleaser ];
+        # Use go_1_26 instead of the default go package
+        go = pkgs.go_1_26;
+        buildDeps = with pkgs; [
+          git
+          go
+          gnumake
+        ];
+        devDeps =
+          with pkgs;
+          buildDeps
+          ++ [
+            gotools
+            goreleaser
+          ];
 
         # Generate a user-friendly version number.
         version = builtins.substring 0 8 self.lastModifiedDate;
 
-      in {
-        packages.default = pkgs.buildGoModule {
+      in
+      {
+        packages.default = (pkgs.buildGoModule.override { go = go; }) {
           pname = "proctmux";
-          inherit version go;
+          inherit version;
           # In 'nix develop', we don't need a copy of the source tree
           # in the Nix store.
           src = ./.;
@@ -44,9 +62,10 @@
         };
 
         devShells.default = pkgs.mkShell {
-          # Use Go 1.24
+          # Use Go 1.26
           inherit go;
           buildInputs = devDeps;
         };
-      });
+      }
+    );
 }

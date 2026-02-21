@@ -44,9 +44,9 @@ func FilterProcesses(cfg *config.ProcTmuxConfig, processes []ProcessView, filter
 				out = append(out, &processes[i])
 			}
 		}
-	} else if strings.HasPrefix(ft, prefix) {
+	} else if after, ok := strings.CutPrefix(ft, prefix); ok {
 		// Category-based search
-		cats := strings.Split(strings.TrimPrefix(ft, prefix), ",")
+		cats := strings.Split(after, ",")
 		for i := range processes {
 			if processes[i].ID == DummyProcessID {
 				continue

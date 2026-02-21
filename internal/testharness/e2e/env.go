@@ -8,16 +8,16 @@ import (
 func mergeEnv(extra []string) []string {
 	envMap := make(map[string]string)
 	for _, kv := range os.Environ() {
-		if idx := strings.IndexByte(kv, '='); idx >= 0 {
-			key := kv[:idx]
-			value := kv[idx+1:]
+		if before, after, ok := strings.Cut(kv, "="); ok {
+			key := before
+			value := after
 			envMap[key] = value
 		}
 	}
 	for _, kv := range extra {
-		if idx := strings.IndexByte(kv, '='); idx >= 0 {
-			key := kv[:idx]
-			value := kv[idx+1:]
+		if before, after, ok := strings.Cut(kv, "="); ok {
+			key := before
+			value := after
 			envMap[key] = value
 		}
 	}

@@ -1,8 +1,6 @@
 module github.com/nick/proctmux
 
-go 1.24.4
-
-toolchain go1.24.7
+go 1.26.0
 
 require (
 	github.com/charmbracelet/bubbles v0.18.0
