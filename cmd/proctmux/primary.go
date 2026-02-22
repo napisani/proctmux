@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -28,19 +29,18 @@ func RunPrimary(cfg *config.ProcTmuxConfig) error {
 	primaryServer := proctmux.NewPrimaryServer(cfg, ipcServer)
 	ipcSocketPath, err := ipc.CreateSocket(cfg)
 	if err != nil {
-		log.Fatal("Failed to create socket path:", err)
+		return fmt.Errorf("create IPC socket: %w", err)
 	}
 
 	if err := primaryServer.Start(ipcSocketPath); err != nil {
-		log.Fatal("Failed to start primary server:", err)
+		return fmt.Errorf("start primary server: %w", err)
 	}
 
 	log.Println("Primary server running; waiting for shutdown signal (Ctrl+C)")
-	waitForShutdown(ctx, primaryServer.Stop)
-	return nil
+	return waitForShutdown(ctx, primaryServer.Stop)
 }
 
-func waitForShutdown(ctx context.Context, stop func()) {
+func waitForShutdown(ctx context.Context, stop func()) error {
 	<-ctx.Done()
 	if err := ctx.Err(); err != nil {
 		log.Printf("Shutdown signal received: %v", err)
@@ -48,4 +48,5 @@ func waitForShutdown(ctx context.Context, stop func()) {
 		log.Printf("Shutdown signal received")
 	}
 	stop()
+	return ctx.Err()
 }

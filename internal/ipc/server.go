@@ -14,6 +14,7 @@ import (
 	"slices"
 
 	"github.com/nick/proctmux/internal/domain"
+	"github.com/nick/proctmux/internal/protocol"
 	"github.com/nick/proctmux/internal/redact"
 )
 
@@ -31,7 +32,7 @@ type Server struct {
 	allowedUID    int
 	writeTimeout  time.Duration
 	primaryServer interface {
-		HandleCommand(action, label string) error
+		HandleCommand(action protocol.Command, label string) error
 		GetState() *domain.AppState
 		GetProcessController() domain.ProcessController
 	}
@@ -251,16 +252,17 @@ func (s *Server) handleCommand(conn *clientConn, msg Message) {
 
 	// If we have a primary server, use it to handle commands
 	if s.primaryServer != nil {
-		switch msg.Action {
-		case "start", "stop", "restart", "switch":
+		cmd := protocol.Command(msg.Action)
+		switch cmd {
+		case protocol.CommandStart, protocol.CommandStop, protocol.CommandRestart, protocol.CommandSwitch:
 			if msg.Label == "" {
 				response.Error = "missing process name"
-			} else if err := s.primaryServer.HandleCommand(msg.Action, msg.Label); err != nil {
+			} else if err := s.primaryServer.HandleCommand(cmd, msg.Label); err != nil {
 				response.Error = err.Error()
 			} else {
 				response.Success = true
 			}
-		case "list":
+		case protocol.CommandList:
 			state := s.primaryServer.GetState()
 			pc := s.primaryServer.GetProcessController()
 			var processList []map[string]any
@@ -278,21 +280,21 @@ func (s *Server) handleCommand(conn *clientConn, msg Message) {
 			}
 			response.ProcessList = processList
 			response.Success = true
-		case "restart-running":
+		case protocol.CommandRestartRunning:
 			state := s.primaryServer.GetState()
 			pc := s.primaryServer.GetProcessController()
 			runningLabels := getRunningLabels(state, pc)
 			for _, name := range runningLabels {
-				_ = s.primaryServer.HandleCommand("restart", name)
+				_ = s.primaryServer.HandleCommand(protocol.CommandRestart, name)
 			}
 			response.Success = true
-		case "stop-running":
+		case protocol.CommandStopRunning:
 			state := s.primaryServer.GetState()
 			pc := s.primaryServer.GetProcessController()
 			runningLabels := getRunningLabels(state, pc)
 			for _, name := range runningLabels {
 				log.Printf("IPC server sending stop command for process: %s", name)
-				_ = s.primaryServer.HandleCommand("stop", name)
+				_ = s.primaryServer.HandleCommand(protocol.CommandStop, name)
 			}
 			response.Success = true
 		default:
@@ -410,7 +412,7 @@ func writeWithDeadline(conn *clientConn, data []byte, timeout time.Duration) err
 }
 
 func (s *Server) SetPrimaryServer(primary interface {
-	HandleCommand(action, label string) error
+	HandleCommand(action protocol.Command, label string) error
 	GetState() *domain.AppState
 	GetProcessController() domain.ProcessController
 }) {

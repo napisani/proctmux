@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nick/proctmux/internal/domain"
+	"github.com/nick/proctmux/internal/protocol"
 )
 
 // Error message type
@@ -81,7 +82,7 @@ func (m *ClientModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, m.keys.Quit):
 		log.Printf("Client quitting, sending stop-running to primary")
 		return tea.Sequence(
-			m.sendCommandToPrimary("stop-running"),
+			m.sendCommandToPrimary(protocol.CommandStopRunning),
 			tea.ExitAltScreen,
 			tea.Quit,
 		)
@@ -106,13 +107,13 @@ func (m *ClientModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.sendSelectionToPrimary(m.activeProcLabel())
 
 	case key.Matches(msg, m.keys.Start):
-		return m.sendCommandToPrimary("start")
+		return m.sendCommandToPrimary(protocol.CommandStart)
 
 	case key.Matches(msg, m.keys.Stop):
-		return m.sendCommandToPrimary("stop")
+		return m.sendCommandToPrimary(protocol.CommandStop)
 
 	case key.Matches(msg, m.keys.Restart):
-		return m.sendCommandToPrimary("restart")
+		return m.sendCommandToPrimary(protocol.CommandRestart)
 
 	case key.Matches(msg, m.keys.ToggleRunning):
 		m.ui.ShowOnlyRunning = !m.ui.ShowOnlyRunning
@@ -178,9 +179,9 @@ func (m ClientModel) sendSelectionToPrimary(label string) tea.Cmd {
 	}
 }
 
-func (m ClientModel) sendCommandToPrimary(action string) tea.Cmd {
+func (m ClientModel) sendCommandToPrimary(action protocol.Command) tea.Cmd {
 	return func() tea.Msg {
-		if action == "stop-running" {
+		if action == protocol.CommandStopRunning {
 			if err := m.client.StopRunning(); err != nil {
 				return errMsg{err}
 			}
@@ -193,11 +194,11 @@ func (m ClientModel) sendCommandToPrimary(action string) tea.Cmd {
 		}
 		var err error
 		switch action {
-		case "start":
+		case protocol.CommandStart:
 			err = m.client.StartProcess(proc.Label)
-		case "stop":
+		case protocol.CommandStop:
 			err = m.client.StopProcess(proc.Label)
-		case "restart":
+		case protocol.CommandRestart:
 			err = m.client.RestartProcess(proc.Label)
 		default:
 			err = fmt.Errorf("unknown action: %s", action)

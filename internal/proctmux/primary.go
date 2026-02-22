@@ -12,6 +12,7 @@ import (
 	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/domain"
 	"github.com/nick/proctmux/internal/process"
+	"github.com/nick/proctmux/internal/protocol"
 	"github.com/nick/proctmux/internal/viewer"
 	"golang.org/x/sys/unix"
 )
@@ -39,7 +40,7 @@ type PrimaryServer struct {
 type IPCServerInterface interface {
 	Start(socketPath string) error
 	SetPrimaryServer(primary interface {
-		HandleCommand(action, label string) error
+		HandleCommand(action protocol.Command, label string) error
 		GetState() *domain.AppState
 		GetProcessController() domain.ProcessController
 	})
@@ -152,7 +153,7 @@ func (m *PrimaryServer) broadcastStateLocked() {
 }
 
 // HandleCommand handles IPC commands from clients
-func (m *PrimaryServer) HandleCommand(action string, label string) error {
+func (m *PrimaryServer) HandleCommand(action protocol.Command, label string) error {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 
@@ -163,13 +164,13 @@ func (m *PrimaryServer) HandleCommand(action string, label string) error {
 	var err error
 
 	switch action {
-	case "switch":
+	case protocol.CommandSwitch:
 		err = m.switchToProcessLocked(proc.ID)
-	case "start":
+	case protocol.CommandStart:
 		err = m.startProcessLocked(proc.ID)
-	case "stop":
+	case protocol.CommandStop:
 		err = m.stopProcessLocked(proc.ID)
-	case "restart":
+	case protocol.CommandRestart:
 		err = m.stopProcessLocked(proc.ID)
 		if err == nil {
 			time.Sleep(500 * time.Millisecond)

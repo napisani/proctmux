@@ -56,8 +56,8 @@ func main() {
 
 	logFile, err := setupLogger(logPath)
 	if err != nil {
-		fmt.Println("Failed to open log file:", cfgLoadErr)
-		panic(cfgLoadErr)
+		fmt.Println("Failed to open log file:", err)
+		panic(err)
 	}
 	defer func() {
 		if logFile != nil {

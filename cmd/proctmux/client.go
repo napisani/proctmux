@@ -35,7 +35,7 @@ func RunClient(cfg *config.ProcTmuxConfig) error {
 			fmt.Println("To start the primary server, run:")
 			fmt.Println("  proctmux")
 			fmt.Println()
-			log.Fatal("Failed to find primary server socket")
+			return fmt.Errorf("wait for primary server socket: %w", err)
 		}
 
 		// Clear the waiting message
@@ -48,7 +48,7 @@ func RunClient(cfg *config.ProcTmuxConfig) error {
 	client, err := ipc.NewClient(socketPath)
 	if err != nil {
 		fmt.Printf("\nError connecting to primary server: %v\n", err)
-		log.Fatal("Failed to connect to primary server:", err)
+		return fmt.Errorf("connect to primary server: %w", err)
 	}
 	defer client.Close()
 
@@ -58,7 +58,7 @@ func RunClient(cfg *config.ProcTmuxConfig) error {
 	p := tea.NewProgram(clientModel, bubbleTeaProgramOptions()...)
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running proctmux client: %v\n", err)
-		log.Fatal(err)
+		return fmt.Errorf("run client UI: %w", err)
 	}
 
 	return nil

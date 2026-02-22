@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nick/proctmux/internal/domain"
+	"github.com/nick/proctmux/internal/protocol"
 )
 
 type Client struct {
@@ -124,7 +125,7 @@ func (c *Client) readResponses() {
 	}
 }
 
-func (c *Client) sendCommand(action string, label string) (*Message, error) {
+func (c *Client) sendCommand(action protocol.Command, label string) (*Message, error) {
 	c.mu.Lock()
 	if c.conn == nil {
 		c.mu.Unlock()
@@ -136,7 +137,7 @@ func (c *Client) sendCommand(action string, label string) (*Message, error) {
 	msg := Message{
 		Type:      "command",
 		RequestID: reqID,
-		Action:    action,
+		Action:    action.String(),
 		Label:     label,
 	}
 
@@ -179,37 +180,37 @@ func (c *Client) sendCommand(action string, label string) (*Message, error) {
 }
 
 func (c *Client) StartProcess(name string) error {
-	_, err := c.sendCommand("start", name)
+	_, err := c.sendCommand(protocol.CommandStart, name)
 	return err
 }
 
 func (c *Client) StopProcess(name string) error {
-	_, err := c.sendCommand("stop", name)
+	_, err := c.sendCommand(protocol.CommandStop, name)
 	return err
 }
 
 func (c *Client) RestartProcess(name string) error {
-	_, err := c.sendCommand("restart", name)
+	_, err := c.sendCommand(protocol.CommandRestart, name)
 	return err
 }
 
 func (c *Client) RestartRunning() error {
-	_, err := c.sendCommand("restart-running", "")
+	_, err := c.sendCommand(protocol.CommandRestartRunning, "")
 	return err
 }
 
 func (c *Client) StopRunning() error {
-	_, err := c.sendCommand("stop-running", "")
+	_, err := c.sendCommand(protocol.CommandStopRunning, "")
 	return err
 }
 
 func (c *Client) SwitchProcess(name string) error {
-	_, err := c.sendCommand("switch", name)
+	_, err := c.sendCommand(protocol.CommandSwitch, name)
 	return err
 }
 
 func (c *Client) GetProcessList() ([]byte, error) {
-	resp, err := c.sendCommand("list", "")
+	resp, err := c.sendCommand(protocol.CommandList, "")
 	if err != nil {
 		return nil, err
 	}
