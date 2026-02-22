@@ -35,22 +35,17 @@ func FilterProcesses(cfg *config.ProcTmuxConfig, processes []ProcessView, filter
 	ft := strings.TrimSpace(filterText)
 
 	if ft == "" {
-		// No filter - return all non-dummy processes (optionally filtered by running status)
+		// No filter - return all processes (optionally filtered by running status)
 		for i := range processes {
-			if processes[i].ID != DummyProcessID {
-				if showOnlyRunning && processes[i].Status != StatusRunning {
-					continue
-				}
-				out = append(out, &processes[i])
+			if showOnlyRunning && processes[i].Status != StatusRunning {
+				continue
 			}
+			out = append(out, &processes[i])
 		}
 	} else if after, ok := strings.CutPrefix(ft, prefix); ok {
 		// Category-based search
 		cats := strings.Split(after, ",")
 		for i := range processes {
-			if processes[i].ID == DummyProcessID {
-				continue
-			}
 			if showOnlyRunning && processes[i].Status != StatusRunning {
 				continue
 			}
@@ -78,12 +73,10 @@ func FilterProcesses(cfg *config.ProcTmuxConfig, processes []ProcessView, filter
 		// Filter out dummy processes first
 		var validProcesses []ProcessView
 		for i := range processes {
-			if processes[i].ID != DummyProcessID {
-				if showOnlyRunning && processes[i].Status != StatusRunning {
-					continue
-				}
-				validProcesses = append(validProcesses, processes[i])
+			if showOnlyRunning && processes[i].Status != StatusRunning {
+				continue
 			}
+			validProcesses = append(validProcesses, processes[i])
 		}
 
 		// Use fuzzy library for matching

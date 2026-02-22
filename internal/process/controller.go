@@ -125,9 +125,11 @@ func (pc *Controller) StartProcess(id int, cfg *config.ProcessConfig) (*Instance
 	// Copy PTY output to configured writer (blocking operation)
 	// This reads from master PTY and forwards to a.writer
 	// Continues until PTY is closed (child exits or Close() called)
-	go func() {
-		_, err = io.Copy(i.Writer, ptmx)
-	}()
+	go func(writer io.Writer, src *os.File, procID int) {
+		if _, copyErr := io.Copy(writer, src); copyErr != nil {
+			log.Printf("PTY copy for process %d failed: %v", procID, copyErr)
+		}
+	}(i.Writer, ptmx, id)
 
 	return i, err
 }

@@ -80,10 +80,14 @@ func NewPrimaryServer(cfg *config.ProcTmuxConfig, ipcServer IPCServerInterface) 
 	// Create an adapter that satisfies the viewer.ProcessServer interface
 	serverAdapter := &processControllerAdapter{pc: processController}
 
+	v := viewer.New(serverAdapter)
+	v.SetPlaceholder(cfg.Layout.PlaceholderBanner)
+	v.ShowPlaceholder()
+
 	return &PrimaryServer{
 		processController: processController,
 		ipcServer:         ipcServer,
-		viewer:            viewer.New(serverAdapter),
+		viewer:            v,
 		state:             &state,
 		cfg:               cfg,
 		done:              make(chan struct{}),

@@ -223,9 +223,6 @@ func getRunningLabels(state *domain.AppState, pc domain.ProcessController) []str
 	var labels []string
 	for i := range state.Processes {
 		p := &state.Processes[i]
-		if p.ID == domain.DummyProcessID {
-			continue
-		}
 		view := p.ToView(pc)
 		if view.Status == domain.StatusRunning {
 			labels = append(labels, view.Label)
@@ -268,9 +265,6 @@ func (s *Server) handleCommand(conn *clientConn, msg Message) {
 			var processList []map[string]any
 			for i := range state.Processes {
 				p := &state.Processes[i]
-				if p.ID == domain.DummyProcessID {
-					continue
-				}
 				view := p.ToView(pc)
 				processList = append(processList, map[string]any{
 					"name":    view.Label,
