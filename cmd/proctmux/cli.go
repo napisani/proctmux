@@ -15,6 +15,7 @@ const (
 	UnifiedSplitRight  UnifiedSplit = "right"
 	UnifiedSplitTop    UnifiedSplit = "top"
 	UnifiedSplitBottom UnifiedSplit = "bottom"
+	UnifiedSplitToggle UnifiedSplit = "toggle"
 )
 
 // CLIConfig holds the parsed command-line configuration
@@ -32,7 +33,7 @@ func ParseCLI() *CLIConfig {
 	cfg := &CLIConfig{}
 
 	var clientMode bool
-	var unifiedLeft, unifiedRight, unifiedTop, unifiedBottom bool
+	var unifiedLeft, unifiedRight, unifiedTop, unifiedBottom, unifiedToggle bool
 	flag.StringVar(&cfg.ConfigFile, "f", "", "path to config file (default: searches for proctmux.yaml in current directory)")
 	flag.StringVar(&cfg.Mode, "mode", "primary", "mode: primary (process server) or client (UI only)")
 	flag.BoolVar(&clientMode, "client", false, "run in client mode (connects to primary)")
@@ -41,6 +42,7 @@ func ParseCLI() *CLIConfig {
 	flag.BoolVar(&unifiedRight, "unified-right", false, "run in unified mode with process list on the right")
 	flag.BoolVar(&unifiedTop, "unified-top", false, "run in unified mode with process list above the output")
 	flag.BoolVar(&unifiedBottom, "unified-bottom", false, "run in unified mode with process list below the output")
+	flag.BoolVar(&unifiedToggle, "unified-toggle", false, "run in unified-toggle mode (toggle between process list and output)")
 	flag.Usage = printUsage
 	flag.Parse()
 
@@ -52,6 +54,7 @@ func ParseCLI() *CLIConfig {
 		{unifiedRight, UnifiedSplitRight},
 		{unifiedTop, UnifiedSplitTop},
 		{unifiedBottom, UnifiedSplitBottom},
+		{unifiedToggle, UnifiedSplitToggle},
 	}
 
 	for _, item := range orientationFlags {
@@ -103,6 +106,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  --unified-right          Unified mode with process list on the right\n")
 	fmt.Fprintf(os.Stderr, "  --unified-top            Unified mode with process list above the output\n")
 	fmt.Fprintf(os.Stderr, "  --unified-bottom         Unified mode with process list below the output\n")
+	fmt.Fprintf(os.Stderr, "  --unified-toggle         Unified-toggle mode (toggle between process list and output)\n")
 	fmt.Fprintf(os.Stderr, "\nCommands:\n")
 	fmt.Fprintf(os.Stderr, "  config-init [path]       Create a starter proctmux.yaml configuration file\n")
 	fmt.Fprintf(os.Stderr, "  start                    Start the TUI (default)\n")

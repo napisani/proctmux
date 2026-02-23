@@ -38,6 +38,28 @@ func StartUnifiedSession(t testing.TB, cfgDir, cfgPath string, extraEnv ...strin
 	return sess
 }
 
+// StartUnifiedToggleSession builds the proctmux binary (if needed) and launches it in unified-toggle mode.
+func StartUnifiedToggleSession(t testing.TB, cfgDir, cfgPath string, extraEnv ...string) *Session {
+	t.Helper()
+
+	binary := Binary(t)
+	args := []string{"--unified-toggle", "-f", cfgPath}
+	env := append([]string{"PROCTMUX_NO_ALTSCREEN=1", "TERM=xterm-256color"}, extraEnv...)
+
+	sess, err := startSession(binary, args, cfgDir, env)
+	if err != nil {
+		t.Fatalf("start unified-toggle session: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := sess.Stop(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: stopping unified-toggle session: %v\n", err)
+		}
+	})
+
+	return sess
+}
+
 // StartClientSession starts a client-only proctmux instance using the provided configuration file.
 func StartClientSession(t testing.TB, cfgDir, cfgPath string, extraEnv ...string) *Session {
 	t.Helper()

@@ -248,40 +248,6 @@ func (f filterComponent) View() string {
 
 // Panels and View
 
-// helpPanel renders keybinding help (legacy implementation - not currently used)
-// The helpPanelBubbleTea function is used instead for idiomatic Bubble Tea rendering
-func helpPanel(cfg *config.ProcTmuxConfig) string {
-	// Create style for key bindings
-	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // cyan
-	descStyle := lipgloss.NewStyle()
-
-	// Build keybinding help items with spacing
-	items := []string{
-		keyStyle.Render("["+strings.Join(cfg.Keybinding.Start, "/")+"]") + descStyle.Render(" Start  "),
-		keyStyle.Render("["+strings.Join(cfg.Keybinding.Stop, "/")+"]") + descStyle.Render(" Stop  "),
-		keyStyle.Render("["+strings.Join(cfg.Keybinding.Up, "/")+"]") + descStyle.Render(" Up  "),
-		keyStyle.Render("["+strings.Join(cfg.Keybinding.Down, "/")+"]") + descStyle.Render(" Down  "),
-		keyStyle.Render("["+strings.Join(cfg.Keybinding.Filter, "/")+"]") + descStyle.Render(" Filter  "),
-	}
-
-	if len(cfg.Keybinding.ToggleFocus) > 0 {
-		items = append(items, keyStyle.Render("["+strings.Join(cfg.Keybinding.ToggleFocus, "/")+"]")+descStyle.Render(" Focus  "))
-	}
-	if len(cfg.Keybinding.FocusClient) > 0 {
-		items = append(items, keyStyle.Render("["+strings.Join(cfg.Keybinding.FocusClient, "/")+"]")+descStyle.Render(" Client "))
-	}
-	if len(cfg.Keybinding.FocusServer) > 0 {
-		items = append(items, keyStyle.Render("["+strings.Join(cfg.Keybinding.FocusServer, "/")+"]")+descStyle.Render(" Server "))
-	}
-
-	items = append(items, keyStyle.Render("["+strings.Join(cfg.Keybinding.Quit, "/")+"]")+descStyle.Render(" Quit"))
-
-	helpLine := lipgloss.JoinHorizontal(lipgloss.Left, items...)
-	modeInfo := lipgloss.NewStyle().Faint(true).Render("[Client Mode - Connected to Primary]")
-
-	return lipgloss.JoinVertical(lipgloss.Left, helpLine, modeInfo)
-}
-
 // helpPanelBubbleTea renders help using bubble tea's help component
 // Always shows the full help view when visible
 // Toggled on/off with '?' keybinding
@@ -345,10 +311,7 @@ func wrapBulletLine(text string, width int) string {
 		return "- " + text
 	}
 
-	wrapWidth := width - 2
-	if wrapWidth < 1 {
-		wrapWidth = 1
-	}
+	wrapWidth := max(width-2, 1)
 
 	wrapped := wordwrap.String(text, wrapWidth)
 	lines := strings.Split(wrapped, "\n")

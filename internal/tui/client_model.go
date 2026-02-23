@@ -170,10 +170,7 @@ func (m *ClientModel) updateLayout() {
 		return
 	}
 	headerH := m.headerHeight()
-	listH := m.termHeight - headerH
-	if listH < 0 {
-		listH = 0
-	}
+	listH := max(m.termHeight-headerH, 0)
 	m.procList.SetSize(m.termWidth, listH)
 }
 
