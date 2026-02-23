@@ -1,7 +1,7 @@
 package domain
 
 import (
-	"strings"
+	"slices"
 	"testing"
 
 	"github.com/nick/proctmux/internal/config"
@@ -29,47 +29,16 @@ func TestNewAppState_Basic(t *testing.T) {
 		t.Error("Config not set correctly")
 	}
 
-	// Should have 3 processes: dummy + 2 from config
-	if len(state.Processes) != 3 {
-		t.Errorf("Expected 3 processes (1 dummy + 2 config), got %d", len(state.Processes))
+	if len(state.Processes) != 2 {
+		t.Fatalf("Expected 2 processes, got %d", len(state.Processes))
 	}
 
-	// First process should be dummy
-	if state.Processes[0].ID != DummyProcessID {
-		t.Errorf("Expected first process to be dummy (ID %d), got %d", DummyProcessID, state.Processes[0].ID)
+	labels := []string{state.Processes[0].Label, state.Processes[1].Label}
+	if !(slices.Contains(labels, "backend") && slices.Contains(labels, "frontend")) {
+		t.Fatalf("Expected backend and frontend processes, got %v", labels)
 	}
-	if state.Processes[0].Label != "Dummy" {
-		t.Errorf("Expected dummy label 'Dummy', got %q", state.Processes[0].Label)
-	}
-
-	// Dummy should autostart
-	if !state.Processes[0].Config.Autostart {
-		t.Error("Dummy process should have autostart enabled")
-	}
-
-	// Check that IDs start from 2 for non-dummy processes
-	foundBackend := false
-	foundFrontend := false
-	for _, p := range state.Processes {
-		if p.ID == DummyProcessID {
-			continue
-		}
-		if p.ID < 2 {
-			t.Errorf("Non-dummy process ID should be >= 2, got %d", p.ID)
-		}
-		if p.Label == "backend" {
-			foundBackend = true
-		}
-		if p.Label == "frontend" {
-			foundFrontend = true
-		}
-	}
-
-	if !foundBackend {
-		t.Error("Backend process not found")
-	}
-	if !foundFrontend {
-		t.Error("Frontend process not found")
+	if state.Processes[0].ID != 1 || state.Processes[1].ID != 2 {
+		t.Errorf("Expected sequential IDs starting at 1, got %d and %d", state.Processes[0].ID, state.Processes[1].ID)
 	}
 
 	// Check not exiting
@@ -78,43 +47,17 @@ func TestNewAppState_Basic(t *testing.T) {
 	}
 }
 
-func TestNewAppState_DummyBannerGeneration(t *testing.T) {
-	banner := "LINE1\nLINE2\n  \nLINE3"
+func TestNewAppState_NoProcessesWhenOnlyBanner(t *testing.T) {
 	cfg := &config.ProcTmuxConfig{
 		Layout: config.LayoutConfig{
-			PlaceholderBanner: banner,
+			PlaceholderBanner: "LINE1\nLINE2\n  \nLINE3",
 		},
 		Procs: map[string]config.ProcessConfig{},
 	}
 
 	state := NewAppState(cfg)
-
-	// Dummy should be first
-	dummy := state.Processes[0]
-	if dummy.ID != DummyProcessID {
-		t.Fatal("First process should be dummy")
-	}
-
-	// Check the command contains echo statements
-	cmd := dummy.Command()
-	if !strings.Contains(cmd, "echo") {
-		t.Error("Dummy command should contain echo statements")
-	}
-	if !strings.Contains(cmd, "LINE1") {
-		t.Error("Dummy command should include banner line 1")
-	}
-	if !strings.Contains(cmd, "LINE2") {
-		t.Error("Dummy command should include banner line 2")
-	}
-	if !strings.Contains(cmd, "LINE3") {
-		t.Error("Dummy command should include banner line 3")
-	}
-
-	// Empty lines should be skipped
-	lines := strings.Count(cmd, "echo")
-	// Should have echo statements for non-empty lines + one initial empty echo
-	if lines < 3 {
-		t.Errorf("Expected at least 3 echo statements, got %d", lines)
+	if len(state.Processes) != 0 {
+		t.Fatalf("Expected no processes, got %d", len(state.Processes))
 	}
 }
 
@@ -132,18 +75,14 @@ func TestNewAppState_AlphabeticalSort(t *testing.T) {
 
 	state := NewAppState(cfg)
 
-	// Skip dummy (first process)
-	nonDummy := state.Processes[1:]
-
-	// Should be sorted alphabetically
-	if len(nonDummy) != 3 {
-		t.Fatalf("Expected 3 non-dummy processes, got %d", len(nonDummy))
+	if len(state.Processes) != 3 {
+		t.Fatalf("Expected 3 processes, got %d", len(state.Processes))
 	}
 
 	expected := []string{"apple", "mango", "zebra"}
 	for i, expectedLabel := range expected {
-		if nonDummy[i].Label != expectedLabel {
-			t.Errorf("Position %d: expected %q, got %q", i, expectedLabel, nonDummy[i].Label)
+		if state.Processes[i].Label != expectedLabel {
+			t.Errorf("Position %d: expected %q, got %q", i, expectedLabel, state.Processes[i].Label)
 		}
 	}
 }
@@ -161,23 +100,57 @@ func TestNewAppState_NoAlphabeticalSort(t *testing.T) {
 
 	state := NewAppState(cfg)
 
-	// Map order is not guaranteed in Go, but we should have both processes
-	nonDummy := state.Processes[1:]
-	if len(nonDummy) != 2 {
-		t.Fatalf("Expected 2 non-dummy processes, got %d", len(nonDummy))
+	if len(state.Processes) != 2 {
+		t.Fatalf("Expected 2 processes, got %d", len(state.Processes))
 	}
 
-	// Just verify both are present (order doesn't matter)
-	labels := make(map[string]bool)
-	for _, p := range nonDummy {
-		labels[p.Label] = true
+	labels := []string{state.Processes[0].Label, state.Processes[1].Label}
+	if !(slices.Contains(labels, "zebra") && slices.Contains(labels, "apple")) {
+		t.Errorf("Expected zebra and apple processes, got %v", labels)
+	}
+}
+
+func TestNewAppState_ProcessConfigsRemainDistinct(t *testing.T) {
+	cfg := &config.ProcTmuxConfig{
+		Procs: map[string]config.ProcessConfig{
+			"api": {
+				Shell: "echo api",
+				Env:   map[string]string{"ROLE": "api"},
+			},
+			"worker": {
+				Shell: "echo worker",
+				Env:   map[string]string{"ROLE": "worker"},
+			},
+		},
 	}
 
-	if !labels["zebra"] {
-		t.Error("zebra process not found")
+	state := NewAppState(cfg)
+
+	api := state.GetProcessByLabel("api")
+	worker := state.GetProcessByLabel("worker")
+
+	if api == nil || worker == nil {
+		t.Fatalf("Expected both api and worker processes to be present")
 	}
-	if !labels["apple"] {
-		t.Error("apple process not found")
+
+	if api.Config == worker.Config {
+		t.Fatal("Processes should not share the same config pointer")
+	}
+
+	if api.Config.Shell != "echo api" {
+		t.Fatalf("Expected api shell to remain intact, got %q", api.Config.Shell)
+	}
+
+	if worker.Config.Shell != "echo worker" {
+		t.Fatalf("Expected worker shell to remain intact, got %q", worker.Config.Shell)
+	}
+
+	if api.Config.Env["ROLE"] != "api" {
+		t.Fatalf("Expected api env to remain distinct, got %q", api.Config.Env["ROLE"])
+	}
+
+	if worker.Config.Env["ROLE"] != "worker" {
+		t.Fatalf("Expected worker env to remain distinct, got %q", worker.Config.Env["ROLE"])
 	}
 }
 
@@ -189,13 +162,8 @@ func TestNewAppState_EmptyProcs(t *testing.T) {
 
 	state := NewAppState(cfg)
 
-	// Should only have dummy process
-	if len(state.Processes) != 1 {
-		t.Errorf("Expected 1 process (dummy only), got %d", len(state.Processes))
-	}
-
-	if state.Processes[0].ID != DummyProcessID {
-		t.Error("Only process should be dummy")
+	if len(state.Processes) != 0 {
+		t.Errorf("Expected no processes when config is empty, got %d", len(state.Processes))
 	}
 }
 
@@ -208,17 +176,7 @@ func TestAppState_GetProcessByID_Found(t *testing.T) {
 
 	state := NewAppState(cfg)
 
-	// Get dummy by ID
-	dummy := state.GetProcessByID(DummyProcessID)
-	if dummy == nil {
-		t.Fatal("Expected to find dummy process")
-	}
-	if dummy.ID != DummyProcessID {
-		t.Errorf("Expected ID %d, got %d", DummyProcessID, dummy.ID)
-	}
-
-	// Get test process by ID (should be ID 2)
-	test := state.GetProcessByID(2)
+	test := state.GetProcessByID(1)
 	if test == nil {
 		t.Fatal("Expected to find test process")
 	}
@@ -264,14 +222,6 @@ func TestAppState_GetProcessByLabel_Found(t *testing.T) {
 	}
 	if frontend.Label != "frontend" {
 		t.Errorf("Expected label 'frontend', got %q", frontend.Label)
-	}
-
-	dummy := state.GetProcessByLabel("Dummy")
-	if dummy == nil {
-		t.Fatal("Expected to find Dummy process")
-	}
-	if dummy.ID != DummyProcessID {
-		t.Error("Expected to find dummy by label")
 	}
 }
 
@@ -328,13 +278,6 @@ func TestMode_Constants(t *testing.T) {
 	// Just verify the constants are defined and distinct
 	if NormalMode == FilterMode {
 		t.Error("NormalMode and FilterMode should be different")
-	}
-}
-
-func TestDummyProcessID_Constant(t *testing.T) {
-	// Verify the constant is defined
-	if DummyProcessID != 1 {
-		t.Errorf("Expected DummyProcessID to be 1, got %d", DummyProcessID)
 	}
 }
 

@@ -34,39 +34,28 @@ func makeProcessView(id int, label string, status ProcessStatus, categories []st
 func TestFilterProcesses_NoFilter_AllProcesses(t *testing.T) {
 	cfg := testConfig()
 	processes := []ProcessView{
-		makeProcessView(DummyProcessID, "dummy", StatusHalted, nil),
-		makeProcessView(2, "backend", StatusRunning, []string{"server"}),
-		makeProcessView(3, "frontend", StatusHalted, []string{"client"}),
-		makeProcessView(4, "database", StatusRunning, []string{"db"}),
+		makeProcessView(1, "backend", StatusRunning, []string{"server"}),
+		makeProcessView(2, "frontend", StatusHalted, []string{"client"}),
+		makeProcessView(3, "database", StatusRunning, []string{"db"}),
 	}
 
 	result := FilterProcesses(cfg, processes, "", false)
 
-	// Should exclude dummy process
 	if len(result) != 3 {
-		t.Errorf("Expected 3 processes (excluding dummy), got %d", len(result))
-	}
-
-	// Verify dummy is excluded
-	for _, p := range result {
-		if p.ID == DummyProcessID {
-			t.Error("Dummy process should be excluded")
-		}
+		t.Errorf("Expected 3 processes, got %d", len(result))
 	}
 }
 
 func TestFilterProcesses_NoFilter_ShowOnlyRunning(t *testing.T) {
 	cfg := testConfig()
 	processes := []ProcessView{
-		makeProcessView(DummyProcessID, "dummy", StatusHalted, nil),
-		makeProcessView(2, "backend", StatusRunning, []string{"server"}),
-		makeProcessView(3, "frontend", StatusHalted, []string{"client"}),
-		makeProcessView(4, "database", StatusRunning, []string{"db"}),
+		makeProcessView(1, "backend", StatusRunning, []string{"server"}),
+		makeProcessView(2, "frontend", StatusHalted, []string{"client"}),
+		makeProcessView(3, "database", StatusRunning, []string{"db"}),
 	}
 
 	result := FilterProcesses(cfg, processes, "", true)
 
-	// Should only include running processes (excluding dummy)
 	if len(result) != 2 {
 		t.Errorf("Expected 2 running processes, got %d", len(result))
 	}
@@ -74,9 +63,6 @@ func TestFilterProcesses_NoFilter_ShowOnlyRunning(t *testing.T) {
 	for _, p := range result {
 		if p.Status != StatusRunning {
 			t.Errorf("Expected only running processes, got %v", p.Status)
-		}
-		if p.ID == DummyProcessID {
-			t.Error("Dummy process should be excluded")
 		}
 	}
 }

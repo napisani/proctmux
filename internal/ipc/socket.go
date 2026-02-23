@@ -2,14 +2,17 @@ package ipc
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"time"
 
 	"github.com/nick/proctmux/internal/config"
 )
 
+var socketBaseDir = "/tmp"
+
 func getTmpDir() string {
-	return "/tmp"
+	return socketBaseDir
 }
 
 // CreateSocket creates a new socket file path based on config hash and creates it.
@@ -29,7 +32,7 @@ func CreateSocket(config *config.ProcTmuxConfig) (string, error) {
 }
 
 // GetSocket returns the socket path for the given config.
-// It checks if the socket exists, and returns an error if it doesn't.
+// It checks if the socket exists and is accepting connections.
 func GetSocket(config *config.ProcTmuxConfig) (string, error) {
 	hash, err := config.ToHash()
 	if err != nil {
@@ -41,6 +44,9 @@ func GetSocket(config *config.ProcTmuxConfig) (string, error) {
 	// Verify the socket exists
 	if _, err := os.Stat(socketPath); err != nil {
 		return "", fmt.Errorf("socket file does not exist: %s", socketPath)
+	}
+	if err := probeSocket(socketPath); err != nil {
+		return "", fmt.Errorf("socket not ready: %w", err)
 	}
 
 	return socketPath, nil
@@ -77,7 +83,9 @@ func WaitForSocketWithProgress(config *config.ProcTmuxConfig, progressCallback f
 			return "", fmt.Errorf("timeout waiting for socket: %s", socketPath)
 		case <-ticker.C:
 			if _, err := os.Stat(socketPath); err == nil {
-				return socketPath, nil
+				if err := probeSocket(socketPath); err == nil {
+					return socketPath, nil
+				}
 			}
 			// Call progress callback if provided
 			if progressCallback != nil {
@@ -86,4 +94,12 @@ func WaitForSocketWithProgress(config *config.ProcTmuxConfig, progressCallback f
 			}
 		}
 	}
+}
+
+func probeSocket(path string) error {
+	conn, err := net.DialTimeout("unix", path, 500*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }

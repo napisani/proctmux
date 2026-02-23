@@ -34,8 +34,8 @@ const (
 type focusPane int
 
 const (
-	focusClient focusPane = iota
-	focusServer
+	paneClient focusPane = iota
+	paneServer
 )
 
 type terminalFrameMsg struct {
@@ -43,19 +43,17 @@ type terminalFrameMsg struct {
 	exited bool
 }
 
-// UnifiedModel composes the existing client TUI with a virtual terminal that
+// SplitPaneModel composes the existing client TUI with a virtual terminal that
 // hosts the embedded primary server.
-type UnifiedModel struct {
+type SplitPaneModel struct {
 	clientModel tea.Model
 	emu         *emulator.Emulator
 
 	focus        focusPane
 	pollInterval time.Duration
 
-	toggleFocus      key.Binding
+	keys             focusKeys
 	toggleFocusLabel string
-	focusClient      key.Binding
-	focusServer      key.Binding
 	focusClientLabel string
 	focusServerLabel string
 
@@ -73,34 +71,26 @@ type UnifiedModel struct {
 	serverHeight  int
 }
 
-// NewUnifiedModel constructs a unified TUI model from an existing client model
-// and an initialized bubbleterm emulator.
-func NewUnifiedModel(client ClientModel, emu *emulator.Emulator, orientation SplitOrientation) UnifiedModel {
-	toggleFocus := client.keys.ToggleFocus
-	toggleLabel := joinKeys(toggleFocus.Keys())
+// NewSplitPaneModel constructs a split-pane TUI model from an existing client
+// model and an initialized bubbleterm emulator.
+func NewSplitPaneModel(client ClientModel, emu *emulator.Emulator, orientation SplitOrientation) SplitPaneModel {
+	fk := newFocusKeys(client.keys)
 
-	focusClientBinding := client.keys.FocusClient
-	focusServerBinding := client.keys.FocusServer
-	focusClientLabel := joinKeys(focusClientBinding.Keys())
-	focusServerLabel := joinKeys(focusServerBinding.Keys())
-
-	return UnifiedModel{
+	return SplitPaneModel{
 		clientModel:      client,
 		emu:              emu,
-		focus:            focusClient,
+		focus:            paneClient,
 		pollInterval:     unifiedPollInterval,
-		toggleFocus:      toggleFocus,
-		toggleFocusLabel: toggleLabel,
-		focusClient:      focusClientBinding,
-		focusServer:      focusServerBinding,
-		focusClientLabel: focusClientLabel,
-		focusServerLabel: focusServerLabel,
+		keys:             fk,
+		toggleFocusLabel: joinKeys(fk.toggle.Keys()),
+		focusClientLabel: joinKeys(fk.client.Keys()),
+		focusServerLabel: joinKeys(fk.server.Keys()),
 		orientation:      orientation,
 		statusHeight:     unifiedStatusLines,
 	}
 }
 
-func (m UnifiedModel) Init() tea.Cmd {
+func (m SplitPaneModel) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	if m.clientModel != nil {
 		if cmd := m.clientModel.Init(); cmd != nil {
@@ -113,7 +103,7 @@ func (m UnifiedModel) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (m UnifiedModel) pollTerminal() tea.Cmd {
+func (m SplitPaneModel) pollTerminal() tea.Cmd {
 	if m.emu == nil {
 		return nil
 	}
@@ -125,7 +115,7 @@ func (m UnifiedModel) pollTerminal() tea.Cmd {
 	})
 }
 
-func (m UnifiedModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m SplitPaneModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleResize(msg)
@@ -140,7 +130,7 @@ func (m UnifiedModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m UnifiedModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+func (m SplitPaneModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	if msg.Width <= 0 || msg.Height <= 0 {
 		return m, nil
 	}
@@ -152,10 +142,7 @@ func (m UnifiedModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.statusHeight = statusLines
 
 	m.contentWidth = msg.Width
-	contentHeight := msg.Height - statusLines
-	if contentHeight < 0 {
-		contentHeight = 0
-	}
+	contentHeight := max(msg.Height-statusLines, 0)
 	m.contentHeight = contentHeight
 
 	var clientCmd tea.Cmd
@@ -238,35 +225,35 @@ func (m UnifiedModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	return m, clientCmd
 }
 
-func (m UnifiedModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if len(m.toggleFocus.Keys()) > 0 && key.Matches(msg, m.toggleFocus) {
-		if m.focus == focusClient {
-			m.focus = focusServer
+func (m SplitPaneModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if len(m.keys.toggle.Keys()) > 0 && key.Matches(msg, m.keys.toggle) {
+		if m.focus == paneClient {
+			m.focus = paneServer
 		} else {
-			m.focus = focusClient
+			m.focus = paneClient
 		}
 		return m, nil
 	}
 
-	if len(m.focusClient.Keys()) > 0 && key.Matches(msg, m.focusClient) {
-		m.focus = focusClient
+	if len(m.keys.client.Keys()) > 0 && key.Matches(msg, m.keys.client) {
+		m.focus = paneClient
 		return m, nil
 	}
-	if len(m.focusServer.Keys()) > 0 && key.Matches(msg, m.focusServer) {
-		m.focus = focusServer
+	if len(m.keys.server.Keys()) > 0 && key.Matches(msg, m.keys.server) {
+		m.focus = paneServer
 		return m, nil
 	}
 
 	switch msg.String() {
 	case "ctrl+right":
-		m.focus = focusServer
+		m.focus = paneServer
 		return m, nil
 	case "ctrl+left":
-		m.focus = focusClient
+		m.focus = paneClient
 		return m, nil
 	}
 
-	if m.focus == focusServer {
+	if m.focus == paneServer {
 		if m.emu != nil {
 			if input := keyMsgToTerminalInput(msg); input != "" {
 				_, _ = m.emu.Write([]byte(input))
@@ -278,17 +265,13 @@ func (m UnifiedModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.forwardToClient(msg)
 }
 
-func (m UnifiedModel) forwardToClient(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.clientModel == nil {
-		return m, nil
-	}
-
+func (m SplitPaneModel) forwardToClient(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	m.clientModel, cmd = m.clientModel.Update(msg)
+	m.clientModel, cmd = forwardMsgToChild(m.clientModel, msg)
 	return m, cmd
 }
 
-func (m UnifiedModel) View() string {
+func (m SplitPaneModel) View() string {
 	clientView := ""
 	if m.clientModel != nil {
 		clientView = m.clientModel.View()
@@ -297,7 +280,7 @@ func (m UnifiedModel) View() string {
 	serverView := ""
 	if len(m.terminalRows) > 0 {
 		serverView = strings.Join(m.terminalRows, "\n")
-	} else if m.focus == focusServer {
+	} else if m.focus == paneServer {
 		serverView = "Connecting to embedded server..."
 	}
 
@@ -340,7 +323,7 @@ func (m UnifiedModel) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, layout, status)
 }
 
-func (m UnifiedModel) statusBar() string {
+func (m SplitPaneModel) statusBar() string {
 	totalWidth := m.contentWidth
 	if totalWidth <= 0 {
 		totalWidth = max(m.clientWidth, m.serverWidth)
@@ -354,7 +337,7 @@ func (m UnifiedModel) statusBar() string {
 
 	clientLabel := blurStyle.Render("Client")
 	serverLabel := blurStyle.Render("Server")
-	if m.focus == focusClient {
+	if m.focus == paneClient {
 		clientLabel = focusStyle.Render("Client")
 	} else {
 		serverLabel = focusStyle.Render("Server")
@@ -386,24 +369,15 @@ func (m UnifiedModel) statusBar() string {
 	return lipgloss.NewStyle().Width(totalWidth).Align(lipgloss.Left).Render(content)
 }
 
-func (m UnifiedModel) desiredClientWidth(totalWidth int) int {
+func (m SplitPaneModel) desiredClientWidth(totalWidth int) int {
 	longest := m.longestProcessNameWidth()
-	desired := longest + clientWidthPadding
-	if desired < minClientWidth {
-		desired = minClientWidth
-	}
+	desired := max(longest+clientWidthPadding, minClientWidth)
 
 	if totalWidth <= minClientWidth+minTerminalWidth {
 		if totalWidth <= 0 {
 			return desired
 		}
-		fallback := totalWidth / 2
-		if fallback < minClientWidth {
-			fallback = minClientWidth
-		}
-		if fallback > totalWidth {
-			fallback = totalWidth
-		}
+		fallback := min(max(totalWidth/2, minClientWidth), totalWidth)
 		return fallback
 	}
 
@@ -423,29 +397,20 @@ func (m UnifiedModel) desiredClientWidth(totalWidth int) int {
 	return desired
 }
 
-func (m UnifiedModel) desiredClientHeight(totalHeight int) int {
-	desired := (totalHeight * unifiedClientRatio) / 100
-	if desired < minClientHeight {
-		desired = minClientHeight
-	}
-	if desired > totalHeight-minTerminalHeight {
-		desired = totalHeight - minTerminalHeight
-	}
+func (m SplitPaneModel) desiredClientHeight(totalHeight int) int {
+	desired := min(max((totalHeight*unifiedClientRatio)/100, minClientHeight), totalHeight-minTerminalHeight)
 	if desired <= 0 {
 		desired = totalHeight / 2
 	}
 	return desired
 }
 
-func (m UnifiedModel) longestProcessNameWidth() int {
-	switch cm := m.clientModel.(type) {
-	case ClientModel:
-		return longestProcessNameWidthFromClient(cm)
-	case *ClientModel:
-		return longestProcessNameWidthFromClient(*cm)
-	default:
+func (m SplitPaneModel) longestProcessNameWidth() int {
+	client := asClientModel(m.clientModel)
+	if client == nil {
 		return 0
 	}
+	return longestProcessNameWidthFromClient(*client)
 }
 
 func longestProcessNameWidthFromClient(client ClientModel) int {
@@ -465,77 +430,4 @@ func longestProcessNameWidthFromClient(client ClientModel) int {
 	}
 
 	return maxWidth
-}
-
-func keyMsgToTerminalInput(msg tea.KeyMsg) string {
-	switch msg.String() {
-	case "enter":
-		return "\r"
-	case "tab":
-		return "\t"
-	case "backspace":
-		return "\b"
-	case "delete":
-		return "\x7f"
-	case "esc":
-		return "\x1b"
-	case " ":
-		return " "
-	case "up":
-		return "\x1b[A"
-	case "down":
-		return "\x1b[B"
-	case "right":
-		return "\x1b[C"
-	case "left":
-		return "\x1b[D"
-	case "home":
-		return "\x1b[H"
-	case "end":
-		return "\x1b[F"
-	case "pageup":
-		return "\x1b[5~"
-	case "pagedown":
-		return "\x1b[6~"
-	case "insert":
-		return "\x1b[2~"
-	case "f1":
-		return "\x1bOP"
-	case "f2":
-		return "\x1bOQ"
-	case "f3":
-		return "\x1bOR"
-	case "f4":
-		return "\x1bOS"
-	case "f5":
-		return "\x1b[15~"
-	case "f6":
-		return "\x1b[17~"
-	case "f7":
-		return "\x1b[18~"
-	case "f8":
-		return "\x1b[19~"
-	case "f9":
-		return "\x1b[20~"
-	case "f10":
-		return "\x1b[21~"
-	case "f11":
-		return "\x1b[23~"
-	case "f12":
-		return "\x1b[24~"
-	case "ctrl+c":
-		return "\x03"
-	case "ctrl+d":
-		return "\x04"
-	case "ctrl+z":
-		return "\x1a"
-	case "ctrl+l":
-		return "\x0c"
-	default:
-		str := msg.String()
-		if len(str) == 1 {
-			return str
-		}
-		return ""
-	}
 }

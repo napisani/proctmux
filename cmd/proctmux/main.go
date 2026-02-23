@@ -24,7 +24,7 @@ func setupLogger(logPath string) (*os.File, error) {
 		return nil, nil
 	}
 
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -56,8 +56,8 @@ func main() {
 
 	logFile, err := setupLogger(logPath)
 	if err != nil {
-		fmt.Println("Failed to open log file:", cfgLoadErr)
-		panic(cfgLoadErr)
+		fmt.Println("Failed to open log file:", err)
+		panic(err)
 	}
 	defer func() {
 		if logFile != nil {
@@ -79,7 +79,7 @@ func main() {
 			}
 		}
 		procdiscover.Apply(cfg, discoveryCwd)
-		log.Printf("Config loaded: %+v", cfg)
+		log.Printf("Config loaded from %s with %d processes", cfg.FilePath, len(cfg.Procs))
 	} else {
 		panic(cfgLoadErr)
 	}
@@ -87,6 +87,12 @@ func main() {
 	log.Printf("Command-line args: %+v", cliCfg.Args)
 
 	if cliCfg.Unified {
+		if cliCfg.UnifiedOrientation == UnifiedSplitToggle {
+			if err := RunUnifiedToggle(cfg); err != nil {
+				log.Fatal(err)
+			}
+			return
+		}
 		if err := RunUnified(cfg, cliCfg); err != nil {
 			log.Fatal(err)
 		}

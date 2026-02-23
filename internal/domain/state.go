@@ -2,7 +2,6 @@ package domain
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/nick/proctmux/internal/config"
 )
@@ -23,8 +22,6 @@ type AppState struct {
 	Exiting       bool
 }
 
-const DummyProcessID = 1
-
 func NewAppState(cfg *config.ProcTmuxConfig) AppState {
 	s := AppState{
 		Config:        cfg,
@@ -33,28 +30,16 @@ func NewAppState(cfg *config.ProcTmuxConfig) AppState {
 		Exiting:       false,
 	}
 
-	proc := NewFromProcessConfig(DummyProcessID, "Dummy", &config.ProcessConfig{
-		Cmd:       []string{},
-		Autostart: true,
-	})
-
-	var echo strings.Builder
-	echo.WriteString(" echo \"\"; ")
-
-	banner := cfg.Layout.PlaceholderBanner
-	for line := range strings.SplitSeq(banner, "\n") {
-		if strings.TrimSpace(line) != "" {
-			echo.WriteString("echo \"" + line + "\"; ")
-		}
+	keys := make([]string, 0, len(cfg.Procs))
+	for label := range cfg.Procs {
+		keys = append(keys, label)
 	}
+	sort.Strings(keys)
 
-	proc.Config.Cmd = []string{"bash", "-c", echo.String()}
-
-	s.Processes = append(s.Processes, proc)
-
-	i := 2
-	for k, proc := range cfg.Procs {
-		proc := NewFromProcessConfig(i, k, &proc)
+	i := 1
+	for _, label := range keys {
+		procCfg := cfg.Procs[label]
+		proc := NewFromProcessConfig(i, label, &procCfg)
 		s.Processes = append(s.Processes, proc)
 		i++
 	}

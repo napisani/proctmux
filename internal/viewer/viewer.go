@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -73,12 +74,28 @@ type Viewer struct {
 	currentReaderID      int           // ID for removing reader from ring buffer
 	copyDone             chan struct{} // Signals when copyProcessOutput has fully exited
 	mu                   sync.Mutex
+	placeholder          string
 }
 
 func New(server ProcessServer) *Viewer {
 	return &Viewer{
 		processServer: server,
 	}
+}
+
+// SetPlaceholder configures the placeholder text to display when no process is selected.
+func (v *Viewer) SetPlaceholder(text string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.placeholder = text
+}
+
+// ShowPlaceholder clears the screen and renders the placeholder banner immediately.
+func (v *Viewer) ShowPlaceholder() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.clearScreen()
+	v.printPlaceholderLocked()
 }
 
 // SwitchToProcess switches the viewer to display a different process.
@@ -144,6 +161,7 @@ func (v *Viewer) switchToProcess(processID int, force bool) error {
 
 	// If switching to no process (ID 0), just clear and stop
 	if processID == 0 {
+		v.printPlaceholderLocked()
 		return nil
 	}
 
@@ -210,6 +228,15 @@ func (v *Viewer) copyProcessOutput(outputChan <-chan []byte, cancel chan struct{
 func (v *Viewer) clearScreen() {
 	// ANSI escape sequence: ESC[2J clears screen, ESC[H moves cursor to home
 	fmt.Print("\033[2J\033[H")
+}
+
+func (v *Viewer) printPlaceholderLocked() {
+	text := strings.TrimSpace(v.placeholder)
+	if text == "" {
+		fmt.Println("Select a process to stream output.")
+		return
+	}
+	fmt.Println(text)
 }
 
 // GetCurrentProcessID returns the ID of the process currently being viewed

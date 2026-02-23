@@ -76,7 +76,7 @@ func RunUnified(cfg *config.ProcTmuxConfig, cliCfg *CLIConfig) error {
 		orientation = tui.SplitBottom
 	}
 
-	unified := tui.NewUnifiedModel(clientModel, emu, orientation)
+	unified := tui.NewSplitPaneModel(clientModel, emu, orientation)
 
 	program := tea.NewProgram(unified, bubbleTeaProgramOptions()...)
 	if _, err := program.Run(); err != nil {
@@ -119,6 +119,8 @@ func unifiedChildArgs() []string {
 		case lower == "--unified-top", lower == "-unified-top":
 			continue
 		case lower == "--unified-bottom", lower == "-unified-bottom":
+			continue
+		case lower == "--unified-toggle", lower == "-unified-toggle":
 			continue
 		}
 

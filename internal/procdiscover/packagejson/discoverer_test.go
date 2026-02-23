@@ -1,129 +1,75 @@
 package packagejson
 
 import (
-	"errors"
+	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
+	"reflect"
 	"testing"
-
-	"github.com/nick/proctmux/internal/procdiscover"
 )
 
-func TestDiscovererScriptsDetectsManagers(t *testing.T) {
-	cases := []struct {
-		name             string
-		lockFiles        map[string]string
-		expectedPrefix   string
-		expectedShell    string
-		expectedCategory string
-	}{
-		{
-			name: "pnpm",
-			lockFiles: map[string]string{
-				"pnpm-lock.yaml": "",
-			},
-			expectedPrefix:   "pnpm",
-			expectedShell:    "pnpm run dev",
-			expectedCategory: "pnpm",
-		},
-		{
-			name: "bun",
-			lockFiles: map[string]string{
-				"bun.lockb": "",
-			},
-			expectedPrefix:   "bun",
-			expectedShell:    "bun run dev",
-			expectedCategory: "bun",
-		},
-		{
-			name: "yarn",
-			lockFiles: map[string]string{
-				"yarn.lock": "",
-			},
-			expectedPrefix:   "yarn",
-			expectedShell:    "yarn dev",
-			expectedCategory: "yarn",
-		},
-		{
-			name: "npm",
-			lockFiles: map[string]string{
-				"package-lock.json": "{}",
-			},
-			expectedPrefix:   "npm",
-			expectedShell:    "npm run dev",
-			expectedCategory: "npm",
-		},
-		{
-			name: "deno",
-			lockFiles: map[string]string{
-				"deno.json": `{"tasks":{"dev":"deno task"}}`,
-			},
-			expectedPrefix:   "deno",
-			expectedShell:    "deno task dev",
-			expectedCategory: "deno",
-		},
-		{
-			name:             "default-npm",
-			lockFiles:        map[string]string{},
-			expectedPrefix:   "npm",
-			expectedShell:    "npm run dev",
-			expectedCategory: "npm",
-		},
+func writePackageJSON(t *testing.T, dir string, scripts map[string]string) {
+	t.Helper()
+	packageJSONPath := filepath.Join(dir, "package.json")
+	payload := struct {
+		Scripts map[string]string `json:"scripts"`
+	}{Scripts: scripts}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal package.json: %v", err)
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			d := &discoverer{}
-			dir := t.TempDir()
-			content := `{
-		  "scripts": {
-		    "dev": "node server.js"
-		  }
-		}`
-			if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(content), 0o644); err != nil {
-				t.Fatalf("failed to write package.json: %v", err)
-			}
-			for name, data := range tc.lockFiles {
-				if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
-					t.Fatalf("failed to write %s: %v", name, err)
-				}
-			}
-
-			procs, err := d.Discover(dir)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if len(procs) != 1 {
-				t.Fatalf("expected single discovered script, got %d", len(procs))
-			}
-
-			procName := tc.expectedPrefix + ":dev"
-			proc, ok := procs[procName]
-			if !ok {
-				t.Fatalf("expected %s to be discovered", procName)
-			}
-			if proc.Shell != tc.expectedShell {
-				t.Fatalf("unexpected shell for %s: %q", procName, proc.Shell)
-			}
-			if proc.Categories == nil || len(proc.Categories) == 0 || proc.Categories[0] != tc.expectedCategory {
-				t.Fatalf("unexpected category for %s: %#v", procName, proc.Categories)
-			}
-			if !strings.Contains(proc.Description, tc.expectedCategory) {
-				t.Fatalf("expected description to reference manager %s, got %q", tc.expectedCategory, proc.Description)
-			}
-		})
+	if err := os.WriteFile(packageJSONPath, data, 0o600); err != nil {
+		t.Fatalf("failed to write package.json: %v", err)
 	}
 }
 
-func TestDiscovererMissingPackageJSON(t *testing.T) {
-	d := &discoverer{}
-	_, err := d.Discover(t.TempDir())
-	if err == nil {
-		t.Fatalf("expected error when package.json missing")
+func TestDiscoverSkipsInvalidScriptNamesAndUsesCmd(t *testing.T) {
+	dir := t.TempDir()
+	writePackageJSON(t, dir, map[string]string{
+		"build":      "echo build",
+		"bad script": "rm -rf /",
+	})
+
+	disc := &discoverer{}
+	procs, err := disc.Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
 	}
-	if !errors.Is(err, procdiscover.ErrSourceNotFound) {
-		t.Fatalf("expected ErrSourceNotFound, got %v", err)
+
+	proc, ok := procs["npm:build"]
+	if !ok {
+		t.Fatalf("expected npm:build process, got %v", procs)
+	}
+	if proc.Shell != "" {
+		t.Fatalf("expected Shell to be empty, got %q", proc.Shell)
+	}
+	expectedCmd := []string{"npm", "run", "build"}
+	if !reflect.DeepEqual(proc.Cmd, expectedCmd) {
+		t.Fatalf("expected Cmd %v, got %v", expectedCmd, proc.Cmd)
+	}
+
+	if _, exists := procs["npm:bad script"]; exists {
+		t.Fatalf("invalid script name should be skipped")
+	}
+}
+
+func TestManagerBuildCommand(t *testing.T) {
+	cases := []struct {
+		prefix   string
+		expected []string
+	}{
+		{"pnpm", []string{"pnpm", "run", "dev"}},
+		{"yarn", []string{"yarn", "dev"}},
+		{"bun", []string{"bun", "run", "dev"}},
+		{"deno", []string{"deno", "task", "dev"}},
+		{"npm", []string{"npm", "run", "dev"}},
+	}
+
+	for _, tc := range cases {
+		mgr := managerInfo{prefix: tc.prefix}
+		cmd := mgr.BuildCommand("dev")
+		if !reflect.DeepEqual(cmd, tc.expected) {
+			t.Fatalf("%s: expected %v, got %v", tc.prefix, tc.expected, cmd)
+		}
 	}
 }

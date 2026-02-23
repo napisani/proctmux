@@ -204,7 +204,7 @@ func TestKeyMap_FullHelp_Structure(t *testing.T) {
 		t.Errorf("Expected third group to have 3 bindings (Filter, FilterSubmit, ToggleRunning), got %d", len(fullHelp[2]))
 	}
 
-	// Fourth group should be misc (3 bindings)
+	// Fourth group should be misc (6 bindings)
 	if len(fullHelp[3]) != 6 {
 		t.Errorf("Expected fourth group to have 6 bindings (Docs, ToggleHelp, ToggleFocus, FocusClient, FocusServer, Quit), got %d", len(fullHelp[3]))
 	}

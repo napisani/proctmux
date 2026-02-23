@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/nick/proctmux/internal/config"
@@ -13,6 +14,8 @@ import (
 )
 
 const name = "packagejson"
+
+var scriptNamePattern = regexp.MustCompile(`^[A-Za-z0-9:_-]+$`)
 
 type discoverer struct{}
 
@@ -51,14 +54,17 @@ func (d *discoverer) Discover(cwd string) (map[string]config.ProcessConfig, erro
 
 	procs := make(map[string]config.ProcessConfig, len(pkg.Scripts))
 	for script, command := range pkg.Scripts {
+		if !scriptNamePattern.MatchString(script) {
+			continue
+		}
 		procName := fmt.Sprintf("%s:%s", manager.prefix, script)
 		if _, exists := procs[procName]; exists {
 			continue
 		}
 
-		shell := manager.BuildCommand(script, command)
+		cmd := manager.BuildCommand(script)
 		procs[procName] = config.ProcessConfig{
-			Shell:       shell,
+			Cmd:         cmd,
 			Cwd:         cwd,
 			Description: manager.Description(script, command),
 			Categories:  []string{manager.category},
@@ -73,18 +79,18 @@ type managerInfo struct {
 	category string
 }
 
-func (m managerInfo) BuildCommand(script, scriptBody string) string {
+func (m managerInfo) BuildCommand(script string) []string {
 	switch m.prefix {
 	case "pnpm":
-		return fmt.Sprintf("pnpm run %s", script)
+		return []string{"pnpm", "run", script}
 	case "yarn":
-		return fmt.Sprintf("yarn %s", script)
+		return []string{"yarn", script}
 	case "bun":
-		return fmt.Sprintf("bun run %s", script)
+		return []string{"bun", "run", script}
 	case "deno":
-		return fmt.Sprintf("deno task %s", script)
+		return []string{"deno", "task", script}
 	default:
-		return fmt.Sprintf("npm run %s", script)
+		return []string{"npm", "run", script}
 	}
 }
 
