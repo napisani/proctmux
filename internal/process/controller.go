@@ -283,6 +283,42 @@ func (pc *Controller) GetScrollback(id int) ([]byte, error) {
 	return instance.scrollback.Bytes(), nil
 }
 
+// ScrollbackAndSubscribe atomically captures the current scrollback snapshot
+// and registers a live reader in a single operation, eliminating the race
+// window between GetScrollback and NewReader.
+//
+// Returns:
+//   - snapshot: all bytes currently in the scrollback buffer
+//   - readerID: ID to pass to UnsubscribeScrollback when done
+//   - ch: live channel receiving new bytes as the process writes them
+//   - err: non-nil if the process is not found or has no scrollback buffer
+func (pc *Controller) ScrollbackAndSubscribe(id int) (snapshot []byte, readerID int, ch <-chan []byte, err error) {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+
+	instance, exists := pc.processes[id]
+	if !exists {
+		return nil, 0, nil, fmt.Errorf("process %d not found", id)
+	}
+
+	if instance.scrollback == nil {
+		return []byte{}, 0, nil, nil
+	}
+
+	snapshot, readerID, ch = instance.scrollback.SnapshotAndSubscribe()
+	return snapshot, readerID, ch, nil
+}
+
+// UnsubscribeScrollback removes a live scrollback reader registered via ScrollbackAndSubscribe.
+func (pc *Controller) UnsubscribeScrollback(procID, readerID int) {
+	pc.mu.RLock()
+	instance, exists := pc.processes[procID]
+	pc.mu.RUnlock()
+	if exists && instance.scrollback != nil {
+		instance.scrollback.RemoveReader(readerID)
+	}
+}
+
 // GetReader returns a reader for the process's PTY output
 func (pc *Controller) GetReader(id int) (io.Reader, error) {
 	pc.mu.RLock()

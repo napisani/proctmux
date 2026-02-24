@@ -173,6 +173,40 @@ func (rb *RingBuffer) NewReader() (int, <-chan []byte) {
 	return id, ch
 }
 
+// SnapshotAndSubscribe atomically captures the current buffer contents and
+// registers a live reader in a single lock acquisition. This eliminates the
+// race window that would exist if Bytes() and NewReader() were called
+// separately — bytes written between those two calls would be lost.
+//
+// Returns:
+//   - snapshot: copy of all bytes currently in the buffer (chronological order)
+//   - id: unique identifier for the live reader (used for RemoveReader)
+//   - ch: channel that receives new data written after this call
+func (rb *RingBuffer) SnapshotAndSubscribe() (snapshot []byte, id int, ch <-chan []byte) {
+	// Acquire the write lock so no writes can interleave between snapshot and subscribe.
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+
+	// Take snapshot while holding write lock (same logic as Bytes()).
+	if !rb.full {
+		snapshot = append([]byte{}, rb.buf[:rb.w]...)
+	} else {
+		snapshot = make([]byte, rb.size)
+		copy(snapshot, rb.buf[rb.w:])
+		copy(snapshot[rb.size-rb.w:], rb.buf[:rb.w])
+	}
+
+	// Register reader while still holding write lock so no write can slip through.
+	rb.readersMu.Lock()
+	readerID := rb.nextID
+	rb.nextID++
+	liveCh := make(chan []byte, 100)
+	rb.readers[readerID] = liveCh
+	rb.readersMu.Unlock()
+
+	return snapshot, readerID, liveCh
+}
+
 // RemoveReader removes a reader and closes its channel.
 // This should be called when the reader is done to avoid resource leaks.
 func (rb *RingBuffer) RemoveReader(id int) {

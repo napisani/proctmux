@@ -17,6 +17,12 @@ import (
 const (
 	togglePollInterval = 50 * time.Millisecond
 	toggleStatusLines  = 1
+
+	// maxScrollbackLines is the maximum number of lines kept in scrollbackContent.
+	// Capping this prevents the string from growing without bound over a long-lived
+	// process session, which was causing increasingly expensive tailLines() calls and
+	// full-screen re-renders on every 50ms poll tick (Bug 1).
+	maxScrollbackLines = 5000
 )
 
 // scrollbackPollMsg triggers polling the ring buffer reader channel.
@@ -141,27 +147,30 @@ func (m ToggleViewModel) switchToScrollback() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Unsubscribe from any previous reader
-	m.cleanupReader()
+	// Unsubscribe from any previous reader (value-receiver version)
+	m = m.cleanupReader()
 
 	m.currentViewedProcID = procID
 
-	// Load scrollback from ring buffer
-	scrollback, err := m.processController.GetScrollback(procID)
-	if err != nil {
-		log.Printf("Failed to get scrollback for process %d: %v", procID, err)
-		m.scrollbackContent = ""
-	} else {
-		m.scrollbackContent = string(scrollback)
-	}
-
-	// Subscribe to live output
-	instance, err := m.processController.GetProcess(procID)
-	if err == nil && instance != nil {
-		readerID, ch := instance.Scrollback().NewReader()
-		m.readerID = readerID
-		m.readerChan = ch
-		return m, m.pollReaderCmd()
+	if m.processController != nil {
+		// Bug 2 fix: use ScrollbackAndSubscribe to atomically capture the
+		// historical snapshot and register the live reader in one lock
+		// acquisition, closing the race window where bytes written between
+		// a separate GetScrollback() and NewReader() call would be lost.
+		snapshot, readerID, ch, err := m.processController.ScrollbackAndSubscribe(procID)
+		if err != nil {
+			log.Printf("Failed to subscribe to scrollback for process %d: %v", procID, err)
+			m.scrollbackContent = ""
+		} else {
+			// Bug 1 fix: cap initial snapshot to maxScrollbackLines so
+			// tailLines() never iterates a multi-megabyte string.
+			m.scrollbackContent = capLines(string(snapshot), maxScrollbackLines)
+			if ch != nil {
+				m.readerID = readerID
+				m.readerChan = ch
+				return m, m.pollReaderCmd()
+			}
+		}
 	}
 
 	return m, nil
@@ -169,7 +178,7 @@ func (m ToggleViewModel) switchToScrollback() (tea.Model, tea.Cmd) {
 
 func (m ToggleViewModel) switchToProcessList() (tea.Model, tea.Cmd) {
 	m.showingProcessList = true
-	m.cleanupReader()
+	m = m.cleanupReader()
 	m.currentViewedProcID = 0
 
 	// Re-send window size to client so it recalculates layout
@@ -183,15 +192,16 @@ func (m ToggleViewModel) switchToProcessList() (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *ToggleViewModel) cleanupReader() {
-	if m.readerChan != nil && m.currentViewedProcID > 0 {
-		instance, err := m.processController.GetProcess(m.currentViewedProcID)
-		if err == nil && instance != nil {
-			instance.Scrollback().RemoveReader(m.readerID)
-		}
-		m.readerChan = nil
-		m.readerID = 0
+// cleanupReader unsubscribes the current live scrollback reader and clears the
+// related fields. It is a value receiver so it fits naturally into the
+// copy-on-update Bubble Tea pattern: callers do m = m.cleanupReader().
+func (m ToggleViewModel) cleanupReader() ToggleViewModel {
+	if m.readerChan != nil && m.currentViewedProcID > 0 && m.processController != nil {
+		m.processController.UnsubscribeScrollback(m.currentViewedProcID, m.readerID)
 	}
+	m.readerChan = nil
+	m.readerID = 0
+	return m
 }
 
 func (m ToggleViewModel) pollReaderCmd() tea.Cmd {
@@ -210,10 +220,16 @@ func (m ToggleViewModel) pollReader() (tea.Model, tea.Cmd) {
 		select {
 		case data, ok := <-m.readerChan:
 			if !ok {
+				// Channel closed: process stopped or reader was removed.
 				m.readerChan = nil
 				return m, nil
 			}
 			m.scrollbackContent += string(data)
+			// Bug 1 fix: trim the accumulated string so tailLines() always
+			// operates on a bounded number of lines, not the full session history.
+			if strings.Count(m.scrollbackContent, "\n") > maxScrollbackLines {
+				m.scrollbackContent = capLines(m.scrollbackContent, maxScrollbackLines)
+			}
 		default:
 			return m, m.pollReaderCmd()
 		}
@@ -221,6 +237,17 @@ func (m ToggleViewModel) pollReader() (tea.Model, tea.Cmd) {
 }
 
 func (m ToggleViewModel) forwardToClient(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Bug 3 fix: when a state-update arrives while we are in scrollback view,
+	// check whether the currently-viewed process has exited. If so, clean up
+	// the reader so we don't leak the ring-buffer subscription and so the user
+	// sees a sensible "stopped" state rather than a frozen scrollback.
+	if _, ok := msg.(clientStateUpdateMsg); ok && !m.showingProcessList && m.currentViewedProcID != 0 && m.processController != nil {
+		if !m.processController.IsRunning(m.currentViewedProcID) && m.readerChan != nil {
+			log.Printf("Process %d exited; closing scrollback reader", m.currentViewedProcID)
+			m = m.cleanupReader()
+		}
+	}
+
 	var cmd tea.Cmd
 	m.clientModel, cmd = forwardMsgToChild(m.clientModel, msg)
 	return m, cmd
@@ -233,6 +260,10 @@ func (m ToggleViewModel) forwardToProcess(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	input := keyMsgToTerminalInput(msg)
 	if input == "" {
+		return m, nil
+	}
+
+	if m.processController == nil {
 		return m, nil
 	}
 
@@ -310,6 +341,19 @@ func tailLines(s string, n int) string {
 	// Strip carriage returns — raw PTY output uses \r\n line endings which
 	// confuse lipgloss's width-padding (the \r resets the cursor to column 0,
 	// then padding spaces overwrite the text).
+	s = strings.ReplaceAll(s, "\r", "")
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
+}
+
+// capLines keeps only the last n lines of s. Used to bound scrollbackContent.
+func capLines(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	s = strings.ReplaceAll(s, "\r", "")
 	lines := strings.Split(s, "\n")
 	if len(lines) <= n {

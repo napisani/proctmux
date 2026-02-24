@@ -302,6 +302,34 @@ func TestToggleViewModel_PollReaderDrainsChannel(t *testing.T) {
 	}
 }
 
+func TestToggleViewModel_PollReaderCapsScrollback(t *testing.T) {
+	m := makeToggleModel()
+	m.showingProcessList = false
+
+	// Pre-load scrollbackContent with exactly maxScrollbackLines lines so the
+	// next append tips it over the cap.
+	existingLines := make([]string, maxScrollbackLines)
+	for i := range existingLines {
+		existingLines[i] = "old"
+	}
+	m.scrollbackContent = strings.Join(existingLines, "\n")
+
+	ch := make(chan []byte, 1)
+	ch <- []byte("new line\n")
+	m.readerChan = ch
+
+	result, _ := m.pollReader()
+	model := result.(ToggleViewModel)
+
+	lineCount := strings.Count(model.scrollbackContent, "\n") + 1
+	if lineCount > maxScrollbackLines+1 {
+		t.Errorf("scrollbackContent grew beyond cap: got %d lines, want <= %d", lineCount, maxScrollbackLines)
+	}
+	if !strings.Contains(model.scrollbackContent, "new line") {
+		t.Error("expected new data to appear in capped scrollback")
+	}
+}
+
 func TestToggleViewModel_PollReaderHandlesClosedChannel(t *testing.T) {
 	m := makeToggleModel()
 	m.showingProcessList = false
@@ -349,6 +377,40 @@ func TestNewToggleViewModel_UsesExistingKeybindings(t *testing.T) {
 	serverKeys := m.keys.server.Keys()
 	if len(serverKeys) == 0 || serverKeys[0] != "ctrl+right" {
 		t.Errorf("expected server key to use ctrl+right, got %v", serverKeys)
+	}
+}
+
+func TestCapLines(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		n        int
+		wantSufx string // last line of result
+		wantGrow bool   // true if result should NOT exceed n lines
+	}{
+		{name: "under cap", input: "a\nb\nc", n: 10, wantSufx: "c"},
+		{name: "exact cap", input: "a\nb\nc", n: 3, wantSufx: "c"},
+		{name: "over cap", input: "a\nb\nc\nd\ne", n: 3, wantSufx: "e"},
+		{name: "zero n", input: "a\nb", n: 0, wantSufx: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := capLines(tt.input, tt.n)
+			if tt.n == 0 {
+				if got != "" {
+					t.Errorf("capLines(%q, 0): want empty, got %q", tt.input, got)
+				}
+				return
+			}
+			gotLines := strings.Split(got, "\n")
+			if len(gotLines) > tt.n+1 { // +1 for possible trailing newline
+				t.Errorf("capLines(%q, %d): too many lines (%d)", tt.input, tt.n, len(gotLines))
+			}
+			last := gotLines[len(gotLines)-1]
+			if last != tt.wantSufx {
+				t.Errorf("capLines(%q, %d): last line = %q, want %q", tt.input, tt.n, last, tt.wantSufx)
+			}
+		})
 	}
 }
 

@@ -343,6 +343,49 @@ func TestRingBuffer_MultipleReaders(t *testing.T) {
 	rb.RemoveReader(id2)
 }
 
+func TestRingBuffer_SnapshotAndSubscribe_NoBytesLost(t *testing.T) {
+	rb := NewRingBuffer(1024)
+
+	// Pre-load some history.
+	rb.Write([]byte("historical data\n"))
+
+	// SnapshotAndSubscribe should atomically capture the snapshot and register
+	// the reader so no bytes written concurrently can fall between the two.
+	snapshot, id, ch := rb.SnapshotAndSubscribe()
+
+	if !bytes.Contains(snapshot, []byte("historical data")) {
+		t.Errorf("snapshot missing historical data; got %q", snapshot)
+	}
+
+	// Writes after subscribe must appear on the live channel.
+	go rb.Write([]byte("live data\n"))
+
+	select {
+	case received := <-ch:
+		if !bytes.Contains(received, []byte("live data")) {
+			t.Errorf("live channel: expected 'live data', got %q", received)
+		}
+	case <-time.After(time.Second):
+		t.Error("timeout: live data never arrived on reader channel")
+	}
+
+	rb.RemoveReader(id)
+}
+
+func TestRingBuffer_SnapshotAndSubscribe_EmptyBuffer(t *testing.T) {
+	rb := NewRingBuffer(64)
+
+	snapshot, id, ch := rb.SnapshotAndSubscribe()
+	if len(snapshot) != 0 {
+		t.Errorf("expected empty snapshot, got %q", snapshot)
+	}
+	if ch == nil {
+		t.Error("expected non-nil live channel")
+	}
+
+	rb.RemoveReader(id)
+}
+
 func TestRingBuffer_RemoveReader_StopsReceiving(t *testing.T) {
 	rb := NewRingBuffer(100)
 
