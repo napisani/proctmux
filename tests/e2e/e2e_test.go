@@ -283,3 +283,181 @@ procs:
 		t.Fatalf("client TUI label %q leaked into process pane after rapid toggle:\n%s", procLabel, snap)
 	}
 }
+
+// TestUnifiedToggle_ActiveProcessNoLeakIntoClientPane verifies that when a
+// process is actively emitting stdout, its output does not leak into the
+// client TUI pane. This catches the bug where the PrimaryServer's viewer relay
+// is started (via HandleCommand switch) while the coordinator is showing the
+// client pane, causing process bytes to be written directly to os.Stdout.
+//
+// The test uses a process that emits a unique token repeatedly with a short
+// interval. After the process has started and had time to emit, the test
+// checks that the client pane snapshot contains the process label but NOT the
+// process output token.
+func TestUnifiedToggle_ActiveProcessNoLeakIntoClientPane(t *testing.T) {
+	const procLabelA = "emitter-alpha"
+	const procLabelB = "emitter-beta"
+	const procOutput = "ACTIVE_EMIT_TOKEN_XYZZY"
+
+	// Two processes: both auto-start. The first continuously emits a unique
+	// token. Having two lets us navigate up/down in the list, which triggers
+	// the IPC "switch" command — the exact path that erroneously starts the
+	// viewer relay while the client pane is showing. Both must be started so
+	// that when the coordinator toggles to the process pane (whichever is
+	// selected), the viewer can find the process.
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+log_file: /tmp/proctmux-test-active-noleak.log
+procs:
+  `+procLabelA+`:
+    shell: "while true; do echo `+procOutput+`; sleep 0.1; done"
+    autostart: true
+  `+procLabelB+`:
+    shell: "echo BETA_STARTED && sleep 600"
+    autostart: true
+`)
+
+	sess := e2e.StartUnifiedToggleSession(t, cfgDir, cfgPath)
+
+	// Wait for the client TUI to render both process labels.
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, procLabelA) && strings.Contains(snap, procLabelB)
+	}); err != nil {
+		t.Fatalf("client pane never showed both labels: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// Navigate the process list: pressing down and up triggers the IPC switch
+	// command, which is the exact path that erroneously starts the viewer relay.
+	if err := sess.SendKeys(e2e.KeyDown); err != nil {
+		t.Fatalf("send down: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if err := sess.SendKeys(e2e.KeyUp); err != nil {
+		t.Fatalf("send up: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if err := sess.SendKeys(e2e.KeyDown); err != nil {
+		t.Fatalf("send down 2: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	// Navigate back to emitter-alpha so that ctrl+w shows its output.
+	if err := sess.SendKeys(e2e.KeyUp); err != nil {
+		t.Fatalf("send up 2: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	// Give the process time to emit many lines of output while the client pane
+	// is showing.
+	time.Sleep(2 * time.Second)
+
+	// The client pane should still be showing the process list, NOT the
+	// process output. If the viewer relay was erroneously started, the
+	// process output token would appear on screen.
+	snap := sess.Snapshot()
+	if !strings.Contains(snap, procLabelA) {
+		t.Fatalf("client pane lost process label after navigating:\n%s", snap)
+	}
+	if strings.Contains(snap, procOutput) {
+		t.Fatalf("active process output %q leaked into client pane while navigating process list:\n%s\nCleanOutput (last 2000 bytes):\n%s",
+			procOutput, snap, truncateLast(sess.CleanOutput(), 2000))
+	}
+
+	// Toggle to the process pane — the client list should disappear.
+	// Whichever process is selected, the process pane should NOT contain
+	// the client list labels.
+	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
+		t.Fatalf("send ctrl+w: %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		// The client list should be gone — neither label in the list view.
+		return !strings.Contains(snap, procLabelA) && !strings.Contains(snap, procLabelB)
+	}); err != nil {
+		t.Fatalf("process pane still shows client list after toggle: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// Toggle back to the client pane; process continues to emit.
+	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
+		t.Fatalf("send ctrl+w (back): %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, procLabelA)
+	}); err != nil {
+		t.Fatalf("client pane did not reappear: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// Navigate again to trigger switch commands while process is actively emitting.
+	if err := sess.SendKeys(e2e.KeyDown); err != nil {
+		t.Fatalf("send down (round 2): %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if err := sess.SendKeys(e2e.KeyUp); err != nil {
+		t.Fatalf("send up (round 2): %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	time.Sleep(1 * time.Second)
+	snap = sess.Snapshot()
+	if strings.Contains(snap, procOutput) {
+		t.Fatalf("active process output %q leaked into client pane after returning from process pane:\n%s",
+			procOutput, snap)
+	}
+}
+
+// TestUnifiedToggle_NoCrossPaneLeakage verifies both directions in one flow:
+// process-list-only text must never appear in the process pane, and
+// process-output-only text must never appear in the client pane.
+func TestUnifiedToggle_NoCrossPaneLeakage(t *testing.T) {
+	const procLabel = "sentinel-proc4-UNIQUELABEL"
+	const procOutput = "PROCESS_OUTPUT_UNIQUETOKEN4"
+
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+log_file: /tmp/proctmux-test-noleak-cross-pane.log
+procs:
+  `+procLabel+`:
+    shell: "echo `+procOutput+` && sleep 60"
+    autostart: true
+`)
+
+	sess := e2e.StartUnifiedToggleSession(t, cfgDir, cfgPath)
+
+	// Client pane should show the process label first.
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, procLabel)
+	}); err != nil {
+		t.Fatalf("client pane never showed process label: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// Process output token must not appear in client pane.
+	if snap := sess.Snapshot(); strings.Contains(snap, procOutput) {
+		t.Fatalf("process output %q leaked into client pane before toggle:\n%s", procOutput, snap)
+	}
+
+	// Toggle to process pane and wait for process output.
+	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
+		t.Fatalf("send ctrl+w: %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, procOutput)
+	}); err != nil {
+		t.Fatalf("process pane never showed process output: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// Client process label must not appear in process pane.
+	if snap := sess.Snapshot(); strings.Contains(snap, procLabel) {
+		t.Fatalf("client process label %q leaked into process pane:\n%s", procLabel, snap)
+	}
+
+	// Toggle back to client pane.
+	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
+		t.Fatalf("send ctrl+w (back): %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, procLabel)
+	}); err != nil {
+		t.Fatalf("client pane did not reappear: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// Process output must not appear in client pane after returning.
+	if snap := sess.Snapshot(); strings.Contains(snap, procOutput) {
+		t.Fatalf("process output %q leaked into client pane after return:\n%s", procOutput, snap)
+	}
+}

@@ -43,6 +43,7 @@ func RunUnifiedToggle(cfg *config.ProcTmuxConfig) error {
 	ipcServer := ipc.NewServer()
 	primaryServer := proctmux.NewPrimaryServerWithOptions(cfg, ipcServer, proctmux.PrimaryServerOptions{
 		SkipStdinForwarder: true,
+		SkipViewer:         true,
 	})
 
 	socketPath, err := ipc.CreateSocket(cfg)
@@ -77,12 +78,12 @@ func RunUnifiedToggle(cfg *config.ProcTmuxConfig) error {
 		}
 	}()
 
-	// 4. Wait for the IPC socket and connect.
-	log.Println("waiting for IPC socket...")
-	if _, err := ipc.WaitForSocket(cfg); err != nil {
-		return fmt.Errorf("wait for socket: %w", err)
-	}
-
+	// 4. Connect the coordinator's own IPC client directly.
+	// The primary server was started in-process above, so the socket is
+	// already listening. We connect directly without WaitForSocket/probeSocket:
+	// probeSocket opens a real connection that the server immediately tries to
+	// send initial state to — that state message would be wasted on the probe
+	// and never reach the child --client TUI, leaving it showing "No processes".
 	ipcClient, err := ipc.NewClient(socketPath)
 	if err != nil {
 		return fmt.Errorf("connect to primary: %w", err)
@@ -355,17 +356,6 @@ func (r *toggleRelay) switchToClientPane() {
 	// Atomically snapshot the ring buffer and subscribe so we don't miss bytes.
 	_, readerID, liveCh := r.clientRing.SnapshotAndSubscribe()
 
-	// Force the child to re-render by sending a fake resize sequence.
-	// We momentarily bump the column count by one then restore it to guarantee
-	// SIGWINCH is delivered even if the size hasn't changed since last time.
-	// The re-render output arrives via liveCh and is forwarded by the relay.
-	if sz, err := pty.GetsizeFull(os.Stdin); err == nil {
-		bump := *sz
-		bump.Cols++
-		pty.Setsize(r.clientPTY, &bump) //nolint:errcheck
-		pty.Setsize(r.clientPTY, sz)    //nolint:errcheck
-	}
-
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	r.clientRelayStop = stop
@@ -392,6 +382,18 @@ func (r *toggleRelay) switchToClientPane() {
 			}
 		}
 	}()
+
+	// Force the child to re-render by sending a fake resize sequence.
+	// We momentarily bump the column count by one then restore it to guarantee
+	// SIGWINCH is delivered even if the size hasn't changed since last time.
+	// This is done AFTER starting the relay goroutine so the re-render output
+	// arrives on liveCh while the goroutine is already listening.
+	if sz, err := pty.GetsizeFull(os.Stdin); err == nil {
+		bump := *sz
+		bump.Cols++
+		pty.Setsize(r.clientPTY, &bump) //nolint:errcheck
+		pty.Setsize(r.clientPTY, sz)    //nolint:errcheck
+	}
 }
 
 // switchToProcessPane suspends the client relay and switches the viewer to the
@@ -405,13 +407,19 @@ func (r *toggleRelay) switchToProcessPane() {
 	}
 
 	// Stop the client relay goroutine and wait for it to fully exit before
-	// calling SwitchToProcess (which clears the screen). Without the wait,
-	// the goroutine's in-flight select could pick a buffered liveCh send over
-	// the stop signal and write client TUI bytes after the clear.
+	// touching stdout. Without the wait, the goroutine's in-flight select
+	// could pick a buffered liveCh send over the stop signal and write
+	// client TUI bytes after we've cleared the screen.
 	r.stopClientRelay()
 
 	r.inClientPane = false
 	log.Printf("switching to process pane (active proc %d)", procID)
+
+	// Clear the screen immediately so the user never sees the old client TUI
+	// frame while the viewer is setting up. The viewer will clear again as
+	// part of its atomic scrollback write, but this ensures a clean slate
+	// even if the viewer is slow or the process lookup fails.
+	os.Stdout.Write([]byte("\033[2J\033[H")) //nolint:errcheck
 
 	if r.v != nil {
 		if err := r.v.SwitchToProcess(procID); err != nil {
