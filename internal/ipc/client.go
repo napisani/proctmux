@@ -106,9 +106,8 @@ func (c *Client) readResponses() {
 			upd := domain.StateUpdate{State: msg.State, ProcessViews: msg.ProcessViews}
 			select {
 			case c.updatesCh <- upd:
-				// Update sent to channel
 			default:
-				// Channel full, skip this update
+				log.Printf("WARNING: updatesCh full, dropping state update")
 			}
 			continue
 		}

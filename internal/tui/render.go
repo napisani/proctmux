@@ -85,6 +85,7 @@ type processListComponent struct {
 	cfg         *config.ProcTmuxConfig
 	list        list.Model
 	allocHeight int
+	ready       bool // true once the list has been constructed
 }
 
 type procItem struct{ view *domain.ProcessView }
@@ -169,16 +170,25 @@ func (d procDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 }
 
 func (c *processListComponent) ensure() {
-	if c.list.Width() == 0 && c.list.Height() == 0 {
+	if !c.ready {
 		c.list = list.New([]list.Item{}, procDelegate{cfg: c.cfg}, 0, 0)
 		c.list.SetShowHelp(false)
 		c.list.SetFilteringEnabled(false)
 		c.list.SetShowStatusBar(false)
 		c.list.SetShowTitle(false)
+		c.ready = true
 	}
 }
 
-func (c *processListComponent) SetConfig(cfg *config.ProcTmuxConfig) { c.cfg = cfg; c.ensure() }
+func (c *processListComponent) SetConfig(cfg *config.ProcTmuxConfig) {
+	c.cfg = cfg
+	if c.ready {
+		// Update the delegate with the new config without reinitialising the list.
+		c.list.SetDelegate(procDelegate{cfg: cfg})
+	} else {
+		c.ensure()
+	}
+}
 func (c *processListComponent) SetItems(items []*domain.ProcessView) {
 	c.ensure()
 	li := make([]list.Item, 0, len(items))

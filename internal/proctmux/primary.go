@@ -20,12 +20,8 @@ import (
 // PrimaryServerOptions controls optional behavior of the PrimaryServer.
 type PrimaryServerOptions struct {
 	// SkipStdinForwarder disables raw stdin mode and the stdin-to-process forwarder.
-	// Used in unified-toggle mode where Bubble Tea owns stdin.
+	// Used in unified-toggle mode where the coordinator owns stdin.
 	SkipStdinForwarder bool
-
-	// SkipViewer disables the Viewer that relays process output to os.Stdout.
-	// Used in unified-toggle mode where the TUI reads scrollback directly.
-	SkipViewer bool
 }
 
 // PrimaryServer is the main process server that manages all processes and state
@@ -94,14 +90,11 @@ func NewPrimaryServerWithOptions(cfg *config.ProcTmuxConfig, ipcServer IPCServer
 		log.Printf("Warning: failed to set up stdout debug logger: %v", err)
 	}
 
-	var v *viewer.Viewer
-	if !opts.SkipViewer {
-		// Create an adapter that satisfies the viewer.ProcessServer interface
-		serverAdapter := &processControllerAdapter{pc: processController}
-		v = viewer.New(serverAdapter)
-		v.SetPlaceholder(cfg.Layout.PlaceholderBanner)
-		v.ShowPlaceholder()
-	}
+	// Create an adapter that satisfies the viewer.ProcessServer interface
+	serverAdapter := &processControllerAdapter{pc: processController}
+	v := viewer.New(serverAdapter)
+	v.SetPlaceholder(cfg.Layout.PlaceholderBanner)
+	v.ShowPlaceholder()
 
 	return &PrimaryServer{
 		processController: processController,
