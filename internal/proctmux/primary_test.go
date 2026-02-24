@@ -58,22 +58,6 @@ func TestNewPrimaryServer_DefaultOptions(t *testing.T) {
 	if ps.opts.SkipStdinForwarder {
 		t.Error("expected SkipStdinForwarder to be false by default")
 	}
-	if ps.opts.SkipViewer {
-		t.Error("expected SkipViewer to be false by default")
-	}
-}
-
-func TestNewPrimaryServerWithOptions_SkipViewer(t *testing.T) {
-	cfg := testPrimaryConfig()
-	ipc := &mockIPCServer{}
-
-	ps := NewPrimaryServerWithOptions(cfg, ipc, PrimaryServerOptions{
-		SkipViewer: true,
-	})
-
-	if ps.viewer != nil {
-		t.Error("expected viewer to be nil when SkipViewer is true")
-	}
 }
 
 func TestNewPrimaryServerWithOptions_SkipStdinForwarder(t *testing.T) {
@@ -82,7 +66,6 @@ func TestNewPrimaryServerWithOptions_SkipStdinForwarder(t *testing.T) {
 
 	ps := NewPrimaryServerWithOptions(cfg, ipc, PrimaryServerOptions{
 		SkipStdinForwarder: true,
-		SkipViewer:         true,
 	})
 
 	// Start should not set terminal to raw mode or start stdin forwarder.
@@ -97,32 +80,11 @@ func TestNewPrimaryServerWithOptions_SkipStdinForwarder(t *testing.T) {
 	}
 }
 
-func TestNewPrimaryServerWithOptions_BothSkipped(t *testing.T) {
-	cfg := testPrimaryConfig()
-	ipc := &mockIPCServer{}
-
-	ps := NewPrimaryServerWithOptions(cfg, ipc, PrimaryServerOptions{
-		SkipStdinForwarder: true,
-		SkipViewer:         true,
-	})
-
-	if ps.viewer != nil {
-		t.Error("expected viewer to be nil")
-	}
-	if !ps.opts.SkipStdinForwarder {
-		t.Error("expected SkipStdinForwarder to be true")
-	}
-	if !ps.opts.SkipViewer {
-		t.Error("expected SkipViewer to be true")
-	}
-}
-
 func TestPrimaryServer_GetRawProcessController(t *testing.T) {
 	cfg := testPrimaryConfig()
 	ipc := &mockIPCServer{}
 
 	ps := NewPrimaryServerWithOptions(cfg, ipc, PrimaryServerOptions{
-		SkipViewer:         true,
 		SkipStdinForwarder: true,
 	})
 
@@ -132,13 +94,24 @@ func TestPrimaryServer_GetRawProcessController(t *testing.T) {
 	}
 }
 
+func TestPrimaryServer_GetViewer(t *testing.T) {
+	cfg := testPrimaryConfig()
+	ipc := &mockIPCServer{}
+
+	ps := NewPrimaryServer(cfg, ipc)
+
+	v := ps.GetViewer()
+	if v == nil {
+		t.Error("expected GetViewer to return non-nil viewer")
+	}
+}
+
 func TestPrimaryServer_IPCServerInteraction(t *testing.T) {
 	cfg := testPrimaryConfig()
 	ipc := &mockIPCServer{}
 
 	ps := NewPrimaryServerWithOptions(cfg, ipc, PrimaryServerOptions{
 		SkipStdinForwarder: true,
-		SkipViewer:         true,
 	})
 
 	if err := ps.Start(""); err != nil {

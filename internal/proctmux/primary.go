@@ -20,11 +20,15 @@ import (
 // PrimaryServerOptions controls optional behavior of the PrimaryServer.
 type PrimaryServerOptions struct {
 	// SkipStdinForwarder disables raw stdin mode and the stdin-to-process forwarder.
-	// Used in unified-toggle mode where Bubble Tea owns stdin.
+	// Used in unified-toggle mode where the coordinator owns stdin.
 	SkipStdinForwarder bool
 
-	// SkipViewer disables the Viewer that relays process output to os.Stdout.
-	// Used in unified-toggle mode where the TUI reads scrollback directly.
+	// SkipViewer disables automatic viewer switching when processes are
+	// selected via IPC commands. Used in unified-toggle mode where the
+	// coordinator owns the viewer and decides when to relay process output
+	// to stdout. Without this, IPC "switch" commands from the child client
+	// TUI would start the viewer relay while the client pane is showing,
+	// causing process output to bleed into the terminal.
 	SkipViewer bool
 }
 
@@ -94,14 +98,11 @@ func NewPrimaryServerWithOptions(cfg *config.ProcTmuxConfig, ipcServer IPCServer
 		log.Printf("Warning: failed to set up stdout debug logger: %v", err)
 	}
 
-	var v *viewer.Viewer
-	if !opts.SkipViewer {
-		// Create an adapter that satisfies the viewer.ProcessServer interface
-		serverAdapter := &processControllerAdapter{pc: processController}
-		v = viewer.New(serverAdapter)
-		v.SetPlaceholder(cfg.Layout.PlaceholderBanner)
-		v.ShowPlaceholder()
-	}
+	// Create an adapter that satisfies the viewer.ProcessServer interface
+	serverAdapter := &processControllerAdapter{pc: processController}
+	v := viewer.New(serverAdapter)
+	v.SetPlaceholder(cfg.Layout.PlaceholderBanner)
+	v.ShowPlaceholder()
 
 	return &PrimaryServer{
 		processController: processController,
@@ -310,8 +311,8 @@ func (m *PrimaryServer) switchToProcessLocked(procID int) error {
 	m.state.CurrentProcID = proc.ID
 	log.Printf("Switched to process %s (ID: %d)", proc.Label, proc.ID)
 
-	// Switch the viewer to display this process (if viewer is active)
-	if m.viewer != nil {
+	// Switch the viewer to display this process unless the caller manages it.
+	if m.viewer != nil && !m.opts.SkipViewer {
 		if err := m.viewer.SwitchToProcess(proc.ID); err != nil {
 			log.Printf("Warning: failed to switch viewer to process %d: %v", proc.ID, err)
 		}
@@ -355,8 +356,9 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 
 	// No need to manually update Status/PID - they will be queried from controller when needed
 
-	// If this process is currently being viewed, refresh the viewer to show output from the beginning
-	if m.viewer != nil && m.viewer.GetCurrentProcessID() == procID {
+	// If this process is currently being viewed, refresh the viewer to show output from the beginning.
+	// Skip when SkipViewer is set — the coordinator manages the viewer externally.
+	if m.viewer != nil && !m.opts.SkipViewer && m.viewer.GetCurrentProcessID() == procID {
 		log.Printf("Refreshing viewer for newly started process %d", procID)
 		go m.viewer.RefreshCurrentProcess()
 		// Also attach stdin since this process is being viewed
