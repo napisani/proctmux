@@ -1,6 +1,7 @@
 package viewer
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -24,6 +25,10 @@ type ScrollbackBuffer interface {
 	Bytes() []byte
 	NewReader() (int, <-chan []byte)
 	RemoveReader(id int)
+	// SnapshotAndSubscribe atomically captures the current buffer contents and
+	// registers a live reader in a single operation, eliminating the race
+	// window between Bytes() and NewReader().
+	SnapshotAndSubscribe() (snapshot []byte, id int, ch <-chan []byte)
 }
 
 // ServerAdapter adapts a concrete process server to the ProcessServer interface
@@ -156,11 +161,9 @@ func (v *Viewer) switchToProcess(processID int, force bool) error {
 
 	v.currentProcessID = processID
 
-	// Clear stdout before showing new process output
-	v.clearScreen()
-
-	// If switching to no process (ID 0), just clear and stop
+	// If switching to no process (ID 0), clear and show placeholder
 	if processID == 0 {
+		v.clearScreen()
 		v.printPlaceholderLocked()
 		return nil
 	}
@@ -176,18 +179,23 @@ func (v *Viewer) switchToProcess(processID int, force bool) error {
 		return nil
 	}
 
-	// Write the current scrollback buffer to stdout
-	scrollback := instance.Scrollback().Bytes()
-	fmt.Printf("----- Showing scrollback for process %d (PID: %d) -----\n", processID, instance.GetPID())
-	if len(scrollback) > 0 {
-		if _, err := os.Stdout.Write(scrollback); err != nil {
-			log.Printf("Warning: failed to write scrollback for process %d: %v", processID, err)
-		}
-	}
-
-	// Subscribe to the ring buffer to receive live output
-	readerID, outputChan := instance.Scrollback().NewReader()
+	// Atomically snapshot the scrollback and subscribe for live output.
+	// Using SnapshotAndSubscribe ensures no bytes written between the snapshot
+	// and the subscription are lost.
+	scrollback, readerID, outputChan := instance.Scrollback().SnapshotAndSubscribe()
 	v.currentReaderID = readerID
+
+	// Bundle the clear sequence and the scrollback into a single write so the
+	// terminal receives them atomically — no blank-screen frame between clear
+	// and content.
+	var buf bytes.Buffer
+	buf.WriteString("\033[2J\033[H") // clear screen + cursor home (replaces clearScreen call above)
+	if len(scrollback) > 0 {
+		buf.Write(scrollback)
+	}
+	if _, err := os.Stdout.Write(buf.Bytes()); err != nil {
+		log.Printf("Warning: failed to write scrollback for process %d: %v", processID, err)
+	}
 
 	// Start relaying output from the new process
 	v.interruptOutputRelay = make(chan struct{})

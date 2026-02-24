@@ -8,10 +8,17 @@ import (
 )
 
 func bubbleTeaProgramOptions() []tea.ProgramOption {
-	if disableAltScreen() {
-		return nil
+	// Explicitly pass stdin and stdout so Bubble Tea does not try to open
+	// /dev/tty. This is required when the process is spawned inside a PTY
+	// by the unified-toggle coordinator, where /dev/tty may not be available.
+	opts := []tea.ProgramOption{
+		tea.WithInput(os.Stdin),
+		tea.WithOutput(os.Stdout),
 	}
-	return []tea.ProgramOption{tea.WithAltScreen()}
+	if disableAltScreen() {
+		return opts
+	}
+	return append(opts, tea.WithAltScreen())
 }
 
 func disableAltScreen() bool {
