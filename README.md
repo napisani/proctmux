@@ -18,20 +18,28 @@ Inspired by https://github.com/napisani/procmux.
 
 ## Installation
 
-### macOS (Homebrew)
+### Homebrew (macOS / Linux)
 
 ```bash
 # Add the proctmux tap
-brew tap napisani/proctmux
+brew tap napisani/proctmux https://github.com/napisani/proctmux
 
 # Install proctmux
 brew install proctmux
 
-# Run in your terminal
+# Run in your terminal (inside a tmux session)
 proctmux
 ```
 
-### Linux / Build from Source
+> **Migrating from the old tap?** If you previously installed via `brew tap napisani/proctmux`
+> (without the URL), run:
+> ```bash
+> brew untap napisani/proctmux
+> brew tap napisani/proctmux https://github.com/napisani/proctmux
+> brew reinstall proctmux
+> ```
+
+### Build from Source
 
 ```bash
 # Build a local binary
@@ -422,32 +430,32 @@ This command:
 
 ### Creating a Release
 
-Releases are automated via GitHub Actions. When you push a git tag, the workflow will:
-
-1. Run all tests (`make test`)
-2. Build binaries for multiple platforms (Linux, macOS, Windows; amd64 and arm64)
-3. Create a GitHub Release with all artifacts
-
-To create a new release:
+Releases are automated via GitHub Actions. When you push a git tag, the workflow builds
+binaries for all platforms and creates a GitHub Release.
 
 ```bash
-# 1. Update version in Makefile if needed
-vim Makefile  # Update VERSION=x.y.z
-
-# 2. If you've updated dependencies, update the Nix vendorHash
+# 1. If you've updated dependencies, update the Nix vendorHash
 make update-vendor-hash
 
-# 3. Commit any changes
+# 2. Commit any changes
 git add .
 git commit -m "Prepare release vX.Y.Z"
 
-# 4. Create and push a tag
-git tag v1.0.0
-git push origin v1.0.0
+# 3. Create the release (runs tests, creates + pushes the tag)
+make release-create VERSION=v0.2.0
 
-# 5. Watch GitHub Actions build and publish the release
-# Visit: https://github.com/YOUR_USERNAME/proctmux/actions
+# 4. Wait for GitHub Actions to finish building
+#    Check: https://github.com/napisani/proctmux/actions
+
+# 5. Update the Homebrew formula with new checksums
+make release-publish VERSION=v0.2.0
+
+# 6. Push the formula update to main
+git push origin main
 ```
+
+Or use `make release VERSION=v0.2.0` to run steps 3-5 interactively (it pauses
+and waits for you to confirm that the GitHub Actions workflow has completed).
 
 The release will include:
 - `proctmux-linux-amd64.tar.gz` - Linux (Intel/AMD 64-bit)
