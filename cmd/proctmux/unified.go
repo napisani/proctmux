@@ -3,17 +3,19 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/taigrr/bubbleterm/emulator"
+	"github.com/creack/pty"
 
 	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/domain"
 	"github.com/nick/proctmux/internal/ipc"
+	"github.com/nick/proctmux/internal/terminal/charmvt"
 	"github.com/nick/proctmux/internal/tui"
 )
 
@@ -34,22 +36,34 @@ func RunUnified(cfg *config.ProcTmuxConfig, cliCfg *CLIConfig) error {
 
 	args := unifiedChildArgs()
 
-	emu, err := emulator.New(80, 24)
-	if err != nil {
-		return fmt.Errorf("failed to create embedded terminal: %w", err)
-	}
+	// Create the virtual terminal emulator for rendering the primary server's output.
+	emu := charmvt.New(80, 24)
+	defer emu.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer emu.Close()
 
+	// Start the primary server as a child process in a real PTY.
+	// PTY management is separate from terminal emulation: creack/pty owns
+	// the PTY, and charmbracelet/x/vt processes the output for rendering.
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
 
-	if err := emu.StartCommand(cmd); err != nil {
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
 		return fmt.Errorf("failed to start embedded primary server: %w", err)
 	}
+	defer ptmx.Close()
+
+	// Pipe PTY output into the emulator. The goroutine exits naturally when
+	// the PTY master returns io.EOF (child exits) or when ptmx is closed
+	// (deferred above on early return / user quit).
+	go func() {
+		if _, err := io.Copy(emu, ptmx); err != nil {
+			log.Printf("PTY copy to emulator ended: %v", err)
+		}
+	}()
 
 	log.Println("Waiting for embedded primary server to become available...")
 	socketPath, err := ipc.WaitForSocket(cfg)
@@ -76,7 +90,7 @@ func RunUnified(cfg *config.ProcTmuxConfig, cliCfg *CLIConfig) error {
 		orientation = tui.SplitBottom
 	}
 
-	unified := tui.NewSplitPaneModel(clientModel, emu, orientation)
+	unified := tui.NewSplitPaneModel(clientModel, emu, ptmx, cmd, orientation)
 
 	program := tea.NewProgram(unified, bubbleTeaProgramOptions()...)
 	if _, err := program.Run(); err != nil {

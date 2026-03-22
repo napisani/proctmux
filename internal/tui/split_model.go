@@ -2,13 +2,16 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/taigrr/bubbleterm/emulator"
+
+	"github.com/nick/proctmux/internal/terminal"
 )
 
 const (
@@ -39,15 +42,17 @@ const (
 )
 
 type terminalFrameMsg struct {
-	rows   []string
-	exited bool
+	content string
+	exited  bool
 }
 
 // SplitPaneModel composes the existing client TUI with a virtual terminal that
 // hosts the embedded primary server.
 type SplitPaneModel struct {
 	clientModel tea.Model
-	emu         *emulator.Emulator
+	emu         terminal.Emulator
+	ptmx        *os.File  // PTY master fd for writing keyboard input
+	cmd         *exec.Cmd // child process for exit detection
 
 	focus        focusPane
 	pollInterval time.Duration
@@ -59,8 +64,8 @@ type SplitPaneModel struct {
 
 	orientation SplitOrientation
 
-	terminalRows   []string
-	terminalExited bool
+	terminalContent string
+	terminalExited  bool
 
 	statusHeight  int
 	contentWidth  int
@@ -72,13 +77,17 @@ type SplitPaneModel struct {
 }
 
 // NewSplitPaneModel constructs a split-pane TUI model from an existing client
-// model and an initialized bubbleterm emulator.
-func NewSplitPaneModel(client ClientModel, emu *emulator.Emulator, orientation SplitOrientation) SplitPaneModel {
+// model and a terminal emulator. The ptmx file descriptor is used for writing
+// keyboard input directly to the child process's PTY. The cmd is used for
+// detecting when the child process exits.
+func NewSplitPaneModel(client ClientModel, emu terminal.Emulator, ptmx *os.File, cmd *exec.Cmd, orientation SplitOrientation) SplitPaneModel {
 	fk := newFocusKeys(client.keys)
 
 	return SplitPaneModel{
 		clientModel:      client,
 		emu:              emu,
+		ptmx:             ptmx,
+		cmd:              cmd,
 		focus:            paneClient,
 		pollInterval:     unifiedPollInterval,
 		keys:             fk,
@@ -108,10 +117,9 @@ func (m SplitPaneModel) pollTerminal() tea.Cmd {
 		return nil
 	}
 	return tea.Tick(m.pollInterval, func(time.Time) tea.Msg {
-		frame := m.emu.GetScreen()
-		rows := make([]string, len(frame.Rows))
-		copy(rows, frame.Rows)
-		return terminalFrameMsg{rows: rows, exited: m.emu.IsProcessExited()}
+		content := m.emu.Render()
+		exited := m.cmd != nil && m.cmd.ProcessState != nil && m.cmd.ProcessState.Exited()
+		return terminalFrameMsg{content: content, exited: exited}
 	})
 }
 
@@ -122,7 +130,7 @@ func (m SplitPaneModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKeyMsg(msg)
 	case terminalFrameMsg:
-		m.terminalRows = msg.rows
+		m.terminalContent = msg.content
 		m.terminalExited = msg.exited
 		return m, m.pollTerminal()
 	default:
@@ -180,7 +188,7 @@ func (m SplitPaneModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd)
 			m.clientModel, clientCmd = m.clientModel.Update(childMsg)
 		}
 		if m.emu != nil {
-			_ = m.emu.Resize(max(1, serverWidth), max(1, contentHeight))
+			m.emu.Resize(max(1, serverWidth), max(1, contentHeight))
 		}
 
 	case SplitTop, SplitBottom:
@@ -214,7 +222,7 @@ func (m SplitPaneModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd)
 			m.clientModel, clientCmd = m.clientModel.Update(childMsg)
 		}
 		if m.emu != nil {
-			_ = m.emu.Resize(max(1, msg.Width), max(1, serverHeight))
+			m.emu.Resize(max(1, msg.Width), max(1, serverHeight))
 		}
 	default:
 		// fallback to left layout if unset
@@ -254,9 +262,9 @@ func (m SplitPaneModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.focus == paneServer {
-		if m.emu != nil {
+		if m.ptmx != nil {
 			if input := keyMsgToTerminalInput(msg); input != "" {
-				_, _ = m.emu.Write([]byte(input))
+				_, _ = m.ptmx.Write([]byte(input))
 			}
 		}
 		return m, nil
@@ -278,8 +286,8 @@ func (m SplitPaneModel) View() string {
 	}
 
 	serverView := ""
-	if len(m.terminalRows) > 0 {
-		serverView = strings.Join(m.terminalRows, "\n")
+	if m.terminalContent != "" {
+		serverView = m.terminalContent
 	} else if m.focus == paneServer {
 		serverView = "Connecting to embedded server..."
 	}
