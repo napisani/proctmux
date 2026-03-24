@@ -166,9 +166,21 @@ func (m SplitPaneModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd)
 	m.contentHeight = contentHeight
 
 	var clientCmd tea.Cmd
+	hidden := !m.clientVisible()
 
 	switch m.orientation {
 	case SplitLeft, SplitRight:
+		if hidden {
+			m.clientWidth = 0
+			m.serverWidth = msg.Width
+			m.clientHeight = contentHeight
+			m.serverHeight = contentHeight
+			if m.emu != nil {
+				m.emu.Resize(max(1, msg.Width), max(1, contentHeight))
+			}
+			break
+		}
+
 		clientWidth := m.desiredClientWidth(msg.Width)
 		if clientWidth <= 0 {
 			clientWidth = (msg.Width * unifiedClientRatio) / 100
@@ -204,6 +216,17 @@ func (m SplitPaneModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd)
 		}
 
 	case SplitTop, SplitBottom:
+		if hidden {
+			m.clientWidth = msg.Width
+			m.serverWidth = msg.Width
+			m.clientHeight = 0
+			m.serverHeight = contentHeight
+			if m.emu != nil {
+				m.emu.Resize(max(1, msg.Width), max(1, contentHeight))
+			}
+			break
+		}
+
 		clientHeight := m.desiredClientHeight(contentHeight)
 		if clientHeight <= 0 {
 			clientHeight = (contentHeight * unifiedClientRatio) / 100
@@ -377,13 +400,16 @@ func (m SplitPaneModel) statusBar() string {
 	if m.terminalExited {
 		statusParts = append(statusParts, lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("server exited"))
 	}
+	if !m.clientVisible() {
+		statusParts = append(statusParts, lipgloss.NewStyle().Faint(true).Render("process list hidden"))
+	}
 
 	content := fmt.Sprintf("%s | %s", statusParts[0], statusParts[1])
 	if instructionText != "" {
 		content += "    " + instructionText
 	}
-	if len(statusParts) > 2 {
-		content += "    " + statusParts[2]
+	for _, extra := range statusParts[2:] {
+		content += "    " + extra
 	}
 
 	return lipgloss.NewStyle().Width(totalWidth).Align(lipgloss.Left).Render(content)
