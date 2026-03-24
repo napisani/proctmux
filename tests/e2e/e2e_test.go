@@ -18,28 +18,6 @@ func TestPrimaryClientStartProcess(t *testing.T) {
 	t.Skip("primary/client e2e pending tmux stub implementation")
 }
 
-// TestUnifiedToggle_ProcessListVisible verifies that in unified-toggle mode the
-// client TUI starts up and shows the process list (process names are visible).
-func TestUnifiedToggle_ProcessListVisible(t *testing.T) {
-	cfgDir, cfgPath := e2e.WriteConfig(t, `
-log_file: /tmp/proctmux-test-unified-toggle.log
-procs:
-  echo-test:
-    shell: "echo HELLO_TOGGLE_E2E && sleep 30"
-    autostart: true
-`)
-
-	sess := e2e.StartUnifiedToggleSession(t, cfgDir, cfgPath)
-
-	// The client TUI should start, showing the process list with the process name.
-	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, "echo-test")
-	}); err != nil {
-		t.Fatalf("process list not shown: %v\nSnapshot:\n%s\nCleanOutput (last 2000 bytes):\n%s",
-			err, sess.Snapshot(), truncateLast(sess.CleanOutput(), 2000))
-	}
-}
-
 func truncateLast(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -47,194 +25,264 @@ func truncateLast(s string, n int) string {
 	return "..." + s[len(s)-n:]
 }
 
-// TestUnifiedToggle_StartsWithProcessList verifies that all configured processes
-// appear in the initial view.
-func TestUnifiedToggle_StartsWithProcessList(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Default / unset hide_process_list_when_unfocused behavior
+// ---------------------------------------------------------------------------
+
+// TestUnified_DefaultConfig_ProcessListStaysVisible verifies that when
+// hide_process_list_when_unfocused is omitted (default false), toggling focus
+// does NOT hide the process list.
+func TestUnified_DefaultConfig_ProcessListStaysVisible(t *testing.T) {
 	cfgDir, cfgPath := e2e.WriteConfig(t, `
-log_file: /tmp/proctmux-test-unified-toggle-start.log
+log_file: /tmp/proctmux-test-unified-default.log
 procs:
-  proc-a:
-    shell: "sleep 60"
-  proc-b:
-    shell: "sleep 60"
-`)
-
-	sess := e2e.StartUnifiedToggleSession(t, cfgDir, cfgPath)
-
-	// Both processes should be listed in the client TUI.
-	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, "proc-a") && strings.Contains(snap, "proc-b")
-	}); err != nil {
-		t.Fatalf("process list not shown: %v\nSnapshot:\n%s", err, sess.Snapshot())
-	}
-}
-
-// TestUnifiedToggle_TogglesViewOnCtrlW verifies that pressing ctrl+w switches
-// from the client TUI to the raw process output view, which shows the process
-// scrollback (HELLO_TOGGLE_E2E).
-func TestUnifiedToggle_TogglesViewOnCtrlW(t *testing.T) {
-	cfgDir, cfgPath := e2e.WriteConfig(t, `
-log_file: /tmp/proctmux-test-unified-toggle-ctrlw.log
-procs:
-  echo-test:
-    shell: "echo HELLO_TOGGLE_E2E && sleep 30"
+  echo-default:
+    shell: "echo DEFAULT_OUTPUT && sleep 60"
     autostart: true
 `)
 
-	sess := e2e.StartUnifiedToggleSession(t, cfgDir, cfgPath)
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
 
-	// Wait for the client TUI to appear.
+	// Wait for the process list to appear.
 	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, "echo-test")
+		return strings.Contains(snap, "echo-default")
 	}); err != nil {
 		t.Fatalf("process list not shown: %v\nSnapshot:\n%s", err, sess.Snapshot())
 	}
 
-	// Press ctrl+w to toggle to the process pane.
+	// Toggle focus to server pane.
 	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
-		t.Fatalf("failed to send ctrl+w: %v", err)
+		t.Fatalf("send ctrl+w: %v", err)
 	}
+	time.Sleep(500 * time.Millisecond)
 
-	// The raw output of the selected process should now be visible.
+	// The process label should still be visible because hide-on-unfocus is off.
+	snap := sess.Snapshot()
+	if !strings.Contains(snap, "echo-default") {
+		t.Fatalf("process list disappeared after focus toggle with default config (should remain visible):\n%s", snap)
+	}
+}
+
+// TestUnified_ExplicitFalse_ProcessListStaysVisible verifies that setting
+// hide_process_list_when_unfocused: false explicitly keeps the process list
+// visible when focus changes.
+func TestUnified_ExplicitFalse_ProcessListStaysVisible(t *testing.T) {
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+log_file: /tmp/proctmux-test-unified-explicit-false.log
+layout:
+  hide_process_list_when_unfocused: false
+procs:
+  echo-explicit:
+    shell: "echo EXPLICIT_OUTPUT && sleep 60"
+    autostart: true
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	// Wait for the process list to appear.
 	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, "HELLO_TOGGLE_E2E")
+		return strings.Contains(snap, "echo-explicit")
 	}); err != nil {
-		t.Fatalf("process output not shown after toggle: %v\nSnapshot:\n%s", err, sess.Snapshot())
+		t.Fatalf("process list not shown: %v\nSnapshot:\n%s", err, sess.Snapshot())
 	}
 
-	// Press ctrl+w again to toggle back to the client TUI.
+	// Toggle focus to server pane.
 	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
-		t.Fatalf("failed to send second ctrl+w: %v", err)
+		t.Fatalf("send ctrl+w: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// The process label should still be visible.
+	snap := sess.Snapshot()
+	if !strings.Contains(snap, "echo-explicit") {
+		t.Fatalf("process list disappeared with explicit false config (should remain visible):\n%s", snap)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ctrl+w hide/show with hide_process_list_when_unfocused: true
+// ---------------------------------------------------------------------------
+
+// TestUnified_HideOnUnfocus_CtrlW verifies that when
+// hide_process_list_when_unfocused: true, pressing ctrl+w hides the process
+// list and pressing ctrl+w again restores it.
+func TestUnified_HideOnUnfocus_CtrlW(t *testing.T) {
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+log_file: /tmp/proctmux-test-unified-hide-ctrlw.log
+layout:
+  hide_process_list_when_unfocused: true
+procs:
+  hide-test:
+    shell: "echo HIDE_CTRLW_OUTPUT && sleep 60"
+    autostart: true
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	// Step 1: Process list should be visible initially.
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "hide-test")
+	}); err != nil {
+		t.Fatalf("process list not shown initially: %v\nSnapshot:\n%s", err, sess.Snapshot())
 	}
 
-	// The process list should be visible again.
+	// Step 2: Press ctrl+w to hide the process list (focus server).
+	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
+		t.Fatalf("send ctrl+w: %v", err)
+	}
+
+	// The process label should disappear and "process list hidden" should appear in status.
 	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, "echo-test")
+		return !strings.Contains(snap, "hide-test") && strings.Contains(snap, "process list hidden")
 	}); err != nil {
-		t.Fatalf("process list not shown after second toggle: %v\nSnapshot:\n%s\nCleanOutput (last 2000 bytes):\n%s",
+		t.Fatalf("process list did not hide after ctrl+w: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// Step 3: Press ctrl+w again to restore the process list (focus client).
+	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
+		t.Fatalf("send second ctrl+w: %v", err)
+	}
+
+	// The process label should reappear.
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "hide-test")
+	}); err != nil {
+		t.Fatalf("process list not restored after second ctrl+w: %v\nSnapshot:\n%s\nCleanOutput (last 2000 bytes):\n%s",
 			err, sess.Snapshot(), truncateLast(sess.CleanOutput(), 2000))
 	}
 }
 
-// TestUnifiedToggle_NoLeakClientIntoProcess verifies that after toggling to the
-// process pane the current screen contains no client-TUI-specific text. The
-// process label is only rendered by the client TUI list; it must not appear in
-// the process output pane.
-func TestUnifiedToggle_NoLeakClientIntoProcess(t *testing.T) {
-	// Use a long unique label so it can only come from the client TUI list,
-	// never from the process's own stdout.
+// ---------------------------------------------------------------------------
+// Explicit focus keys (ctrl+right / ctrl+left) hide/show
+// ---------------------------------------------------------------------------
+
+// TestUnified_HideOnUnfocus_FocusKeys verifies that focus_server (ctrl+right)
+// hides the process list and focus_client (ctrl+left) restores it when
+// hide_process_list_when_unfocused is enabled.
+func TestUnified_HideOnUnfocus_FocusKeys(t *testing.T) {
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+log_file: /tmp/proctmux-test-unified-hide-focus-keys.log
+layout:
+  hide_process_list_when_unfocused: true
+procs:
+  focus-key-test:
+    shell: "echo FOCUS_KEY_OUTPUT && sleep 60"
+    autostart: true
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	// Process list should be visible initially.
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "focus-key-test")
+	}); err != nil {
+		t.Fatalf("process list not shown initially: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// Press ctrl+right (focus_server) to hide the process list.
+	if err := sess.SendKeys(e2e.KeyCtrlRight); err != nil {
+		t.Fatalf("send ctrl+right: %v", err)
+	}
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return !strings.Contains(snap, "focus-key-test") && strings.Contains(snap, "process list hidden")
+	}); err != nil {
+		t.Fatalf("process list did not hide after ctrl+right: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// Press ctrl+left (focus_client) to restore the process list.
+	if err := sess.SendKeys(e2e.KeyCtrlLeft); err != nil {
+		t.Fatalf("send ctrl+left: %v", err)
+	}
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "focus-key-test")
+	}); err != nil {
+		t.Fatalf("process list not restored after ctrl+left: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Restore / no-corruption after toggling
+// ---------------------------------------------------------------------------
+
+// TestUnified_HideOnUnfocus_RestoreNoCrossPaneLeakage verifies that after
+// toggling focus away and back with hide-on-unfocus enabled:
+// - the client pane shows the process label
+// - the client pane does NOT show process output text
+// This catches corruption where process output bytes leak into the client view.
+func TestUnified_HideOnUnfocus_RestoreNoCrossPaneLeakage(t *testing.T) {
 	const procLabel = "sentinel-proc-UNIQUELABEL"
 	const procOutput = "PROCESS_OUTPUT_UNIQUETOKEN"
 
 	cfgDir, cfgPath := e2e.WriteConfig(t, `
-log_file: /tmp/proctmux-test-noleak-client.log
+log_file: /tmp/proctmux-test-unified-restore.log
+layout:
+  hide_process_list_when_unfocused: true
 procs:
   `+procLabel+`:
     shell: "echo `+procOutput+` && sleep 60"
     autostart: true
 `)
 
-	sess := e2e.StartUnifiedToggleSession(t, cfgDir, cfgPath)
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
 
-	// Wait for the client TUI to settle with the process label visible.
+	// Wait for the client pane to settle with the process label visible.
 	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
 		return strings.Contains(snap, procLabel)
 	}); err != nil {
 		t.Fatalf("client pane never showed process label: %v\nSnapshot:\n%s", err, sess.Snapshot())
 	}
 
-	// Toggle to the process pane.
+	// Toggle to the server pane (hides process list).
 	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
 		t.Fatalf("send ctrl+w: %v", err)
 	}
 
-	// Wait for the process output to appear — this is the settled state of the
-	// process pane. We wait here rather than sleeping so the assertion below
-	// runs on a stable frame.
+	// Wait for the process list to be hidden.
 	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, procOutput)
+		return strings.Contains(snap, "process list hidden")
 	}); err != nil {
-		t.Fatalf("process pane never showed process output: %v\nSnapshot:\n%s", err, sess.Snapshot())
+		t.Fatalf("process list did not hide: %v\nSnapshot:\n%s", err, sess.Snapshot())
 	}
 
-	// The process label is a client-TUI-only string. It must not appear on the
-	// settled process-pane screen — that would mean client TUI bytes leaked into
-	// the process output view.
-	snap := sess.Snapshot()
-	if strings.Contains(snap, procLabel) {
-		t.Fatalf("client TUI label %q leaked into process pane screen:\n%s", procLabel, snap)
-	}
-}
-
-// TestUnifiedToggle_NoLeakProcessIntoClient verifies that after toggling back to
-// the client pane the current screen contains no process-output-specific text.
-// Process stdout must not appear in the client TUI pane.
-func TestUnifiedToggle_NoLeakProcessIntoClient(t *testing.T) {
-	const procLabel = "sentinel-proc2-UNIQUELABEL"
-	const procOutput = "PROCESS_OUTPUT_UNIQUETOKEN2"
-
-	cfgDir, cfgPath := e2e.WriteConfig(t, `
-log_file: /tmp/proctmux-test-noleak-process.log
-procs:
-  `+procLabel+`:
-    shell: "echo `+procOutput+` && sleep 60"
-    autostart: true
-`)
-
-	sess := e2e.StartUnifiedToggleSession(t, cfgDir, cfgPath)
-
-	// Wait for the client TUI to show the process label.
-	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, procLabel)
-	}); err != nil {
-		t.Fatalf("client pane never showed process label: %v\nSnapshot:\n%s", err, sess.Snapshot())
-	}
-
-	// Toggle to the process pane and wait for it to settle.
-	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
-		t.Fatalf("send ctrl+w: %v", err)
-	}
-	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, procOutput)
-	}); err != nil {
-		t.Fatalf("process pane never showed process output: %v\nSnapshot:\n%s", err, sess.Snapshot())
-	}
-
-	// Toggle back to the client pane and wait for the process label to reappear.
+	// Toggle back to the client pane (restores process list).
 	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
 		t.Fatalf("send ctrl+w (back): %v", err)
 	}
+
+	// Wait for the process label to reappear.
 	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
 		return strings.Contains(snap, procLabel)
 	}); err != nil {
-		t.Fatalf("client pane did not reappear: %v\nSnapshot:\n%s", err, sess.Snapshot())
+		t.Fatalf("client pane did not reappear with process label: %v\nSnapshot:\n%s\nCleanOutput (last 2000 bytes):\n%s",
+			err, sess.Snapshot(), truncateLast(sess.CleanOutput(), 2000))
 	}
 
-	// The process output token must not appear on the settled client-pane screen.
-	// If it does, process output leaked into the client TUI view.
+	// The process output token must NOT appear on the client pane screen.
 	snap := sess.Snapshot()
 	if strings.Contains(snap, procOutput) {
-		t.Fatalf("process output %q leaked into client pane screen:\n%s", procOutput, snap)
+		t.Fatalf("process output %q leaked into client pane after restore:\n%s", procOutput, snap)
 	}
 }
 
-// TestUnifiedToggle_NoLeakOnRapidToggle stress-tests the pane boundary by
-// toggling back and forth many times quickly, then verifying that the final
-// settled state of each pane is clean. This catches races where in-flight
-// goroutine writes land on the wrong pane.
-func TestUnifiedToggle_NoLeakOnRapidToggle(t *testing.T) {
-	const procLabel = "sentinel-proc3-UNIQUELABEL"
-	const procOutput = "PROCESS_OUTPUT_UNIQUETOKEN3"
+// TestUnified_HideOnUnfocus_RapidToggleNoCrossLeakage stress-tests toggling
+// rapidly and verifies that the final state is clean: no cross-pane leakage.
+func TestUnified_HideOnUnfocus_RapidToggleNoCrossLeakage(t *testing.T) {
+	const procLabel = "sentinel-rapid-UNIQUELABEL"
+	const procOutput = "PROCESS_OUTPUT_RAPID_TOKEN"
 
 	cfgDir, cfgPath := e2e.WriteConfig(t, `
-log_file: /tmp/proctmux-test-noleak-rapid.log
+log_file: /tmp/proctmux-test-unified-rapid.log
+layout:
+  hide_process_list_when_unfocused: true
 procs:
   `+procLabel+`:
     shell: "echo `+procOutput+` && sleep 60"
     autostart: true
 `)
 
-	sess := e2e.StartUnifiedToggleSession(t, cfgDir, cfgPath)
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
 
 	// Wait for the client TUI to be ready.
 	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
@@ -243,221 +291,25 @@ procs:
 		t.Fatalf("client pane never ready: %v\nSnapshot:\n%s", err, sess.Snapshot())
 	}
 
-	// Rapid-fire 10 toggles (5 round-trips). Each toggle pair should end up
+	// Rapid-fire 10 toggles (5 round-trips). Each pair should end up
 	// back on the client pane.
 	for i := range 10 {
 		if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
 			t.Fatalf("toggle %d: send ctrl+w: %v", i, err)
 		}
-		// Small pause between keystrokes so the coordinator can process each one.
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	// After an even number of toggles we should be back on the client pane.
-	// Wait for it to settle.
 	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
 		return strings.Contains(snap, procLabel)
 	}); err != nil {
 		t.Fatalf("client pane did not settle after rapid toggling: %v\nSnapshot:\n%s", err, sess.Snapshot())
 	}
 
-	// Now verify the process output token is absent from the client pane screen.
+	// Process output token must not appear on the client pane screen.
 	snap := sess.Snapshot()
 	if strings.Contains(snap, procOutput) {
 		t.Fatalf("process output %q leaked into client pane after rapid toggle:\n%s", procOutput, snap)
-	}
-
-	// Toggle once more to land on the process pane and let it settle.
-	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
-		t.Fatalf("final toggle: send ctrl+w: %v", err)
-	}
-	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, procOutput)
-	}); err != nil {
-		t.Fatalf("process pane did not settle after rapid toggling: %v\nSnapshot:\n%s", err, sess.Snapshot())
-	}
-
-	// The process label must not appear on the process pane screen.
-	snap = sess.Snapshot()
-	if strings.Contains(snap, procLabel) {
-		t.Fatalf("client TUI label %q leaked into process pane after rapid toggle:\n%s", procLabel, snap)
-	}
-}
-
-// TestUnifiedToggle_ActiveProcessNoLeakIntoClientPane verifies that when a
-// process is actively emitting stdout, its output does not leak into the
-// client TUI pane. This catches the bug where the PrimaryServer's viewer relay
-// is started (via HandleCommand switch) while the coordinator is showing the
-// client pane, causing process bytes to be written directly to os.Stdout.
-//
-// The test uses a process that emits a unique token repeatedly with a short
-// interval. After the process has started and had time to emit, the test
-// checks that the client pane snapshot contains the process label but NOT the
-// process output token.
-func TestUnifiedToggle_ActiveProcessNoLeakIntoClientPane(t *testing.T) {
-	const procLabelA = "emitter-alpha"
-	const procLabelB = "emitter-beta"
-	const procOutput = "ACTIVE_EMIT_TOKEN_XYZZY"
-
-	// Two processes: both auto-start. The first continuously emits a unique
-	// token. Having two lets us navigate up/down in the list, which triggers
-	// the IPC "switch" command — the exact path that erroneously starts the
-	// viewer relay while the client pane is showing. Both must be started so
-	// that when the coordinator toggles to the process pane (whichever is
-	// selected), the viewer can find the process.
-	cfgDir, cfgPath := e2e.WriteConfig(t, `
-log_file: /tmp/proctmux-test-active-noleak.log
-procs:
-  `+procLabelA+`:
-    shell: "while true; do echo `+procOutput+`; sleep 0.1; done"
-    autostart: true
-  `+procLabelB+`:
-    shell: "echo BETA_STARTED && sleep 600"
-    autostart: true
-`)
-
-	sess := e2e.StartUnifiedToggleSession(t, cfgDir, cfgPath)
-
-	// Wait for the client TUI to render both process labels.
-	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, procLabelA) && strings.Contains(snap, procLabelB)
-	}); err != nil {
-		t.Fatalf("client pane never showed both labels: %v\nSnapshot:\n%s", err, sess.Snapshot())
-	}
-
-	// Navigate the process list: pressing down and up triggers the IPC switch
-	// command, which is the exact path that erroneously starts the viewer relay.
-	if err := sess.SendKeys(e2e.KeyDown); err != nil {
-		t.Fatalf("send down: %v", err)
-	}
-	time.Sleep(150 * time.Millisecond)
-	if err := sess.SendKeys(e2e.KeyUp); err != nil {
-		t.Fatalf("send up: %v", err)
-	}
-	time.Sleep(150 * time.Millisecond)
-	if err := sess.SendKeys(e2e.KeyDown); err != nil {
-		t.Fatalf("send down 2: %v", err)
-	}
-	time.Sleep(150 * time.Millisecond)
-	// Navigate back to emitter-alpha so that ctrl+w shows its output.
-	if err := sess.SendKeys(e2e.KeyUp); err != nil {
-		t.Fatalf("send up 2: %v", err)
-	}
-	time.Sleep(150 * time.Millisecond)
-
-	// Give the process time to emit many lines of output while the client pane
-	// is showing.
-	time.Sleep(2 * time.Second)
-
-	// The client pane should still be showing the process list, NOT the
-	// process output. If the viewer relay was erroneously started, the
-	// process output token would appear on screen.
-	snap := sess.Snapshot()
-	if !strings.Contains(snap, procLabelA) {
-		t.Fatalf("client pane lost process label after navigating:\n%s", snap)
-	}
-	if strings.Contains(snap, procOutput) {
-		t.Fatalf("active process output %q leaked into client pane while navigating process list:\n%s\nCleanOutput (last 2000 bytes):\n%s",
-			procOutput, snap, truncateLast(sess.CleanOutput(), 2000))
-	}
-
-	// Toggle to the process pane — the client list should disappear.
-	// Whichever process is selected, the process pane should NOT contain
-	// the client list labels.
-	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
-		t.Fatalf("send ctrl+w: %v", err)
-	}
-	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		// The client list should be gone — neither label in the list view.
-		return !strings.Contains(snap, procLabelA) && !strings.Contains(snap, procLabelB)
-	}); err != nil {
-		t.Fatalf("process pane still shows client list after toggle: %v\nSnapshot:\n%s", err, sess.Snapshot())
-	}
-
-	// Toggle back to the client pane; process continues to emit.
-	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
-		t.Fatalf("send ctrl+w (back): %v", err)
-	}
-	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, procLabelA)
-	}); err != nil {
-		t.Fatalf("client pane did not reappear: %v\nSnapshot:\n%s", err, sess.Snapshot())
-	}
-
-	// Navigate again to trigger switch commands while process is actively emitting.
-	if err := sess.SendKeys(e2e.KeyDown); err != nil {
-		t.Fatalf("send down (round 2): %v", err)
-	}
-	time.Sleep(150 * time.Millisecond)
-	if err := sess.SendKeys(e2e.KeyUp); err != nil {
-		t.Fatalf("send up (round 2): %v", err)
-	}
-	time.Sleep(150 * time.Millisecond)
-
-	time.Sleep(1 * time.Second)
-	snap = sess.Snapshot()
-	if strings.Contains(snap, procOutput) {
-		t.Fatalf("active process output %q leaked into client pane after returning from process pane:\n%s",
-			procOutput, snap)
-	}
-}
-
-// TestUnifiedToggle_NoCrossPaneLeakage verifies both directions in one flow:
-// process-list-only text must never appear in the process pane, and
-// process-output-only text must never appear in the client pane.
-func TestUnifiedToggle_NoCrossPaneLeakage(t *testing.T) {
-	const procLabel = "sentinel-proc4-UNIQUELABEL"
-	const procOutput = "PROCESS_OUTPUT_UNIQUETOKEN4"
-
-	cfgDir, cfgPath := e2e.WriteConfig(t, `
-log_file: /tmp/proctmux-test-noleak-cross-pane.log
-procs:
-  `+procLabel+`:
-    shell: "echo `+procOutput+` && sleep 60"
-    autostart: true
-`)
-
-	sess := e2e.StartUnifiedToggleSession(t, cfgDir, cfgPath)
-
-	// Client pane should show the process label first.
-	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, procLabel)
-	}); err != nil {
-		t.Fatalf("client pane never showed process label: %v\nSnapshot:\n%s", err, sess.Snapshot())
-	}
-
-	// Process output token must not appear in client pane.
-	if snap := sess.Snapshot(); strings.Contains(snap, procOutput) {
-		t.Fatalf("process output %q leaked into client pane before toggle:\n%s", procOutput, snap)
-	}
-
-	// Toggle to process pane and wait for process output.
-	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
-		t.Fatalf("send ctrl+w: %v", err)
-	}
-	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, procOutput)
-	}); err != nil {
-		t.Fatalf("process pane never showed process output: %v\nSnapshot:\n%s", err, sess.Snapshot())
-	}
-
-	// Client process label must not appear in process pane.
-	if snap := sess.Snapshot(); strings.Contains(snap, procLabel) {
-		t.Fatalf("client process label %q leaked into process pane:\n%s", procLabel, snap)
-	}
-
-	// Toggle back to client pane.
-	if err := sess.SendKeys(e2e.KeyCtrlW); err != nil {
-		t.Fatalf("send ctrl+w (back): %v", err)
-	}
-	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
-		return strings.Contains(snap, procLabel)
-	}); err != nil {
-		t.Fatalf("client pane did not reappear: %v\nSnapshot:\n%s", err, sess.Snapshot())
-	}
-
-	// Process output must not appear in client pane after returning.
-	if snap := sess.Snapshot(); strings.Contains(snap, procOutput) {
-		t.Fatalf("process output %q leaked into client pane after return:\n%s", procOutput, snap)
 	}
 }
