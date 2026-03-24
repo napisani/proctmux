@@ -24,6 +24,8 @@ type LayoutConfig struct {
 	// TODO implement this
 	HideProcessDescriptionPanel bool `yaml:"hide_process_description_panel"`
 
+	HideProcessListWhenUnfocused bool `yaml:"hide_process_list_when_unfocused"`
+
 	SortProcessListAlpha        bool   `yaml:"sort_process_list_alpha"`
 	SortProcessListRunningFirst bool   `yaml:"sort_process_list_running_first"`
 	PlaceholderBanner           string `yaml:"placeholder_banner"`

@@ -314,6 +314,56 @@ func TestToHash_ReturnsHexString(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_HideProcessListWhenUnfocused_ExplicitTrue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "proctmux.yaml")
+
+	yaml := `
+layout:
+  hide_process_list_when_unfocused: true
+procs:
+  demo:
+    shell: "sleep 1"
+`
+
+	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig error: %v", err)
+	}
+
+	if !cfg.Layout.HideProcessListWhenUnfocused {
+		t.Error("Expected HideProcessListWhenUnfocused to be true when explicitly set")
+	}
+}
+
+func TestLoadConfig_HideProcessListWhenUnfocused_DefaultFalse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "proctmux.yaml")
+
+	yaml := `
+procs:
+  demo:
+    shell: "sleep 1"
+`
+
+	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig error: %v", err)
+	}
+
+	if cfg.Layout.HideProcessListWhenUnfocused {
+		t.Error("Expected HideProcessListWhenUnfocused to default to false when omitted")
+	}
+}
+
 func TestApplyDefaults_AllKeybindings(t *testing.T) {
 	cfg := ProcTmuxConfig{}
 	cfg = applyDefaults(cfg)

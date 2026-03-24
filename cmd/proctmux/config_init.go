@@ -141,6 +141,9 @@ procs:
 #   # Hide the process description panel at the bottom (default: false)
 #   hide_process_description_panel: false
 #
+#   # Hide the process list when focus moves to the output pane in unified mode (default: false)
+#   hide_process_list_when_unfocused: false
+#
 #   # Sort the process list alphabetically (default: false)
 #   sort_process_list_alpha: false
 #
