@@ -90,7 +90,7 @@ func RunUnified(cfg *config.ProcTmuxConfig, cliCfg *CLIConfig) error {
 		orientation = tui.SplitBottom
 	}
 
-	unified := tui.NewSplitPaneModel(clientModel, emu, ptmx, cmd, orientation)
+	unified := tui.NewSplitPaneModel(clientModel, emu, ptmx, cmd, orientation, cfg.Layout.HideProcessListWhenUnfocused)
 
 	program := tea.NewProgram(unified, bubbleTeaProgramOptions()...)
 	if _, err := program.Run(); err != nil {

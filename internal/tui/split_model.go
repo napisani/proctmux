@@ -62,7 +62,8 @@ type SplitPaneModel struct {
 	focusClientLabel string
 	focusServerLabel string
 
-	orientation SplitOrientation
+	orientation                  SplitOrientation
+	hideProcessListWhenUnfocused bool
 
 	terminalContent string
 	terminalExited  bool
@@ -80,23 +81,34 @@ type SplitPaneModel struct {
 // model and a terminal emulator. The ptmx file descriptor is used for writing
 // keyboard input directly to the child process's PTY. The cmd is used for
 // detecting when the child process exits.
-func NewSplitPaneModel(client ClientModel, emu terminal.Emulator, ptmx *os.File, cmd *exec.Cmd, orientation SplitOrientation) SplitPaneModel {
+func NewSplitPaneModel(client ClientModel, emu terminal.Emulator, ptmx *os.File, cmd *exec.Cmd, orientation SplitOrientation, hideProcessListWhenUnfocused bool) SplitPaneModel {
 	fk := newFocusKeys(client.keys)
 
 	return SplitPaneModel{
-		clientModel:      client,
-		emu:              emu,
-		ptmx:             ptmx,
-		cmd:              cmd,
-		focus:            paneClient,
-		pollInterval:     unifiedPollInterval,
-		keys:             fk,
-		toggleFocusLabel: joinKeys(fk.toggle.Keys()),
-		focusClientLabel: joinKeys(fk.client.Keys()),
-		focusServerLabel: joinKeys(fk.server.Keys()),
-		orientation:      orientation,
-		statusHeight:     unifiedStatusLines,
+		clientModel:                  client,
+		emu:                          emu,
+		ptmx:                         ptmx,
+		cmd:                          cmd,
+		focus:                        paneClient,
+		pollInterval:                 unifiedPollInterval,
+		keys:                         fk,
+		toggleFocusLabel:             joinKeys(fk.toggle.Keys()),
+		focusClientLabel:             joinKeys(fk.client.Keys()),
+		focusServerLabel:             joinKeys(fk.server.Keys()),
+		orientation:                  orientation,
+		hideProcessListWhenUnfocused: hideProcessListWhenUnfocused,
+		statusHeight:                 unifiedStatusLines,
 	}
+}
+
+// clientVisible reports whether the client pane should be rendered.
+// When hideProcessListWhenUnfocused is false the client is always visible.
+// When enabled the client is only visible while it has focus.
+func (m SplitPaneModel) clientVisible() bool {
+	if !m.hideProcessListWhenUnfocused {
+		return true
+	}
+	return m.focus == paneClient
 }
 
 func (m SplitPaneModel) Init() tea.Cmd {
