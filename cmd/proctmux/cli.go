@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // UnifiedSplit indicates how the unified layout should split the panes.
@@ -15,7 +16,6 @@ const (
 	UnifiedSplitRight  UnifiedSplit = "right"
 	UnifiedSplitTop    UnifiedSplit = "top"
 	UnifiedSplitBottom UnifiedSplit = "bottom"
-	UnifiedSplitToggle UnifiedSplit = "toggle"
 )
 
 // CLIConfig holds the parsed command-line configuration
@@ -32,8 +32,15 @@ type CLIConfig struct {
 func ParseCLI() *CLIConfig {
 	cfg := &CLIConfig{}
 
+	// Check for removed flags before flag.Parse() so we can give a clear
+	// migration message instead of "flag provided but not defined".
+	if msg := checkDeprecatedFlags(os.Args[1:]); msg != "" {
+		fmt.Fprintln(os.Stderr, msg)
+		os.Exit(2)
+	}
+
 	var clientMode bool
-	var unifiedLeft, unifiedRight, unifiedTop, unifiedBottom, unifiedToggle bool
+	var unifiedLeft, unifiedRight, unifiedTop, unifiedBottom bool
 	flag.StringVar(&cfg.ConfigFile, "f", "", "path to config file (default: searches for proctmux.yaml in current directory)")
 	flag.StringVar(&cfg.Mode, "mode", "primary", "mode: primary (process server) or client (UI only)")
 	flag.BoolVar(&clientMode, "client", false, "run in client mode (connects to primary)")
@@ -42,7 +49,6 @@ func ParseCLI() *CLIConfig {
 	flag.BoolVar(&unifiedRight, "unified-right", false, "run in unified mode with process list on the right")
 	flag.BoolVar(&unifiedTop, "unified-top", false, "run in unified mode with process list above the output")
 	flag.BoolVar(&unifiedBottom, "unified-bottom", false, "run in unified mode with process list below the output")
-	flag.BoolVar(&unifiedToggle, "unified-toggle", false, "run in unified-toggle mode (toggle between process list and output)")
 	flag.Usage = printUsage
 	flag.Parse()
 
@@ -54,7 +60,6 @@ func ParseCLI() *CLIConfig {
 		{unifiedRight, UnifiedSplitRight},
 		{unifiedTop, UnifiedSplitTop},
 		{unifiedBottom, UnifiedSplitBottom},
-		{unifiedToggle, UnifiedSplitToggle},
 	}
 
 	for _, item := range orientationFlags {
@@ -93,6 +98,20 @@ func ParseCLI() *CLIConfig {
 	return cfg
 }
 
+// checkDeprecatedFlags scans args for removed flags and returns a migration
+// message if one is found. Returns "" if no deprecated flags are present.
+func checkDeprecatedFlags(args []string) string {
+	for _, arg := range args {
+		lower := strings.ToLower(arg)
+		if lower == "--unified-toggle" || lower == "-unified-toggle" {
+			return `--unified-toggle has been removed; use --unified or --unified-left/right/top/bottom with:
+layout:
+  hide_process_list_when_unfocused: true`
+		}
+	}
+	return ""
+}
+
 // printUsage prints the command usage information
 func printUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s [options] [command]\n\n", os.Args[0])
@@ -106,7 +125,6 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  --unified-right          Unified mode with process list on the right\n")
 	fmt.Fprintf(os.Stderr, "  --unified-top            Unified mode with process list above the output\n")
 	fmt.Fprintf(os.Stderr, "  --unified-bottom         Unified mode with process list below the output\n")
-	fmt.Fprintf(os.Stderr, "  --unified-toggle         Unified-toggle mode (toggle between process list and output)\n")
 	fmt.Fprintf(os.Stderr, "\nCommands:\n")
 	fmt.Fprintf(os.Stderr, "  config-init [path]       Create a starter proctmux.yaml configuration file\n")
 	fmt.Fprintf(os.Stderr, "  start                    Start the TUI (default)\n")
