@@ -157,15 +157,27 @@ func TestSplitPaneModel_ToggleFocus_SwitchesVisibility(t *testing.T) {
 
 // --- Task 3: Layout Sizing and Status Text tests ---
 
+// focusServerKey is the key message for the "2" key bound to FocusServer.
+var focusServerKey = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}
+
+// focusClientKey is the key message for the "1" key bound to FocusClient.
+var focusClientKey = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}}
+
+// updateModel is a helper that sends a message through Update and returns
+// the resulting SplitPaneModel.
+func updateModel(t *testing.T, m SplitPaneModel, msg tea.Msg) SplitPaneModel {
+	t.Helper()
+	updated, _ := m.Update(msg)
+	return updated.(SplitPaneModel)
+}
+
 func TestSplitPaneModel_LayoutSizing_LeftRight_HiddenClient(t *testing.T) {
 	client := testClientModel()
 	emu := &fakeEmulator{}
 	m := NewSplitPaneModel(client, emu, nil, nil, SplitLeft, true)
 
 	// Resize to known dimensions
-	resizeMsg := tea.WindowSizeMsg{Width: 120, Height: 40}
-	updated, _ := m.Update(resizeMsg)
-	m = updated.(SplitPaneModel)
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	// Initially focused on client; both panes should have width
 	if m.clientWidth == 0 {
@@ -176,13 +188,14 @@ func TestSplitPaneModel_LayoutSizing_LeftRight_HiddenClient(t *testing.T) {
 	}
 	initialServerWidth := m.serverWidth
 
-	// Focus server to hide client
-	m.focus = paneServer
-	updated, _ = m.handleResize(resizeMsg)
-	m = updated.(SplitPaneModel)
+	// Focus server via key press to hide client — no manual handleResize
+	m = updateModel(t, m, focusServerKey)
 
 	if m.clientWidth != 0 {
 		t.Errorf("expected clientWidth 0 when client is hidden, got %d", m.clientWidth)
+	}
+	if m.clientHeight != 0 {
+		t.Errorf("expected clientHeight 0 when client is hidden, got %d", m.clientHeight)
 	}
 	if m.serverWidth != 120 {
 		t.Errorf("expected serverWidth to fill full width (120), got %d", m.serverWidth)
@@ -198,9 +211,7 @@ func TestSplitPaneModel_LayoutSizing_TopBottom_HiddenClient(t *testing.T) {
 	m := NewSplitPaneModel(client, emu, nil, nil, SplitTop, true)
 
 	// Resize to known dimensions
-	resizeMsg := tea.WindowSizeMsg{Width: 80, Height: 40}
-	updated, _ := m.Update(resizeMsg)
-	m = updated.(SplitPaneModel)
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 40})
 
 	// Initially focused on client; both should have height
 	if m.clientHeight == 0 {
@@ -211,14 +222,15 @@ func TestSplitPaneModel_LayoutSizing_TopBottom_HiddenClient(t *testing.T) {
 	}
 	initialServerHeight := m.serverHeight
 
-	// Focus server to hide client
-	m.focus = paneServer
-	updated, _ = m.handleResize(resizeMsg)
-	m = updated.(SplitPaneModel)
+	// Focus server via key press to hide client — no manual handleResize
+	m = updateModel(t, m, focusServerKey)
 
 	contentHeight := m.contentHeight
 	if m.clientHeight != 0 {
 		t.Errorf("expected clientHeight 0 when client is hidden, got %d", m.clientHeight)
+	}
+	if m.clientWidth != 0 {
+		t.Errorf("expected clientWidth 0 when client is hidden, got %d", m.clientWidth)
 	}
 	if m.serverHeight != contentHeight {
 		t.Errorf("expected serverHeight to fill full content height (%d), got %d", contentHeight, m.serverHeight)
@@ -233,23 +245,16 @@ func TestSplitPaneModel_LayoutSizing_RestoreClient(t *testing.T) {
 	emu := &fakeEmulator{}
 	m := NewSplitPaneModel(client, emu, nil, nil, SplitRight, true)
 
-	resizeMsg := tea.WindowSizeMsg{Width: 120, Height: 40}
-
 	// Initial layout with client visible
-	updated, _ := m.Update(resizeMsg)
-	m = updated.(SplitPaneModel)
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	originalClientWidth := m.clientWidth
 	originalServerWidth := m.serverWidth
 
-	// Hide client
-	m.focus = paneServer
-	updated, _ = m.handleResize(resizeMsg)
-	m = updated.(SplitPaneModel)
+	// Hide client via key press
+	m = updateModel(t, m, focusServerKey)
 
-	// Restore client
-	m.focus = paneClient
-	updated, _ = m.handleResize(resizeMsg)
-	m = updated.(SplitPaneModel)
+	// Restore client via key press
+	m = updateModel(t, m, focusClientKey)
 
 	if m.clientWidth != originalClientWidth {
 		t.Errorf("expected clientWidth to restore to %d, got %d", originalClientWidth, m.clientWidth)
@@ -265,15 +270,10 @@ func TestSplitPaneModel_StatusBar_ProcessListHidden(t *testing.T) {
 	m := NewSplitPaneModel(client, emu, nil, nil, SplitLeft, true)
 
 	// Set dimensions so status bar renders
-	resizeMsg := tea.WindowSizeMsg{Width: 120, Height: 40}
-	updated, _ := m.Update(resizeMsg)
-	m = updated.(SplitPaneModel)
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Focus server to hide client
-	m.focus = paneServer
-	// Re-layout after focus change
-	updated, _ = m.handleResize(resizeMsg)
-	m = updated.(SplitPaneModel)
+	// Focus server via key press to hide client
+	m = updateModel(t, m, focusServerKey)
 
 	view := m.View()
 	if !strings.Contains(view, "process list hidden") {
@@ -287,9 +287,7 @@ func TestSplitPaneModel_StatusBar_NoHiddenMessage_WhenVisible(t *testing.T) {
 	m := NewSplitPaneModel(client, emu, nil, nil, SplitLeft, true)
 
 	// Set dimensions so status bar renders
-	resizeMsg := tea.WindowSizeMsg{Width: 120, Height: 40}
-	updated, _ := m.Update(resizeMsg)
-	m = updated.(SplitPaneModel)
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	// Client is focused and visible
 	view := m.View()
@@ -304,12 +302,11 @@ func TestSplitPaneModel_StatusBar_NoHiddenMessage_WhenFeatureDisabled(t *testing
 	m := NewSplitPaneModel(client, emu, nil, nil, SplitLeft, false)
 
 	// Set dimensions so status bar renders
-	resizeMsg := tea.WindowSizeMsg{Width: 120, Height: 40}
-	updated, _ := m.Update(resizeMsg)
-	m = updated.(SplitPaneModel)
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Even with server focused, no hidden message when feature is disabled
-	m.focus = paneServer
+	// Focus server; no hidden message when feature is disabled
+	m = updateModel(t, m, focusServerKey)
+
 	view := m.View()
 	if strings.Contains(view, "process list hidden") {
 		t.Error("expected View() NOT to contain 'process list hidden' when feature is disabled")

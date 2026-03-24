@@ -172,8 +172,8 @@ func (m SplitPaneModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd)
 	case SplitLeft, SplitRight:
 		if hidden {
 			m.clientWidth = 0
+			m.clientHeight = 0
 			m.serverWidth = msg.Width
-			m.clientHeight = contentHeight
 			m.serverHeight = contentHeight
 			if m.emu != nil {
 				m.emu.Resize(max(1, msg.Width), max(1, contentHeight))
@@ -217,9 +217,9 @@ func (m SplitPaneModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd)
 
 	case SplitTop, SplitBottom:
 		if hidden {
-			m.clientWidth = msg.Width
-			m.serverWidth = msg.Width
+			m.clientWidth = 0
 			m.clientHeight = 0
+			m.serverWidth = msg.Width
 			m.serverHeight = contentHeight
 			if m.emu != nil {
 				m.emu.Resize(max(1, msg.Width), max(1, contentHeight))
@@ -268,6 +268,18 @@ func (m SplitPaneModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd)
 	return m, clientCmd
 }
 
+// afterFocusChange recalculates pane dimensions when the hide-on-unfocus
+// feature is active. When the feature is off this is a no-op.
+func (m SplitPaneModel) afterFocusChange() (tea.Model, tea.Cmd) {
+	if m.hideProcessListWhenUnfocused && m.contentWidth > 0 {
+		return m.handleResize(tea.WindowSizeMsg{
+			Width:  m.contentWidth,
+			Height: m.contentHeight + m.statusHeight,
+		})
+	}
+	return m, nil
+}
+
 func (m SplitPaneModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if len(m.keys.toggle.Keys()) > 0 && key.Matches(msg, m.keys.toggle) {
 		if m.focus == paneClient {
@@ -275,25 +287,25 @@ func (m SplitPaneModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.focus = paneClient
 		}
-		return m, nil
+		return m.afterFocusChange()
 	}
 
 	if len(m.keys.client.Keys()) > 0 && key.Matches(msg, m.keys.client) {
 		m.focus = paneClient
-		return m, nil
+		return m.afterFocusChange()
 	}
 	if len(m.keys.server.Keys()) > 0 && key.Matches(msg, m.keys.server) {
 		m.focus = paneServer
-		return m, nil
+		return m.afterFocusChange()
 	}
 
 	switch msg.String() {
 	case "ctrl+right":
 		m.focus = paneServer
-		return m, nil
+		return m.afterFocusChange()
 	case "ctrl+left":
 		m.focus = paneClient
-		return m, nil
+		return m.afterFocusChange()
 	}
 
 	if m.focus == paneServer {
@@ -316,7 +328,7 @@ func (m SplitPaneModel) forwardToClient(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m SplitPaneModel) View() string {
 	clientView := ""
-	if m.clientModel != nil {
+	if m.clientModel != nil && m.clientVisible() {
 		clientView = m.clientModel.View()
 	}
 
