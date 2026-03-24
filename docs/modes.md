@@ -70,8 +70,7 @@ not manage processes directly; all actions are sent as IPC commands.
 
 1. `main()` calls `RunClient()` (`cmd/proctmux/client.go`).
 2. The client discovers the socket automatically via `ipc.GetSocket()`, using
-   the same config hash as the primary. If the `PROCTMUX_SOCKET` environment
-   variable is set, it connects directly without probing.
+   the same config hash as the primary.
 3. If the socket does not exist yet, the client waits up to 30 seconds with a
    progress indicator, polling every 100ms.
 4. `ipc.NewClient(socketPath)` establishes the connection.

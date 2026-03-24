@@ -154,5 +154,4 @@ tail -f /tmp/proctmux.log
 
 | Variable | Description |
 |---|---|
-| `PROCTMUX_SOCKET` | Override the IPC socket path. When set, the client connects directly without probing the config-hash-based socket path. Useful for custom deployment scenarios. |
 | `PROCTMUX_NO_ALTSCREEN` | Set to `1` to disable alternate screen mode. Useful for debugging TUI output, since alt-screen clears the terminal on exit. |

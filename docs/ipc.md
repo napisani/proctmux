@@ -24,14 +24,6 @@ lifecycle management:
 | `ipc.GetSocket(cfg)` | Computes the socket path, verifies the file exists, then probes it with a test TCP connection (500ms timeout) to confirm the server is alive. Returns an error if the socket is missing or unresponsive. |
 | `ipc.WaitForSocket(cfg)` | Polls every 100ms for up to 30 seconds, waiting for the socket file to appear and pass the probe check. An optional progress callback variant (`WaitForSocketWithProgress`) reports elapsed and total time. |
 
-### PROCTMUX_SOCKET environment variable
-
-When set, the `PROCTMUX_SOCKET` env var provides the socket path directly,
-bypassing config-hash discovery and the probe connection entirely. This
-allows a client to connect immediately without probing. The probe would
-otherwise create a spurious short-lived connection that can race with the
-real client's initial-state delivery.
-
 ---
 
 ## Message Types

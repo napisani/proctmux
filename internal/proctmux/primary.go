@@ -17,21 +17,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// PrimaryServerOptions controls optional behavior of the PrimaryServer.
-type PrimaryServerOptions struct {
-	// SkipStdinForwarder disables raw stdin mode and the stdin-to-process forwarder.
-	// Used in unified-toggle mode where the coordinator owns stdin.
-	SkipStdinForwarder bool
-
-	// SkipViewer disables automatic viewer switching when processes are
-	// selected via IPC commands. Used in unified-toggle mode where the
-	// coordinator owns the viewer and decides when to relay process output
-	// to stdout. Without this, IPC "switch" commands from the child client
-	// TUI would start the viewer relay while the client pane is showing,
-	// causing process output to bleed into the terminal.
-	SkipViewer bool
-}
-
 // PrimaryServer is the main process server that manages all processes and state
 type PrimaryServer struct {
 	processController *process.Controller
@@ -42,7 +27,6 @@ type PrimaryServer struct {
 	cfg               *config.ProcTmuxConfig
 	done              chan struct{}
 	stdOutDebugWriter io.Writer
-	opts              PrimaryServerOptions
 
 	// stdin pass-through management - just track which process has stdin
 	currentStdinProcID int
@@ -85,11 +69,6 @@ func setupLogger(
 }
 
 func NewPrimaryServer(cfg *config.ProcTmuxConfig, ipcServer IPCServerInterface) *PrimaryServer {
-	return NewPrimaryServerWithOptions(cfg, ipcServer, PrimaryServerOptions{})
-}
-
-// NewPrimaryServerWithOptions creates a PrimaryServer with the given options.
-func NewPrimaryServerWithOptions(cfg *config.ProcTmuxConfig, ipcServer IPCServerInterface, opts PrimaryServerOptions) *PrimaryServer {
 	state := domain.NewAppState(cfg)
 	processController := process.NewController(cfg)
 
@@ -112,7 +91,6 @@ func NewPrimaryServerWithOptions(cfg *config.ProcTmuxConfig, ipcServer IPCServer
 		cfg:               cfg,
 		done:              make(chan struct{}),
 		stdOutDebugWriter: logWriter,
-		opts:              opts,
 	}
 }
 
@@ -134,26 +112,22 @@ func (m *PrimaryServer) Start(socketPath string) error {
 	// Set up IPC server to handle commands
 	m.ipcServer.SetPrimaryServer(m)
 
-	if !m.opts.SkipStdinForwarder {
-		// Set stdin to raw mode for interactive input
-		if process.IsTerminal(int(os.Stdin.Fd())) {
-			log.Println("stdin: setting terminal to raw input mode")
-			oldState, err := process.MakeRawInput(int(os.Stdin.Fd()))
-			if err != nil {
-				log.Printf("stdin: warning: failed to set stdin to raw mode: %v", err)
-			} else {
-				m.originalTermState = oldState
-				log.Println("stdin: terminal set to raw input mode successfully")
-			}
+	// Set stdin to raw mode for interactive input
+	if process.IsTerminal(int(os.Stdin.Fd())) {
+		log.Println("stdin: setting terminal to raw input mode")
+		oldState, err := process.MakeRawInput(int(os.Stdin.Fd()))
+		if err != nil {
+			log.Printf("stdin: warning: failed to set stdin to raw mode: %v", err)
 		} else {
-			log.Println("stdin: not a terminal, skipping raw mode setup")
+			m.originalTermState = oldState
+			log.Println("stdin: terminal set to raw input mode successfully")
 		}
-
-		// Start single stdin forwarder
-		m.startStdinForwarder()
 	} else {
-		log.Println("stdin: forwarder skipped (managed externally)")
+		log.Println("stdin: not a terminal, skipping raw mode setup")
 	}
+
+	// Start single stdin forwarder
+	m.startStdinForwarder()
 
 	// Auto-start processes
 	m.autoStartProcesses()
@@ -221,16 +195,6 @@ func (m *PrimaryServer) GetState() *domain.AppState {
 
 func (m *PrimaryServer) GetProcessController() domain.ProcessController {
 	return m.processController
-}
-
-// GetRawProcessController returns the underlying process.Controller for direct access
-// to process instances (scrollback, stdin). Used by unified-toggle mode.
-func (m *PrimaryServer) GetRawProcessController() *process.Controller {
-	return m.processController
-}
-
-func (m *PrimaryServer) GetViewer() *viewer.Viewer {
-	return m.viewer
 }
 
 // startStdinForwarder starts a single goroutine that reads from stdin
@@ -311,17 +275,15 @@ func (m *PrimaryServer) switchToProcessLocked(procID int) error {
 	m.state.CurrentProcID = proc.ID
 	log.Printf("Switched to process %s (ID: %d)", proc.Label, proc.ID)
 
-	// Switch the viewer to display this process unless the caller manages it.
-	if m.viewer != nil && !m.opts.SkipViewer {
+	// Switch the viewer to display this process
+	if m.viewer != nil {
 		if err := m.viewer.SwitchToProcess(proc.ID); err != nil {
 			log.Printf("Warning: failed to switch viewer to process %d: %v", proc.ID, err)
 		}
 	}
 
 	// Attach stdin to the new process
-	if !m.opts.SkipStdinForwarder {
-		m.attachStdinToProcess(proc.ID)
-	}
+	m.attachStdinToProcess(proc.ID)
 
 	return nil
 }
@@ -357,14 +319,11 @@ func (m *PrimaryServer) startProcessLocked(procID int) error {
 	// No need to manually update Status/PID - they will be queried from controller when needed
 
 	// If this process is currently being viewed, refresh the viewer to show output from the beginning.
-	// Skip when SkipViewer is set — the coordinator manages the viewer externally.
-	if m.viewer != nil && !m.opts.SkipViewer && m.viewer.GetCurrentProcessID() == procID {
+	if m.viewer != nil && m.viewer.GetCurrentProcessID() == procID {
 		log.Printf("Refreshing viewer for newly started process %d", procID)
 		go m.viewer.RefreshCurrentProcess()
 		// Also attach stdin since this process is being viewed
-		if !m.opts.SkipStdinForwarder {
-			m.attachStdinToProcess(procID)
-		}
+		m.attachStdinToProcess(procID)
 	}
 
 	// Watch for process exit

@@ -46,63 +46,14 @@ func testPrimaryConfig() *config.ProcTmuxConfig {
 	}
 }
 
-func TestNewPrimaryServer_DefaultOptions(t *testing.T) {
+func TestNewPrimaryServer_CreatesViewer(t *testing.T) {
 	cfg := testPrimaryConfig()
 	ipc := &mockIPCServer{}
 
 	ps := NewPrimaryServer(cfg, ipc)
 
 	if ps.viewer == nil {
-		t.Error("expected viewer to be created with default options")
-	}
-	if ps.opts.SkipStdinForwarder {
-		t.Error("expected SkipStdinForwarder to be false by default")
-	}
-}
-
-func TestNewPrimaryServerWithOptions_SkipStdinForwarder(t *testing.T) {
-	cfg := testPrimaryConfig()
-	ipc := &mockIPCServer{}
-
-	ps := NewPrimaryServerWithOptions(cfg, ipc, PrimaryServerOptions{
-		SkipStdinForwarder: true,
-	})
-
-	// Start should not set terminal to raw mode or start stdin forwarder.
-	// We verify by checking that originalTermState remains nil after Start.
-	if err := ps.Start(""); err != nil {
-		t.Fatalf("Start failed: %v", err)
-	}
-	defer ps.Stop()
-
-	if ps.originalTermState != nil {
-		t.Error("expected originalTermState to be nil when SkipStdinForwarder is true")
-	}
-}
-
-func TestPrimaryServer_GetRawProcessController(t *testing.T) {
-	cfg := testPrimaryConfig()
-	ipc := &mockIPCServer{}
-
-	ps := NewPrimaryServerWithOptions(cfg, ipc, PrimaryServerOptions{
-		SkipStdinForwarder: true,
-	})
-
-	pc := ps.GetRawProcessController()
-	if pc == nil {
-		t.Error("expected GetRawProcessController to return non-nil controller")
-	}
-}
-
-func TestPrimaryServer_GetViewer(t *testing.T) {
-	cfg := testPrimaryConfig()
-	ipc := &mockIPCServer{}
-
-	ps := NewPrimaryServer(cfg, ipc)
-
-	v := ps.GetViewer()
-	if v == nil {
-		t.Error("expected GetViewer to return non-nil viewer")
+		t.Error("expected viewer to be created")
 	}
 }
 
@@ -110,9 +61,7 @@ func TestPrimaryServer_IPCServerInteraction(t *testing.T) {
 	cfg := testPrimaryConfig()
 	ipc := &mockIPCServer{}
 
-	ps := NewPrimaryServerWithOptions(cfg, ipc, PrimaryServerOptions{
-		SkipStdinForwarder: true,
-	})
+	ps := NewPrimaryServer(cfg, ipc)
 
 	if err := ps.Start(""); err != nil {
 		t.Fatalf("Start failed: %v", err)
