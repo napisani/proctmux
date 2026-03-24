@@ -61,6 +61,7 @@ Controls the arrangement and behavior of UI elements.
 | `sort_process_list_running_first` | bool | `false` | Sort running processes to the top of the list. Note: the Go zero value applies since no explicit default is set in code; the config-init template suggests `true`. |
 | `placeholder_banner` | string | *(built-in ASCII art)* | ASCII art banner displayed in the output pane before any process is selected. Set to a custom string or leave empty. |
 | `enable_debug_process_info` | bool | `false` | Show extra debug information (categories, PID, status) next to each process in the list. |
+| `hide_process_list_when_unfocused` | bool | `false` | Only affects unified mode. When `true`, focusing the server pane (via `toggle_focus`, `focus_server`) hides the process list and lets the output fill the screen. Focusing the client pane (via `toggle_focus`, `focus_client`) restores the process list. The status bar shows "process list hidden" when the list is hidden. Primary and client modes ignore this setting. |
 
 ```yaml
 layout:
@@ -69,6 +70,7 @@ layout:
   sort_process_list_running_first: true
   category_search_prefix: "cat:"
   enable_debug_process_info: false
+  hide_process_list_when_unfocused: false
 ```
 
 ---

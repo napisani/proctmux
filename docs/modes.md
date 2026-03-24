@@ -1,6 +1,6 @@
 # Runtime Modes
 
-proctmux has four runtime modes that control how the process server and TUI
+proctmux has three runtime modes that control how the process server and TUI
 interact. Every mode uses the same [IPC protocol](ipc.md) and
 [configuration format](configuration.md); they differ in how the server runs,
 how the UI renders, and how stdin/stdout are routed.
@@ -10,13 +10,9 @@ graph TD
     A["proctmux (or proctmux start)"] -->|Primary Mode| P[PrimaryServer in-process]
     B["proctmux --client"] -->|Client Mode| C[Bubble Tea TUI]
     C -->|IPC socket| P
-    D["proctmux --unified"] -->|Unified Split Mode| S[SplitPaneModel]
+    D["proctmux --unified"] -->|Unified Mode| S[SplitPaneModel]
     S -->|embeds| P2[PrimaryServer as child process]
     S -->|IPC socket| P2
-    E["proctmux --unified-toggle"] -->|Unified Toggle Mode| T[toggleRelay coordinator]
-    T -->|in-process| P3[PrimaryServer]
-    T -->|child PTY| C2[proctmux --client]
-    C2 -->|IPC socket| P3
 ```
 
 ---
@@ -75,8 +71,7 @@ not manage processes directly; all actions are sent as IPC commands.
 1. `main()` calls `RunClient()` (`cmd/proctmux/client.go`).
 2. The client discovers the socket automatically via `ipc.GetSocket()`, using
    the same config hash as the primary. If the `PROCTMUX_SOCKET` environment
-   variable is set (used internally by unified-toggle mode), it connects
-   directly without probing.
+   variable is set, it connects directly without probing.
 3. If the socket does not exist yet, the client waits up to 30 seconds with a
    progress indicator, polling every 100ms.
 4. `ipc.NewClient(socketPath)` establishes the connection.
@@ -94,7 +89,7 @@ not manage processes directly; all actions are sent as IPC commands.
 
 ---
 
-## 3. Unified Split Mode
+## 3. Unified Mode
 
 **Invocation:** `proctmux --unified` (or `--unified-left`, `--unified-right`,
 `--unified-top`, `--unified-bottom`)
@@ -162,104 +157,34 @@ available height, clamped between `minClientHeight = 8` and
 
 ---
 
-## 4. Unified Toggle Mode
-
-**Invocation:** `proctmux --unified-toggle`
-
-A full-screen toggle between the client TUI and raw process output. Unlike
-unified split mode, this runs the primary server in-process and spawns the
-client as a child process in a real PTY.
-
-### What happens
-
-1. `main()` calls `RunUnifiedToggle()` (`cmd/proctmux/unified_toggle.go`).
-2. A `PrimaryServer` is created in-process with special options:
-   - `SkipStdinForwarder: true` -- the coordinator owns stdin, not the server.
-   - `SkipViewer: true` -- the coordinator manages viewer switching to prevent
-     process output from bleeding into the client pane.
-3. `ipc.CreateSocket()` creates the socket; `primaryServer.Start()` begins
-   serving.
-4. `spawnClientPTY()` launches `proctmux --client -f <config>` in a real PTY
-   via `creack/pty`. The `PROCTMUX_SOCKET` environment variable is set so the
-   child connects directly without probing (avoids a race where the probe
-   connection consumes the initial state message).
-5. A 1 MB ring buffer (`buffer.RingBuffer`) captures all client PTY output so
-   that switching back to the client pane can replay recent frames.
-6. The coordinator puts the user's terminal into raw mode.
-7. SIGWINCH (terminal resize) signals are forwarded to the client PTY.
-8. `newToggleRelay()` creates the `toggleRelay` struct, which owns the main
-   event loop.
-
-### The toggle relay
-
-`toggleRelay.run()` is a blocking select loop over two channels:
-
-- **IPC state updates:** tracks the currently selected process ID so the viewer
-  knows which process to show when switching to the process pane.
-- **Raw stdin chunks:** the coordinator reads stdin byte-by-byte, intercepting
-  `ctrl+w` (byte `0x17`) to toggle panes. All other bytes are forwarded to
-  whichever pane is currently showing.
-
-### Pane switching
-
-| Showing | ctrl+w pressed | Result |
-|---------|---------------|--------|
-| Client pane | Toggle | Switch to process pane |
-| Process pane | Toggle | Switch to client pane |
-
-**Switching to client pane** (`switchToClientPane`):
-
-1. Stops any existing client relay goroutine (waits for full exit).
-2. Suspends the viewer by calling `SwitchToProcess(0)`.
-3. Clears the screen (`ESC[2J ESC[H`).
-4. Takes an atomic snapshot of the ring buffer and subscribes for live data.
-5. Starts a relay goroutine that writes ring buffer data to stdout.
-6. Sends a fake SIGWINCH to the client PTY to force a full re-render.
-
-**Switching to process pane** (`switchToProcessPane`):
-
-1. Stops the client relay goroutine (waits for full exit).
-2. Clears the screen.
-3. Calls `viewer.SwitchToProcess(procID)` to begin relaying the selected
-   process's scrollback and live output to stdout.
-4. If no process is selected, stays on the client pane.
-
-### Stdin routing
-
-| Active pane | Stdin destination |
-|-------------|-------------------|
-| Client | Writes to `clientPTY` (the child `--client` process) |
-| Process | Writes to the active process's PTY via `process.Controller.GetWriter()` |
-
-### When to use
-
-- Single-terminal operation where you want full-screen views of both the
-  process list and process output (no split).
-- When raw PTY rendering fidelity matters (the client runs in a real PTY, not
-  an emulator).
-
----
-
 ## Mode Comparison
 
-| | Primary | Client | Unified Split | Unified Toggle |
-|---|---------|--------|---------------|----------------|
-| **Server** | In-process | External (connects via IPC) | Child process in PTY + vt emulator | In-process |
-| **TUI** | None (stdout viewer only) | Bubble Tea (full TUI) | Bubble Tea (SplitPaneModel) | Bubble Tea child in real PTY |
-| **Process output** | Viewer relays to stdout | Rendered in TUI via IPC state | Embedded terminal emulator pane | Viewer relays to stdout (process pane) |
-| **Stdin routing** | Forwarder goroutine to active PTY | Bubble Tea handles input; commands via IPC | Bubble Tea routes to focused pane | Coordinator routes to active pane/PTY |
-| **Focus switching** | N/A | N/A | `ctrl+left`/`ctrl+right`, `ctrl+w` toggle | `ctrl+w` toggle (hardcoded byte intercept) |
-| **Terminals needed** | 1 (+ clients in other terminals) | 1 (requires running primary) | 1 | 1 |
-| **Invocation** | `proctmux` | `proctmux --client` | `proctmux --unified[-left\|right\|top\|bottom]` | `proctmux --unified-toggle` |
+| | Primary | Client | Unified |
+|---|---------|--------|---------|
+| **Server** | In-process | External (connects via IPC) | Child process in PTY + vt emulator |
+| **TUI** | None (stdout viewer only) | Bubble Tea (full TUI) | Bubble Tea (SplitPaneModel) |
+| **Process output** | Viewer relays to stdout | Rendered in TUI via IPC state | Embedded terminal emulator pane |
+| **Stdin routing** | Forwarder goroutine to active PTY | Bubble Tea handles input; commands via IPC | Bubble Tea routes to focused pane |
+| **Focus switching** | N/A | N/A | `ctrl+left`/`ctrl+right`, `ctrl+w` toggle |
+| **Terminals needed** | 1 (+ clients in other terminals) | 1 (requires running primary) | 1 |
+| **Invocation** | `proctmux` | `proctmux --client` | `proctmux --unified[-left\|right\|top\|bottom]` |
 
 ---
 
 ## Choosing a Mode
 
 **Single-terminal, simple setup:**
-Use `proctmux --unified-toggle` for a full-screen toggle experience, or
-`proctmux --unified` for a side-by-side split. Both are self-contained and
-require no additional setup.
+Use `proctmux --unified` for a side-by-side split. It is self-contained and
+requires no additional setup. To hide the process list while viewing output,
+add this to your config:
+
+```yaml
+layout:
+  hide_process_list_when_unfocused: true
+```
+
+With this enabled, focusing the server pane hides the process list and lets
+the output fill the screen; focusing the client pane restores it.
 
 **Multi-terminal monitoring:**
 Run `proctmux` (primary) in one terminal, then open `proctmux --client` in one

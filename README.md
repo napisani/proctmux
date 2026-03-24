@@ -152,6 +152,7 @@ layout:
   sort_process_list_running_first: true
   category_search_prefix: "cat:"     # Prefix for category filtering
   enable_debug_process_info: false   # Show extra info (e.g. categories) in the list
+  hide_process_list_when_unfocused: false  # Unified mode: hide process list when output is focused
 
 style:
   pointer_char: "▶"                   # Selection indicator in the list
@@ -272,6 +273,7 @@ proctmux reads `proctmux.yaml` from the working directory. Only `procs` is requi
   - `category_search_prefix` (string): Prefix to activate category filtering. Default `cat:`.
   - `placeholder_banner` (string): Optional ASCII banner for the right pane before selecting a process.
   - `enable_debug_process_info` (bool): Show extra details (e.g., categories) in the process list.
+  - `hide_process_list_when_unfocused` (bool): Unified mode only. When `true`, focusing the output pane hides the process list; focusing the client pane restores it. Default `false`.
 - `style`:
   - `pointer_char` (string): Selection indicator in the list (default `>`).
   - `status_running_color`, `status_stopped_color` (string): Colors for list icons/pointer. Accepts names like `red`, `brightmagenta`, `ansiblue`, or hex `#ff00ff`.

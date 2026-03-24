@@ -67,7 +67,7 @@ graph TB
 
 | Package | Purpose |
 |---------|---------|
-| `cmd/proctmux/` | Entry point, CLI parsing, mode routing (primary, client, unified, unified-toggle) |
+| `cmd/proctmux/` | Entry point, CLI parsing, mode routing (primary, client, unified) |
 | `internal/config/` | YAML config loading, type definitions, defaults |
 | `internal/domain/` | Core data types: `AppState`, `Process`, `ProcessView`, `StateUpdate`, filtering/sorting |
 | `internal/ipc/` | Unix socket server and client, JSON line protocol, peer UID authentication |
@@ -83,14 +83,13 @@ graph TB
 
 ## Mode Variants
 
-proctmux supports four runtime modes, each composing the same core components differently. See [modes.md](modes.md) for full details.
+proctmux supports three runtime modes, each composing the same core components differently. See [modes.md](modes.md) for full details.
 
 | Mode | How it runs | Components in play |
 |------|------------|-------------------|
 | **Primary** (`proctmux`) | Standalone server with viewer | PrimaryServer + Viewer + IPC Server |
 | **Client** (`proctmux --client`) | TUI connects to running primary | ClientModel + IPC Client |
-| **Unified Split** (`proctmux --unified`) | Embedded server process + client TUI in one Bubble Tea app | SplitPaneModel wrapping ClientModel + charmbracelet/x/vt Emulator |
-| **Unified Toggle** (`proctmux --unified-toggle`) | In-process server + child client in a real PTY, coordinator routes stdin | PrimaryServer (in-process) + child `proctmux --client` in PTY + toggle relay |
+| **Unified** (`proctmux --unified`) | Embedded server process + client TUI in one Bubble Tea app | SplitPaneModel wrapping ClientModel + charmbracelet/x/vt Emulator |
 
 ## Data Flow: Config to Screen
 
@@ -130,7 +129,7 @@ Terminal output
 
 ## Data Flow: Process Output
 
-Each managed process runs inside a PTY. Output flows through a ring buffer to either the viewer (primary/toggle modes) or through the IPC state broadcast (client modes).
+Each managed process runs inside a PTY. Output flows through a ring buffer to either the viewer (primary mode) or through the IPC state broadcast (client modes).
 
 ```
 Process stdout/stderr
@@ -156,8 +155,6 @@ io.Copy to RingBuffer        -- internal/buffer/
               v
           IPC clients (status updates, not raw output)
 ```
-
-In **unified-toggle mode**, a second ring buffer captures the child client's PTY output. The coordinator relays this to stdout when showing the client pane, and switches to the viewer relay when showing the process pane.
 
 ## Data Flow: User Input
 
@@ -244,7 +241,7 @@ The entry point is `cmd/proctmux/main.go`, which:
 1. Calls `ParseCLI()` to parse flags and determine the mode
 2. Calls `config.LoadConfig()` to load YAML config
 3. Calls `procdiscover.Apply()` to merge discovered processes
-4. Routes to the appropriate mode function: `RunPrimary()`, `RunClient()`, `RunUnified()`, or `RunUnifiedToggle()`
+4. Routes to the appropriate mode function: `RunPrimary()`, `RunClient()`, or `RunUnified()`
 
 Build and test commands:
 

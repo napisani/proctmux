@@ -27,11 +27,10 @@ lifecycle management:
 ### PROCTMUX_SOCKET environment variable
 
 When set, the `PROCTMUX_SOCKET` env var provides the socket path directly,
-bypassing config-hash discovery and the probe connection entirely. This is
-used internally by unified-toggle mode: the coordinator spawns a `--client`
-child process with the env var set so the child can connect immediately
-without a probe. The probe would otherwise create a spurious short-lived
-connection that races with the real client's initial-state delivery.
+bypassing config-hash discovery and the probe connection entirely. This
+allows a client to connect immediately without probing. The probe would
+otherwise create a spurious short-lived connection that can race with the
+real client's initial-state delivery.
 
 ---
 

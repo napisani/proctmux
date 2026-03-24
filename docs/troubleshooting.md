@@ -55,7 +55,7 @@ rm /tmp/proctmux-*.socket
 
 **Solutions:**
 
-- Use unified mode (`--unified` or `--unified-toggle`) to see both the process list and process output in a single terminal. Unified mode composes the primary server and client within a single application -- no tmux required.
+- Use unified mode (`--unified`) to see both the process list and process output in a single terminal. Unified mode composes the primary server and client within a single application -- no tmux required.
 - In primary+client mode, switch to the primary terminal to see the selected process output.
 
 ---
@@ -154,5 +154,5 @@ tail -f /tmp/proctmux.log
 
 | Variable | Description |
 |---|---|
-| `PROCTMUX_SOCKET` | Override the IPC socket path. Used internally by unified-toggle mode to coordinate between the primary and client. |
+| `PROCTMUX_SOCKET` | Override the IPC socket path. When set, the client connects directly without probing the config-hash-based socket path. Useful for custom deployment scenarios. |
 | `PROCTMUX_NO_ALTSCREEN` | Set to `1` to disable alternate screen mode. Useful for debugging TUI output, since alt-screen clears the terminal on exit. |
