@@ -134,8 +134,6 @@ func unifiedChildArgs() []string {
 			continue
 		case lower == "--unified-bottom", lower == "-unified-bottom":
 			continue
-		case lower == "--unified-toggle", lower == "-unified-toggle":
-			continue
 		}
 
 		filtered = append(filtered, arg)

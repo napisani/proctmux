@@ -87,12 +87,6 @@ func main() {
 	log.Printf("Command-line args: %+v", cliCfg.Args)
 
 	if cliCfg.Unified {
-		if cliCfg.UnifiedOrientation == UnifiedSplitToggle {
-			if err := RunUnifiedToggle(cfg); err != nil {
-				log.Fatal(err)
-			}
-			return
-		}
 		if err := RunUnified(cfg, cliCfg); err != nil {
 			log.Fatal(err)
 		}
