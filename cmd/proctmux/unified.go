@@ -15,7 +15,10 @@ import (
 	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/domain"
 	"github.com/nick/proctmux/internal/ipc"
-	"github.com/nick/proctmux/internal/terminal/charmvt"
+
+	// "github.com/nick/proctmux/internal/terminal/charmvt"
+	"github.com/nick/proctmux/internal/terminal/ghosttyvt"
+
 	"github.com/nick/proctmux/internal/tui"
 )
 
@@ -37,7 +40,10 @@ func RunUnified(cfg *config.ProcTmuxConfig, cliCfg *CLIConfig) error {
 	args := unifiedChildArgs()
 
 	// Create the virtual terminal emulator for rendering the primary server's output.
-	emu := charmvt.New(80, 24)
+	emu, err := ghosttyvt.New(80, 24)
+	if err != nil {
+		return fmt.Errorf("failed to create terminal emulator: %w", err)
+	}
 	defer emu.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
