@@ -473,3 +473,7 @@ Tags with hyphens (e.g., `v1.0.0-beta`, `v2.0.0-rc1`) are automatically marked a
 ## License
 
 MIT
+
+## Links
+
+[![Hypercommit](https://img.shields.io/badge/Hypercommit-DB2475)](https://hypercommit.com/proctmux)
