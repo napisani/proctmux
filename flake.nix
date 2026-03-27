@@ -58,7 +58,7 @@
           # To begin with it is recommended to set this, but one must
           # remeber to bump this hash when your dependencies change.
           #vendorSha256 = pkgs.lib.fakeSha256;
-          vendorHash = "sha256-T3Ok2ck4JgjywUycyGpKk/3d1YB9ndnMY3DY4fe4UeA=";
+          vendorHash = "sha256-5wwPv+ynhD5issLptTpESpKd/Cm3QJyqBL2mHZlTfis=";
         };
 
         devShells.default = pkgs.mkShell {
