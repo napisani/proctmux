@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"io"
 	"strings"
 	"testing"
 
@@ -21,6 +22,7 @@ type fakeEmulator struct {
 }
 
 func (f *fakeEmulator) Write(p []byte) (int, error) { return len(p), nil }
+func (f *fakeEmulator) Read(p []byte) (int, error)  { return 0, io.EOF }
 func (f *fakeEmulator) Render() string              { return f.rendered }
 func (f *fakeEmulator) Resize(cols, rows int)       { f.cols = cols; f.rows = rows }
 func (f *fakeEmulator) Close()                      { f.closed = true }

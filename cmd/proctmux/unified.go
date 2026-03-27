@@ -65,6 +65,32 @@ func RunUnified(cfg *config.ProcTmuxConfig, cliCfg *CLIConfig) error {
 		}
 	}()
 
+	// Relay the emulator's terminal responses back to the child process.
+	// The VT emulator generates responses to terminal queries (e.g. OSC 11
+	// background color queries, DSR cursor position reports) and writes them
+	// to an internal pipe accessible via Read(). These responses must be
+	// forwarded back to the child's stdin (via ptmx) so that libraries like
+	// termenv/lipgloss in the child process receive the answers they're
+	// waiting for — otherwise the child blocks for up to 5 seconds on each
+	// unanswered query (the termenv.OSCTimeout).
+	//
+	// This also prevents a deadlock: if nobody reads from the pipe, Write()
+	// blocks while holding the SafeEmulator mutex, which deadlocks Render().
+	go func() {
+		buf := make([]byte, 256)
+		for {
+			n, err := emu.Read(buf)
+			if err != nil {
+				return
+			}
+			if n > 0 {
+				if _, werr := ptmx.Write(buf[:n]); werr != nil {
+					return
+				}
+			}
+		}
+	}()
+
 	log.Println("Waiting for embedded primary server to become available...")
 	socketPath, err := ipc.WaitForSocket(cfg)
 	if err != nil {

@@ -33,6 +33,11 @@ func (e *Emulator) Write(p []byte) (int, error) {
 	return e.emu.Write(p)
 }
 
+// Read reads terminal response data (e.g., OSC color query replies).
+func (e *Emulator) Read(p []byte) (int, error) {
+	return e.emu.Read(p)
+}
+
 // Render returns the current screen content as an ANSI-styled string.
 func (e *Emulator) Render() string {
 	return e.emu.Render()

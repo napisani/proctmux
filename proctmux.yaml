@@ -160,6 +160,13 @@ procs:
     autostart: false 
     description: 'test interpolation'
  
+  "fast output":
+    shell: "for i in $(seq 1 5000); do echo \"[$(date +%H:%M:%S.%N)] line $i: the quick brown fox jumps over the lazy dog\"; done; echo '--- done ---'; sleep 600"
+    autostart: false
+    description: 'Rapid stdout to test terminal flashing fix'
+    categories:
+      - 'diagnostic'
+
   "intentional failure":
     cmd:
       - "/bin/bash"
