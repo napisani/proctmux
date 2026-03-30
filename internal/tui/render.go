@@ -217,6 +217,17 @@ func (c *processListComponent) SetSize(w, h int) {
 }
 func (c *processListComponent) View() string {
 	c.ensure()
+
+	// When the list is empty (e.g. filter matches nothing), show a
+	// friendlier message than the default "No items."
+	if len(c.list.Items()) == 0 {
+		msg := lipgloss.NewStyle().Faint(true).Render("No matching processes")
+		if c.allocHeight > 0 {
+			return lipgloss.NewStyle().MaxHeight(c.allocHeight).Render(msg)
+		}
+		return msg
+	}
+
 	content := c.list.View()
 
 	// Use MaxHeight to constrain the list if we have allocated height
@@ -252,6 +263,13 @@ func (f *filterComponent) SetFocused(on bool) {
 func (f filterComponent) View() string {
 	if f.ti.Focused() {
 		return f.ti.View()
+	}
+	// Show a persistent indicator when a filter is active but the user
+	// is not in filter-entry mode. This lets the user know results are
+	// filtered and reminds them how to clear it.
+	if v := f.ti.Value(); v != "" {
+		style := lipgloss.NewStyle().Faint(true)
+		return style.Render(fmt.Sprintf("Filter: %s (/ to edit, esc to clear)", v))
 	}
 	return ""
 }

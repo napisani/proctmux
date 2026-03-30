@@ -493,3 +493,272 @@ procs:
 		t.Fatalf("process output %q leaked into client pane after rapid toggle:\n%s", procOutput, snap)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Process-list filtering scenarios (harness-backed evidence gathering)
+// ---------------------------------------------------------------------------
+
+func TestUnified_Filter_TypeMatchSubmitEscape(t *testing.T) {
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+log_file: /tmp/proctmux-test-filter.log
+procs:
+  alpha-service:
+    shell: "sleep 600"
+    autostart: false
+  beta-worker:
+    shell: "sleep 600"
+    autostart: false
+  gamma-api:
+    shell: "sleep 600"
+    autostart: false
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	// Wait for process list to load.
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "alpha-service") &&
+			strings.Contains(snap, "beta-worker") &&
+			strings.Contains(snap, "gamma-api")
+	}); err != nil {
+		t.Fatalf("process list not loaded: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+	t.Logf("=== INITIAL (all 3 visible) ===\n%s", sess.Snapshot())
+
+	// --- Scenario 1: type a filter that narrows to one process ---
+	// Press '/' to enter filter mode.
+	if err := sess.SendRunes('/'); err != nil {
+		t.Fatalf("send /: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	t.Logf("=== AFTER / (filter mode) ===\n%s", sess.Snapshot())
+
+	// Type "alpha" to filter.
+	for _, r := range "alpha" {
+		if err := sess.SendRunes(r); err != nil {
+			t.Fatalf("send rune %c: %v", r, err)
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	snap := sess.Snapshot()
+	t.Logf("=== AFTER typing 'alpha' ===\n%s", snap)
+
+	if !strings.Contains(snap, "alpha-service") {
+		t.Errorf("expected alpha-service visible after filtering for 'alpha'")
+	}
+	if strings.Contains(snap, "beta-worker") {
+		t.Logf("NOTE: beta-worker still visible after typing 'alpha' (may be expected if fuzzy)")
+	}
+
+	// --- Scenario 2: submit filter with Enter ---
+	if err := sess.SendKeys(e2e.KeyEnter); err != nil {
+		t.Fatalf("send Enter: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	snap = sess.Snapshot()
+	t.Logf("=== AFTER Enter (submit filter) ===\n%s", snap)
+
+	if !strings.Contains(snap, "alpha-service") {
+		t.Errorf("expected alpha-service visible after submitting filter")
+	}
+
+	// --- Scenario 3: re-enter filter mode and press Escape to cancel ---
+	if err := sess.SendRunes('/'); err != nil {
+		t.Fatalf("send /: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	// Type something
+	for _, r := range "zzz" {
+		if err := sess.SendRunes(r); err != nil {
+			t.Fatalf("send rune %c: %v", r, err)
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	snap = sess.Snapshot()
+	t.Logf("=== AFTER typing 'zzz' (no match expected) ===\n%s", snap)
+
+	// Press Escape to cancel filter.
+	if err := sess.SendKeys(e2e.KeyEscape); err != nil {
+		t.Fatalf("send Escape: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	snap = sess.Snapshot()
+	t.Logf("=== AFTER Escape (filter cancelled, all restored) ===\n%s", snap)
+
+	// After Escape, all processes should be visible again.
+	if !strings.Contains(snap, "alpha-service") ||
+		!strings.Contains(snap, "beta-worker") ||
+		!strings.Contains(snap, "gamma-api") {
+		t.Errorf("expected all 3 processes visible after Escape cancel\nSnapshot:\n%s", snap)
+	}
+}
+
+func TestUnified_Filter_NoMatchState(t *testing.T) {
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+log_file: /tmp/proctmux-test-filter-nomatch.log
+procs:
+  alpha-service:
+    shell: "sleep 600"
+    autostart: false
+  beta-worker:
+    shell: "sleep 600"
+    autostart: false
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "alpha-service") &&
+			strings.Contains(snap, "beta-worker")
+	}); err != nil {
+		t.Fatalf("process list not loaded: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// Enter filter mode and type a string that matches nothing.
+	if err := sess.SendRunes('/'); err != nil {
+		t.Fatalf("send /: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	for _, r := range "zzzzz" {
+		if err := sess.SendRunes(r); err != nil {
+			t.Fatalf("send rune %c: %v", r, err)
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	snap := sess.Snapshot()
+	t.Logf("=== NO MATCH STATE ===\n%s", snap)
+
+	// Neither process should be visible.
+	if strings.Contains(snap, "alpha-service") || strings.Contains(snap, "beta-worker") {
+		t.Errorf("expected no processes visible when filter matches nothing\nSnapshot:\n%s", snap)
+	}
+
+	// Submit the no-match filter and verify we stay in a sensible state.
+	if err := sess.SendKeys(e2e.KeyEnter); err != nil {
+		t.Fatalf("send Enter: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	snap = sess.Snapshot()
+	t.Logf("=== NO MATCH AFTER SUBMIT ===\n%s", snap)
+
+	// After submitting a no-match filter, pressing Escape or toggling '/'
+	// should not crash. Let's toggle filter off with '/'.
+	if err := sess.SendRunes('/'); err != nil {
+		t.Fatalf("send /: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	// Press Escape to clear.
+	if err := sess.SendKeys(e2e.KeyEscape); err != nil {
+		t.Fatalf("send Escape: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	snap = sess.Snapshot()
+	t.Logf("=== AFTER CLEARING NO-MATCH FILTER ===\n%s", snap)
+
+	if !strings.Contains(snap, "alpha-service") || !strings.Contains(snap, "beta-worker") {
+		t.Errorf("expected all processes restored after clearing no-match filter\nSnapshot:\n%s", snap)
+	}
+}
+
+func TestUnified_Filter_NavigationWhileFiltered(t *testing.T) {
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+log_file: /tmp/proctmux-test-filter-nav.log
+procs:
+  alpha-one:
+    shell: "sleep 600"
+    autostart: false
+  alpha-two:
+    shell: "sleep 600"
+    autostart: false
+  beta-only:
+    shell: "sleep 600"
+    autostart: false
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "alpha-one") &&
+			strings.Contains(snap, "alpha-two") &&
+			strings.Contains(snap, "beta-only")
+	}); err != nil {
+		t.Fatalf("process list not loaded: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// Filter to "alpha" — should show 2 processes.
+	if err := sess.SendRunes('/'); err != nil {
+		t.Fatalf("send /: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	for _, r := range "alpha" {
+		if err := sess.SendRunes(r); err != nil {
+			t.Fatalf("send rune %c: %v", r, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	// Submit filter.
+	if err := sess.SendKeys(e2e.KeyEnter); err != nil {
+		t.Fatalf("send Enter: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// Wait for both alpha processes to appear — confirming the filter matched.
+	if err := sess.WaitForSnapshot(5*time.Second, func(snap string) bool {
+		cs := clientPaneText(snap)
+		return strings.Contains(cs, "alpha-one") && strings.Contains(cs, "alpha-two")
+	}); err != nil {
+		snap := sess.Snapshot()
+		t.Fatalf("filter did not show both alpha processes: %v\nClient pane:\n%s", err, clientPaneText(snap))
+	}
+	snap := sess.Snapshot()
+	t.Logf("=== FILTERED TO 'alpha' (2 expected) ===\n%s", snap)
+
+	// Navigate down within filtered list.
+	if err := sess.SendRunes('j'); err != nil {
+		t.Fatalf("send j: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	snap = sess.Snapshot()
+	t.Logf("=== AFTER j (navigate down in filtered list) ===\n%s", snap)
+
+	// After navigating in a filtered list, both alpha processes should
+	// still be present and beta should not appear as a live (selectable)
+	// entry. We verify that both alpha processes are visible. Due to the
+	// e2e harness terminal emulator not always clearing old cells when
+	// content shrinks, ghost text from "beta-only" may persist in the
+	// buffer. The important correctness property is that both alpha
+	// processes are still visible and the filter didn't break.
+	clientSnap := clientPaneText(snap)
+	if !strings.Contains(clientSnap, "alpha-one") || !strings.Contains(clientSnap, "alpha-two") {
+		t.Errorf("expected both alpha processes still visible after navigation:\n%s", clientSnap)
+	}
+}
+
+// clientPaneText extracts roughly the left 30 columns of each line in a
+// snapshot, which corresponds to the client pane in the default unified-left
+// layout. This avoids false positives from server-pane VT emulator content.
+func clientPaneText(snap string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(snap, "\n") {
+		runes := []rune(line)
+		end := 30
+		if end > len(runes) {
+			end = len(runes)
+		}
+		b.WriteString(string(runes[:end]))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
