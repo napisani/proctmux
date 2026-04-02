@@ -15,4 +15,7 @@ const (
 	KeyCtrlL     KeySequence = "\x0c"
 	KeyCtrlLeft  KeySequence = "\x1b[1;5D"
 	KeyCtrlRight KeySequence = "\x1b[1;5C"
+	KeyCtrlA     KeySequence = "\x01"
+	KeyCtrlS     KeySequence = "\x13"
+	KeyEscape    KeySequence = "\x1b"
 )

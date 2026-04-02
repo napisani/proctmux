@@ -1,0 +1,23 @@
+{
+  "skill_name": "tui-feedback-loop",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "We already have a PTY harness for our terminal app. Use it to review the filtering experience end to end, capture evidence, and tell me what should become regression tests.",
+      "expected_output": "A harness-backed review covering filtering interactions, observed evidence, UX/correctness findings, and concrete test opportunities.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Launch this TUI with the existing session harness, drive the startup and first-navigation flow like a new user, and give me a balanced report on UX friction and correctness issues.",
+      "expected_output": "A structured report grounded in harness evidence, with startup/navigation findings and next improvements.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I want to compare before and after behavior for a TUI redesign. Use the harness to exercise the same scenario in both versions and tell me what improved, what regressed, and what we should test next.",
+      "expected_output": "A comparison-oriented review that uses reproducible harness scenarios, cites evidence, and proposes follow-up tests.",
+      "files": []
+    }
+  ]
+}
