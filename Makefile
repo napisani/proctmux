@@ -6,6 +6,9 @@ VERSION=0.1.0
 BUILD_DIR=bin
 SRC_DIR=cmd/$(APP_NAME)
 INTERNAL_DIR=internal
+ZIG=zig
+ZIG_OUT=zig-out
+GO_REFERENCE_BINARY=$(BUILD_DIR)/$(BINARY_NAME)-go-reference
 # Run the app
 PHONY: run 
 run: 
@@ -17,6 +20,33 @@ run:
 build:
 	@echo "Building the application..."
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./$(SRC_DIR)
+
+.PHONY: build-zig
+build-zig:
+	@echo "Building the Zig scaffold..."
+	$(ZIG) build -Doptimize=Debug
+	@mkdir -p $(BUILD_DIR)
+	@cp $(ZIG_OUT)/bin/$(BINARY_NAME) $(BUILD_DIR)/$(BINARY_NAME)
+
+.PHONY: run-zig
+run-zig:
+	@echo "Running the Zig scaffold..."
+	$(ZIG) build run
+
+.PHONY: test-zig
+test-zig:
+	@echo "Running Zig tests..."
+	$(ZIG) build test
+
+.PHONY: build-go-reference
+build-go-reference:
+	@echo "Building Go reference binary for parity tests..."
+	@scripts/build-go-reference.sh "$(GO_REFERENCE_BINARY)"
+
+.PHONY: fmt-zig
+fmt-zig:
+	@echo "Formatting Zig files..."
+	$(ZIG) fmt build.zig src
 
 # Build for all supported Unix platforms
 .PHONY: build-all
@@ -245,14 +275,18 @@ update-brew-latest:
 help:
 	@echo "Makefile commands:"
 	@echo "  make build      - Build the application for current platform"
+	@echo "  make build-zig  - Build the Zig scaffold for current platform"
 	@echo "  make build-all  - Build for all supported Unix platforms (Linux, macOS)"
 	@echo "  make run        - Build and run the application"
+	@echo "  make run-zig    - Run the Zig scaffold"
 	@echo "  make clean      - Clean up build artifacts"
 	@echo "  make dist       - Create a distribution archive"
 	@echo "  make watch      - Watch for changes and rebuild"
 	@echo "  make inspect    - Inspect the application with Model Context Protocol"
 	@echo "  make tidy       - Tidy up dependencies"
 	@echo "  make test       - Run tests"
+	@echo "  make test-zig   - Run Zig tests"
+	@echo "  make build-go-reference - Build Go reference binary for parity tests"
 	@echo "  make test-e2e   - Run integration (e2e) tests"
 	@echo "  make test-race  - Run tests with race detector"
 	@echo "  make update-vendor-hash - Update vendorHash in flake.nix for Nix builds"
@@ -263,7 +297,4 @@ help:
 	@echo "  make update-brew VERSION=vX.Y.Z - Update Homebrew formula for a specific version"
 	@echo "  make update-brew-latest - Update Homebrew formula for the latest git tag"
 	@echo "  make help       - Show this help message"
-
-
-
 
