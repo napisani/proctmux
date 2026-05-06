@@ -65,7 +65,7 @@ build-all:
 .PHONY: clean
 clean:
 	@echo "Cleaning up..."
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(ZIG_OUT) .zig-cache
 
 # Create a distribution archive
 .PHONY: dist
