@@ -1,5 +1,7 @@
 target/
 .worktrees/
+.zig-cache/
+zig-out/
 *.swp
 .swn
 .swo

@@ -28,6 +28,7 @@
           git
           go
           gnumake
+          zig
         ];
         devDeps =
           with pkgs;
