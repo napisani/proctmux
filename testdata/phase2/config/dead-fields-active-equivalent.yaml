@@ -1,0 +1,8 @@
+style:
+  pointer_char: ">"
+
+procs:
+  docs-demo:
+    shell: "sleep 1"
+    docs: "Not active in current Go input handling"
+    meta_tags: ["legacy"]

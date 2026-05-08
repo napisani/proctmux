@@ -8,6 +8,14 @@
 
 **Tech Stack:** Zig 0.15.2, Zig stdlib, vendored `kubkon/zig-yaml` 0.2.0 as a local path dependency, existing Go tests as reference behavior, shared fixtures under `testdata/phase2`.
 
+> Current repo note: the YAML dependency is vendored under
+> `third_party/zig-yaml`, not `vendor/zig-yaml`. The active Makefile also uses
+> direct `zig test` and `zig build-exe` invocations for local Zig verification,
+> because the pinned macOS/Nix `zig build` runner path can fail before project
+> code runs when SDK/libc context is not propagated. Use `make test-zig`,
+> `make build-zig`, and the phase-specific Makefile parity targets for current
+> verification.
+
 ---
 
 ## Sources
@@ -54,7 +62,7 @@ Warn and ignore these stale fields when present:
 ## File Structure
 
 - Modify `build.zig`: wire the vendored YAML dependency into the executable and test modules.
-- Modify `build.zig.zon`: add `.dependencies.yaml.path = "vendor/zig-yaml"` and include `vendor/zig-yaml` in `.paths`.
+- Modify `build.zig.zon`: add `.dependencies.yaml.path = "third_party/zig-yaml"` and include `third_party/zig-yaml` in `.paths`.
 - Modify `Makefile`: add phase-specific parity test target.
 - Modify `src/root.zig`: export and test-import `config`, `domain`, and `discover`.
 - Create `src/config/root.zig`: public entrypoint for config modules.
@@ -81,7 +89,7 @@ Warn and ignore these stale fields when present:
 ### Task 1: Vendor YAML And Wire Build
 
 **Files:**
-- Create: `vendor/zig-yaml/`
+- Create: `third_party/zig-yaml/`
 - Modify: `build.zig`
 - Modify: `build.zig.zon`
 - Modify: `src/root.zig`
@@ -103,13 +111,13 @@ Expected: `git status --short` is clean before creating the worktree.
 Run:
 
 ```bash
-mkdir -p vendor /tmp/proctmux-zig-deps
+mkdir -p third_party /tmp/proctmux-zig-deps
 curl -L https://github.com/kubkon/zig-yaml/archive/refs/tags/0.2.0.tar.gz -o /tmp/proctmux-zig-deps/zig-yaml-0.2.0.tar.gz
-tar -xzf /tmp/proctmux-zig-deps/zig-yaml-0.2.0.tar.gz -C vendor
-mv vendor/zig-yaml-0.2.0 vendor/zig-yaml
+tar -xzf /tmp/proctmux-zig-deps/zig-yaml-0.2.0.tar.gz -C third_party
+mv third_party/zig-yaml-0.2.0 third_party/zig-yaml
 ```
 
-Expected: `vendor/zig-yaml/build.zig.zon`, `vendor/zig-yaml/src`, and `vendor/zig-yaml/LICENSE` exist.
+Expected: `third_party/zig-yaml/build.zig.zon`, `third_party/zig-yaml/src`, and `third_party/zig-yaml/LICENSE` exist.
 
 - [ ] **Step 3: Modify `build.zig.zon`**
 
@@ -123,14 +131,14 @@ Change `build.zig.zon` to:
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .yaml = .{
-            .path = "vendor/zig-yaml",
+            .path = "third_party/zig-yaml",
         },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
-        "vendor/zig-yaml",
+        "third_party/zig-yaml",
     },
 }
 ```
@@ -213,7 +221,7 @@ test "vendored yaml dependency is available" {
 Run:
 
 ```bash
-nix develop --command zig build test
+nix develop --command make test-zig
 ```
 
 Expected: PASS.
@@ -221,7 +229,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add build.zig build.zig.zon src/root.zig vendor/zig-yaml
+git add build.zig build.zig.zon src/root.zig third_party/zig-yaml
 git commit -m "build: vendor zig yaml dependency"
 ```
 
@@ -739,7 +747,7 @@ pub fn apply(cfg: *schema.Config, allocator: schema.Allocator) !void {
 Run:
 
 ```bash
-nix develop --command zig build test
+nix develop --command make test-zig
 ```
 
 Expected: PASS.
@@ -927,7 +935,7 @@ Decode booleans, ints, strings, string lists, string maps, process maps, and nes
 Run:
 
 ```bash
-nix develop --command zig build test
+nix develop --command make test-zig
 ```
 
 Expected: PASS.
@@ -1133,7 +1141,7 @@ pub fn content() []const u8 {
 - [ ] **Step 4: Run tests**
 
 ```bash
-nix develop --command zig build test
+nix develop --command make test-zig
 ```
 
 Expected: PASS.
@@ -1341,7 +1349,7 @@ fn lessThanString(_: void, a: []const u8, b: []const u8) bool {
 - [ ] **Step 5: Run tests**
 
 ```bash
-nix develop --command zig build test
+nix develop --command make test-zig
 ```
 
 Expected: PASS.
@@ -1555,7 +1563,7 @@ fn fuzzyCategoryMatch(a: []const u8, b: []const u8) bool {
 - [ ] **Step 4: Run tests**
 
 ```bash
-nix develop --command zig build test
+nix develop --command make test-zig
 ```
 
 Expected: PASS.
@@ -1690,7 +1698,7 @@ pub fn deinitProcessMap(allocator: std.mem.Allocator, procs: *ProcessMap) void {
 - [ ] **Step 4: Run tests**
 
 ```bash
-nix develop --command zig build test
+nix develop --command make test-zig
 ```
 
 Expected: PASS.
@@ -1840,7 +1848,7 @@ Script names are valid only when every byte is `A-Z`, `a-z`, `0-9`, `:`, `_`, or
 - [ ] **Step 3: Run tests**
 
 ```bash
-nix develop --command zig build test
+nix develop --command make test-zig
 ```
 
 Expected: PASS.
@@ -1944,7 +1952,7 @@ Implement `cloneProcessConfig` by copying every active process field and duplica
 - [ ] **Step 3: Run tests**
 
 ```bash
-nix develop --command zig build test
+nix develop --command make test-zig
 ```
 
 Expected: PASS.
@@ -2074,7 +2082,7 @@ Add:
 .PHONY: test-phase2-parity
 test-phase2-parity:
 	go test ./tools/parity/phase2 -v
-	$(ZIG) build test
+	$(MAKE) test-zig
 ```
 
 - [ ] **Step 3: Run parity tests**

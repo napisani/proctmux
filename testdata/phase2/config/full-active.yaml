@@ -1,0 +1,62 @@
+keybinding:
+  quit: ["q"]
+  up: ["k"]
+  down: ["j"]
+  start: ["s", "enter"]
+  stop: ["x"]
+  restart: ["r"]
+  filter: ["/"]
+  submit_filter: ["enter"]
+  toggle_running: ["R"]
+  toggle_help: ["?"]
+  toggle_focus: ["ctrl+w"]
+  focus_client: ["ctrl+left"]
+  focus_server: ["ctrl+right"]
+  docs: ["d"]
+
+layout:
+  category_search_prefix: "cat:"
+  processes_list_width: 45
+  hide_process_description_panel: true
+  hide_process_list_when_unfocused: true
+  sort_process_list_alpha: true
+  sort_process_list_running_first: true
+  placeholder_banner: "READY"
+  enable_debug_process_info: true
+
+style:
+  selected_process_color: "white"
+  selected_process_bg_color: "magenta"
+  unselected_process_color: "blue"
+  status_running_color: "green"
+  status_halting_color: "yellow"
+  status_stopped_color: "red"
+  pointer_char: ">"
+
+general:
+  procs_from_make_targets: true
+  procs_from_package_json: true
+
+shell_cmd: ["/bin/bash", "-c"]
+log_file: "/tmp/proctmux.log"
+stdout_debug_log_file: "/tmp/proctmux-stdout.log"
+
+procs:
+  backend:
+    shell: "npm run dev"
+    cwd: "."
+    env:
+      ROLE: "api"
+    stop: 15
+    stop_timeout_ms: 3000
+    autostart: true
+    autofocus: true
+    description: "Backend server"
+    categories: ["server", "api"]
+    add_path: ["./node_modules/.bin"]
+    terminal_rows: 40
+    terminal_cols: 120
+    on_kill: ["echo", "cleanup"]
+  worker:
+    cmd: ["python", "-m", "worker"]
+    categories: ["worker"]

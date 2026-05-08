@@ -13,10 +13,11 @@ cutover.
 The Zig implementation should preserve user-facing behavior at the command,
 configuration, IPC, process-management, and TUI workflow boundaries while
 allowing the internal architecture to use Zig-native patterns and libraries.
-The unified terminal pane will use vendored `libghostty-vt` for terminal
-emulation. The process-list TUI will use a comparable popular Zig TUI library,
-with `libvaxis` as the selected candidate unless implementation work uncovers a
-blocking limitation.
+The current implementation uses Zig-native process-list rendering and a narrow
+terminal-text renderer for unified mode. `libghostty-vt` and `libvaxis` remain
+credible future replacement candidates, but behavioral parity is the acceptance
+boundary; those libraries are not required if the in-tree renderer passes the
+same parity gates.
 
 ## Goals
 
@@ -112,8 +113,8 @@ TUI acceptance is behavioral parity:
 - Same split orientations
 - Same `layout.hide_process_list_when_unfocused` behavior
 
-The process list may differ slightly in rendering if `libvaxis` naturally
-produces different layout or style details. It should remain visually familiar:
+The process list may differ slightly in rendering from the Go Bubble Tea
+reference. It should remain visually familiar:
 selected row, status marker, pointer, process label, debug information, panels,
 and messages should correspond to the Go UI.
 
@@ -121,40 +122,44 @@ and messages should correspond to the Go UI.
 
 ### Terminal Emulation
 
-Unified mode should use vendored `libghostty-vt`.
+Unified mode currently uses an in-tree Zig renderer for the terminal pane.
 
 Rationale:
 
-- It is the Ghostty terminal-emulation library.
-- It provides modern VT parsing and formatting capabilities.
-- It supports the direction of the project better than the current Go terminal
-  emulator dependency.
+- It keeps release builds self-contained while the port is still being
+  validated.
+- It covers the active Go parity surface: ANSI clear/cursor behavior,
+  alternate screen restoration, SGR style preservation, resize reflow, keyboard
+  routing, and large output coverage.
+- It avoids taking dependency risk for terminal behavior that is not yet needed
+  by the documented parity suite.
 
 Integration requirements:
 
-- Vendor and pin Ghostty source or a reproducible vendored artifact.
-- Build `libghostty-vt` through the Zig build system.
-- Wrap it behind a narrow internal `terminal` interface.
-- Keep C ABI and Ghostty-specific details out of TUI and mode orchestration
-  code.
-- Treat API churn as expected and isolated to the wrapper module.
+- Keep terminal parsing isolated from TUI and mode orchestration code.
+- Preserve focused parity tests for ANSI styles, alternate screen behavior,
+  resize propagation, keyboard routing, PTY EOF, and large output.
+- If terminal requirements outgrow the in-tree renderer, vendor and pin
+  `libghostty-vt` behind the same narrow boundary.
 
 ### Process-List TUI
 
-Use `libvaxis` as the default Zig TUI framework candidate.
+The process-list TUI currently uses an in-tree Zig model and renderer.
 
 Rationale:
 
-- It is a credible Zig-native terminal UI library.
-- It supports event/input handling and higher-level UI framework concepts.
-- It is popular enough relative to the Zig TUI ecosystem to justify using it
-  over smaller or less mature options.
+- It keeps filtering, keybinding matching, IPC actions, and rendering directly
+  testable in unit and parity tests.
+- The active UI surface is compact enough that a local renderer is simpler than
+  adapting a framework during the port.
+- It avoids framework-specific layout drift while the Go reference remains the
+  parity oracle.
 
 Design constraint:
 
 - Keep proctmux UI state, filtering, keybinding matching, and IPC actions
-  testable outside of `libvaxis` rendering. The framework should render and
-  route events, not own application semantics.
+  independent from any future rendering framework. If `libvaxis` is adopted
+  later, it should render and route events, not own application semantics.
 
 ## Target Architecture
 
@@ -173,8 +178,8 @@ Proposed modules:
 | `proc` | PTY-backed process execution, command building, environment merging, stop/restart lifecycle, `on_kill`. |
 | `ring` | Bounded scrollback buffer with live subscribers. |
 | `viewer` | Primary-mode stdout relay with snapshot plus live subscription semantics. |
-| `tui` | `libvaxis` client UI, key handling, process list, filter input, messages, help, focus behavior. |
-| `terminal` | `libghostty-vt` wrapper for unified terminal emulation. |
+| `tui` | Zig client UI model/rendering, key handling, process list, filter input, messages, help, focus behavior. |
+| `terminal` | In-tree terminal text rendering for unified output; optional future `libghostty-vt` wrapper boundary. |
 | `modes` | Primary, client, unified, and signal command orchestration. |
 | `parity` | Test utilities for invoking the Go reference implementation during migration. |
 
@@ -217,7 +222,7 @@ This preserves one control path:
 - Client actions still travel through IPC.
 - Signal commands still use the same IPC protocol.
 - Unified mode gets terminal output by feeding the child primary PTY into
-  `libghostty-vt`.
+  the terminal renderer.
 
 Avoiding an in-process unified server prevents two separate control paths from
 drifting apart.
@@ -327,9 +332,8 @@ Coverage should include:
 
 ### Terminal Validation
 
-Unified terminal rendering is expected to improve because it uses
-`libghostty-vt`. Validate manually and with focused automated tests where
-possible:
+Unified terminal rendering is validated manually and with focused automated
+tests where possible:
 
 - ANSI colors and styles
 - Alternate screen apps
@@ -401,7 +405,7 @@ Outputs:
 
 ### Phase 6: Client TUI
 
-Implement the process-list client using `libvaxis`.
+Implement the process-list client with a Zig-native model and renderer.
 
 Outputs:
 
@@ -409,10 +413,10 @@ Outputs:
 - TUI behavior harness tests
 - Manual validation against a running primary
 
-### Phase 7: Unified Mode With libghostty-vt
+### Phase 7: Unified Mode
 
-Vendor/pin Ghostty, build `libghostty-vt`, implement the terminal wrapper, and
-compose unified mode.
+Compose unified mode, implement the terminal renderer boundary, and validate
+focused terminal behavior against the Go reference.
 
 Outputs:
 
@@ -437,16 +441,15 @@ Outputs:
 
 ## Key Risks
 
-### libghostty-vt API Churn
+### Optional Terminal Library Churn
 
-`libghostty-vt` is expected to evolve. Keep it vendored and pinned. Isolate all
-Ghostty API usage inside `terminal`.
+If the project adopts `libghostty-vt`, expect API churn. Keep it vendored and
+pinned, and isolate all Ghostty API usage inside the terminal boundary.
 
 ### Zig TUI Ecosystem Maturity
 
-`libvaxis` should be validated early with a small process-list prototype. If it
-cannot support required behavior, choose the next best Zig TUI option before
-the main TUI implementation spreads framework assumptions.
+If the project adopts `libvaxis` or another TUI framework later, validate it
+with a small process-list prototype before spreading framework assumptions.
 
 ### PTY And Signal Semantics
 
@@ -479,6 +482,6 @@ testable behavior.
 - IPC protocol compatibility is validated during migration.
 - Process lifecycle behavior matches active Go behavior.
 - TUI workflows match active Go behavior.
-- Unified mode uses `libghostty-vt` for terminal emulation.
+- Unified mode terminal behavior is covered by focused parity tests.
 - Dependencies needed for release builds are vendored/pinned.
 - Go build/distribution paths are removed or quarantined before final release.

@@ -1,0 +1,29 @@
+enable_mouse: true
+signal_server:
+  enable: true
+  host: "localhost"
+  port: 9792
+
+general:
+  detached_session_name: "_legacy"
+  kill_existing_session: true
+  procs_from_make_targets: false
+  procs_from_package_json: false
+
+style:
+  style_classes:
+    selected: "legacy"
+  color_level: "truecolors"
+  placeholder_terminal_bg_color: "black"
+  unified_terminal_fg_color: "white"
+  unified_terminal_bg_color: "black"
+  pointer_char: ">"
+
+procs:
+  docs-demo:
+    shell: "sleep 1"
+    docs: "Not active in current Go input handling"
+    meta_tags: ["legacy"]
+    unknown_process_field: "ignored"
+
+unknown_top_level: "ignored"

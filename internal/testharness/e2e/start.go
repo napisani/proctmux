@@ -14,17 +14,57 @@ import (
 
 	"github.com/nick/proctmux/internal/config"
 	"github.com/nick/proctmux/internal/ipc"
+	"github.com/nick/proctmux/internal/procdiscover"
+
+	_ "github.com/nick/proctmux/internal/procdiscover/makefile"
+	_ "github.com/nick/proctmux/internal/procdiscover/packagejson"
 )
 
 // StartUnifiedSession builds the proctmux binary (if needed) and launches it in unified mode.
 func StartUnifiedSession(t testing.TB, cfgDir, cfgPath string, extraEnv ...string) *Session {
 	t.Helper()
 
-	binary := Binary(t)
-	args := []string{"--unified", "-f", cfgPath}
+	return StartUnifiedSessionWithBinary(t, Binary(t), cfgDir, cfgPath, extraEnv...)
+}
+
+// StartUnifiedSessionWithBinary launches the provided proctmux binary in unified mode.
+func StartUnifiedSessionWithBinary(t testing.TB, binary, cfgDir, cfgPath string, extraEnv ...string) *Session {
+	t.Helper()
+
+	return StartUnifiedSessionWithBinaryArgs(t, binary, cfgDir, cfgPath, []string{"--unified"}, extraEnv...)
+}
+
+// StartUnifiedSessionWithBinaryArgs launches the provided proctmux binary in unified mode with explicit unified flags.
+func StartUnifiedSessionWithBinaryArgs(
+	t testing.TB,
+	binary string,
+	cfgDir string,
+	cfgPath string,
+	unifiedArgs []string,
+	extraEnv ...string,
+) *Session {
+	t.Helper()
+
+	return StartUnifiedSessionWithBinaryArgsAndSize(t, binary, cfgDir, cfgPath, unifiedArgs, TerminalSize{}, extraEnv...)
+}
+
+// StartUnifiedSessionWithBinaryArgsAndSize launches the provided proctmux binary in unified mode with explicit unified flags and terminal size.
+func StartUnifiedSessionWithBinaryArgsAndSize(
+	t testing.TB,
+	binary string,
+	cfgDir string,
+	cfgPath string,
+	unifiedArgs []string,
+	size TerminalSize,
+	extraEnv ...string,
+) *Session {
+	t.Helper()
+
+	args := append([]string{}, unifiedArgs...)
+	args = append(args, "-f", cfgPath)
 	env := append([]string{"PROCTMUX_NO_ALTSCREEN=1", "TERM=xterm-256color"}, extraEnv...)
 
-	sess, err := startSession(binary, args, cfgDir, env)
+	sess, err := startSessionWithSize(binary, args, cfgDir, env, size)
 	if err != nil {
 		t.Fatalf("start unified session: %v", err)
 	}
@@ -42,7 +82,13 @@ func StartUnifiedSession(t testing.TB, cfgDir, cfgPath string, extraEnv ...strin
 func StartClientSession(t testing.TB, cfgDir, cfgPath string, extraEnv ...string) *Session {
 	t.Helper()
 
-	binary := Binary(t)
+	return StartClientSessionWithBinary(t, Binary(t), cfgDir, cfgPath, extraEnv...)
+}
+
+// StartClientSessionWithBinary starts a client-only instance using the provided binary.
+func StartClientSessionWithBinary(t testing.TB, binary, cfgDir, cfgPath string, extraEnv ...string) *Session {
+	t.Helper()
+
 	args := []string{"--client", "-f", cfgPath}
 	env := append([]string{"PROCTMUX_NO_ALTSCREEN=1", "TERM=xterm-256color"}, extraEnv...)
 
@@ -75,10 +121,16 @@ type PrimaryProcess struct {
 func StartPrimaryProcess(t testing.TB, cfgDir, cfgPath string, extraEnv ...string) *PrimaryProcess {
 	t.Helper()
 
-	binary := Binary(t)
+	return StartPrimaryProcessWithBinary(t, Binary(t), cfgDir, cfgPath, extraEnv...)
+}
+
+// StartPrimaryProcessWithBinary launches the provided proctmux binary as a primary server.
+func StartPrimaryProcessWithBinary(t testing.TB, binary, cfgDir, cfgPath string, extraEnv ...string) *PrimaryProcess {
+	t.Helper()
+
 	ctx, cancel := context.WithCancel(context.Background())
 
-	cmd := exec.CommandContext(ctx, binary, "-f", filepath.Base(cfgPath))
+	cmd := exec.CommandContext(ctx, binary, "-f", cfgPath)
 	cmd.Dir = cfgDir
 	env := append([]string{"PROCTMUX_TEST_MODE=1", "TERM=xterm-256color"}, extraEnv...)
 	cmd.Env = mergeEnv(env)
@@ -171,6 +223,7 @@ func waitForSocket(cfgPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	procdiscover.Apply(cfg, filepath.Dir(cfg.FilePath))
 	return ipc.WaitForSocket(cfg)
 }
 
@@ -178,14 +231,49 @@ func waitForSocket(cfgPath string) (string, error) {
 func StartPrimaryAndClient(t testing.TB, cfgDir, cfgPath string, extraEnv ...string) (*PrimaryProcess, *Session) {
 	t.Helper()
 
-	primary := StartPrimaryProcess(t, cfgDir, cfgPath, extraEnv...)
+	binary := Binary(t)
+	return StartPrimaryAndClientWithBinary(t, binary, binary, cfgDir, cfgPath, extraEnv...)
+}
+
+// StartPrimaryAndClientWithBinary starts a primary and client using provided binaries.
+func StartPrimaryAndClientWithBinary(
+	t testing.TB,
+	primaryBinary string,
+	clientBinary string,
+	cfgDir string,
+	cfgPath string,
+	extraEnv ...string,
+) (*PrimaryProcess, *Session) {
+	t.Helper()
+
+	primary := StartPrimaryProcessWithBinary(t, primaryBinary, cfgDir, cfgPath, extraEnv...)
 
 	// Wait for the IPC socket before launching the client.
 	if _, err := waitForSocket(cfgPath); err != nil {
-		t.Fatalf("wait for socket: %v\nprimary logs:\n%s", err, primary.Logs())
+		t.Fatalf("wait for socket: %v\nprimary logs:\n%s\nconfigured log:\n%s", err, primary.Logs(), configuredLogContents(cfgPath))
 	}
 
-	sess := StartClientSession(t, cfgDir, cfgPath, extraEnv...)
+	sess := StartClientSessionWithBinary(t, clientBinary, cfgDir, cfgPath, extraEnv...)
 
 	return primary, sess
+}
+
+func configuredLogContents(cfgPath string) string {
+	cfg, err := config.LoadConfig(cfgPath)
+	if err != nil {
+		return "<unable to reload config: " + err.Error() + ">"
+	}
+	if cfg.LogFile == "" {
+		return "<no log_file configured>"
+	}
+
+	logPath := cfg.LogFile
+	if !filepath.IsAbs(logPath) {
+		logPath = filepath.Join(filepath.Dir(cfg.FilePath), logPath)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return "<unable to read " + logPath + ": " + err.Error() + ">"
+	}
+	return string(data)
 }

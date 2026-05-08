@@ -1,0 +1,515 @@
+const std = @import("std");
+const config = @import("../config/root.zig");
+const domain = @import("../domain/root.zig");
+const ipc = @import("../ipc/root.zig");
+
+pub const CommandIntent = struct {
+    action: ipc.protocol.Command,
+    label: []const u8,
+};
+
+pub const message_timeout_ms: i64 = 5000;
+
+pub const TimedMessage = struct {
+    text: []const u8,
+    expires_at_ms: i64,
+};
+
+pub const ClientModel = struct {
+    allocator: std.mem.Allocator,
+    app_state: *domain.state.AppState,
+    process_views: []const domain.process.ProcessView,
+    filtered_views: []domain.process.ProcessView,
+    filter_text: std.array_list.Managed(u8),
+    messages: std.array_list.Managed(TimedMessage),
+    entering_filter_text: bool = false,
+    show_only_running: bool = false,
+    show_help: bool = false,
+    mode: domain.state.Mode = .normal,
+    active_proc_id: u32 = 0,
+    term_width: usize = 80,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        app_state: *domain.state.AppState,
+        process_views: []const domain.process.ProcessView,
+    ) !ClientModel {
+        var model = ClientModel{
+            .allocator = allocator,
+            .app_state = app_state,
+            .process_views = process_views,
+            .filtered_views = try allocator.alloc(domain.process.ProcessView, 0),
+            .filter_text = std.array_list.Managed(u8).init(allocator),
+            .messages = std.array_list.Managed(TimedMessage).init(allocator),
+            .active_proc_id = app_state.current_proc_id,
+        };
+        errdefer model.deinit();
+        try model.rebuildProcessList();
+        return model;
+    }
+
+    pub fn deinit(self: *ClientModel) void {
+        self.allocator.free(self.filtered_views);
+        self.filter_text.deinit();
+        for (self.messages.items) |message_entry| self.allocator.free(message_entry.text);
+        self.messages.deinit();
+    }
+
+    pub fn filterText(self: *const ClientModel) []const u8 {
+        return self.filter_text.items;
+    }
+
+    pub fn addMessage(self: *ClientModel, text: []const u8) !void {
+        try self.addMessageAt(text, std.time.milliTimestamp());
+    }
+
+    pub fn addMessageAt(self: *ClientModel, text: []const u8, now_ms: i64) !void {
+        if (text.len == 0) return;
+        self.pruneExpiredMessages(now_ms);
+        const owned = try self.allocator.dupe(u8, text);
+        errdefer self.allocator.free(owned);
+        try self.messages.append(.{
+            .text = owned,
+            .expires_at_ms = now_ms + message_timeout_ms,
+        });
+    }
+
+    pub fn pruneExpiredMessages(self: *ClientModel, now_ms: i64) void {
+        if (self.messages.items.len == 0) return;
+
+        var write_index: usize = 0;
+        for (self.messages.items) |message_entry| {
+            if (now_ms < message_entry.expires_at_ms) {
+                self.messages.items[write_index] = message_entry;
+                write_index += 1;
+            } else {
+                self.allocator.free(message_entry.text);
+            }
+        }
+        self.messages.items.len = write_index;
+    }
+
+    pub fn messageCount(self: *const ClientModel) usize {
+        return self.messages.items.len;
+    }
+
+    pub fn message(self: *const ClientModel, index: usize) []const u8 {
+        return self.messages.items[index].text;
+    }
+
+    pub fn visibleCount(self: *const ClientModel) usize {
+        return self.filtered_views.len;
+    }
+
+    pub fn visibleLabel(self: *const ClientModel, index: usize) []const u8 {
+        return self.filtered_views[index].label;
+    }
+
+    pub fn activeProcessLabel(self: *ClientModel) []const u8 {
+        return self.activeProcLabel();
+    }
+
+    pub fn replaceStatePreservingUI(
+        self: *ClientModel,
+        app_state: *domain.state.AppState,
+        process_views: []const domain.process.ProcessView,
+    ) !void {
+        const new_filtered_views = try domain.filter.filterProcesses(
+            self.allocator,
+            app_state.config,
+            process_views,
+            self.filter_text.items,
+            self.show_only_running,
+        );
+
+        self.allocator.free(self.filtered_views);
+        self.app_state = app_state;
+        self.process_views = process_views;
+        self.filtered_views = new_filtered_views;
+    }
+
+    pub fn handleKey(self: *ClientModel, key: []const u8) !?CommandIntent {
+        if (self.entering_filter_text) {
+            if (matches(self.app_state.config.keybinding.submit_filter, key)) {
+                self.entering_filter_text = false;
+                self.mode = .normal;
+                return self.applyFilterNow();
+            }
+            if (matches(self.app_state.config.keybinding.filter, key)) {
+                self.entering_filter_text = false;
+                self.mode = .normal;
+                try self.rebuildProcessList();
+                return null;
+            }
+            if (std.mem.eql(u8, key, "esc")) {
+                self.entering_filter_text = false;
+                self.mode = .normal;
+                self.filter_text.clearRetainingCapacity();
+                return self.applyFilterNow();
+            }
+            if (std.mem.eql(u8, key, "delete") or std.mem.eql(u8, key, "backspace")) {
+                if (self.filter_text.items.len > 0) self.filter_text.items.len -= 1;
+                return self.applyFilterNow();
+            }
+
+            try self.filter_text.appendSlice(key);
+            return self.applyFilterNow();
+        }
+
+        if (matches(self.app_state.config.keybinding.filter, key)) {
+            self.entering_filter_text = true;
+            self.mode = .filter;
+            self.filter_text.clearRetainingCapacity();
+            self.active_proc_id = 0;
+            try self.rebuildProcessList();
+            return null;
+        }
+        if (matches(self.app_state.config.keybinding.down, key)) {
+            self.moveSelection(1);
+            return self.switchIntent();
+        }
+        if (matches(self.app_state.config.keybinding.up, key)) {
+            self.moveSelection(-1);
+            return self.switchIntent();
+        }
+        if (matches(self.app_state.config.keybinding.toggle_running, key)) {
+            self.show_only_running = !self.show_only_running;
+            return self.applyFilterNow();
+        }
+        if (matches(self.app_state.config.keybinding.start, key)) {
+            return self.commandIntent(.start);
+        }
+        if (matches(self.app_state.config.keybinding.stop, key)) {
+            return self.commandIntent(.stop);
+        }
+        if (matches(self.app_state.config.keybinding.restart, key)) {
+            return self.commandIntent(.restart);
+        }
+        if (matches(self.app_state.config.keybinding.toggle_help, key)) {
+            self.show_help = !self.show_help;
+            return null;
+        }
+        if (matches(self.app_state.config.keybinding.quit, key)) {
+            return .{
+                .action = .stop_running,
+                .label = "",
+            };
+        }
+        return null;
+    }
+
+    fn applyFilterNow(self: *ClientModel) !?CommandIntent {
+        try self.rebuildProcessList();
+        if (self.filtered_views.len == 0) {
+            self.active_proc_id = 0;
+            return null;
+        }
+
+        self.active_proc_id = self.filtered_views[0].id;
+        return .{
+            .action = .switch_process,
+            .label = self.activeProcLabel(),
+        };
+    }
+
+    fn switchIntent(self: *ClientModel) CommandIntent {
+        return self.commandIntent(.switch_process);
+    }
+
+    fn commandIntent(self: *ClientModel, action: ipc.protocol.Command) CommandIntent {
+        return .{
+            .action = action,
+            .label = self.activeProcLabel(),
+        };
+    }
+
+    fn moveSelection(self: *ClientModel, delta: i32) void {
+        if (self.filtered_views.len == 0) {
+            self.active_proc_id = 0;
+            return;
+        }
+        if (self.filtered_views.len == 1) {
+            self.active_proc_id = self.filtered_views[0].id;
+            return;
+        }
+
+        var current_index: ?usize = null;
+        for (self.filtered_views, 0..) |view, index| {
+            if (view.id == self.active_proc_id) {
+                current_index = index;
+                break;
+            }
+        }
+
+        const index = current_index orelse {
+            self.active_proc_id = self.filtered_views[0].id;
+            return;
+        };
+        const next_index = if (delta < 0 and index == 0)
+            self.filtered_views.len - 1
+        else if (delta < 0)
+            index - 1
+        else
+            (index + 1) % self.filtered_views.len;
+        self.active_proc_id = self.filtered_views[next_index].id;
+    }
+
+    fn activeProcLabel(self: *ClientModel) []const u8 {
+        if (self.app_state.getProcessByID(self.active_proc_id)) |proc| return proc.label;
+        return "";
+    }
+
+    fn rebuildProcessList(self: *ClientModel) !void {
+        self.allocator.free(self.filtered_views);
+        self.filtered_views = try domain.filter.filterProcesses(
+            self.allocator,
+            self.app_state.config,
+            self.process_views,
+            self.filter_text.items,
+            self.show_only_running,
+        );
+    }
+};
+
+fn matches(bindings: config.schema.StringList, key: []const u8) bool {
+    for (bindings.items) |binding| {
+        if (std.mem.eql(u8, binding, key)) return true;
+    }
+    return false;
+}
+
+test "client model enters filter mode with configured filter key" {
+    var cfg = try testConfig();
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = 1;
+
+    var views = testViews(&cfg);
+
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    _ = try model.handleKey("/");
+
+    try std.testing.expect(model.entering_filter_text);
+    try std.testing.expectEqual(domain.state.Mode.filter, model.mode);
+    try std.testing.expectEqualStrings("", model.filterText());
+    try std.testing.expectEqual(@as(u32, 0), model.active_proc_id);
+}
+
+test "client model typing filter narrows list and selects first match" {
+    var cfg = try testConfig();
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = 1;
+
+    var views = testViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    _ = try model.handleKey("/");
+    var intent: ?CommandIntent = null;
+    for ("gamma") |ch| {
+        const key = [_]u8{ch};
+        intent = try model.handleKey(key[0..]);
+    }
+
+    try std.testing.expectEqualStrings("gamma", model.filterText());
+    try std.testing.expectEqual(@as(usize, 1), model.visibleCount());
+    try std.testing.expectEqualStrings("gamma-db", model.visibleLabel(0));
+    try std.testing.expectEqual(@as(u32, 3), model.active_proc_id);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, intent.?.action);
+    try std.testing.expectEqualStrings("gamma-db", intent.?.label);
+}
+
+test "client model backspace edits filter text" {
+    var cfg = try testConfig();
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = 1;
+
+    var views = testViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    _ = try model.handleKey("/");
+    for ("alp") |ch| {
+        const key = [_]u8{ch};
+        _ = try model.handleKey(key[0..]);
+    }
+
+    _ = try model.handleKey("delete");
+    _ = try model.handleKey("h");
+
+    try std.testing.expectEqualStrings("alh", model.filterText());
+}
+
+test "client model down key moves selection and wraps within visible list" {
+    var cfg = try testConfig();
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = 1;
+
+    var views = testViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    const beta = try model.handleKey("j");
+    try std.testing.expectEqual(@as(u32, 2), model.active_proc_id);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, beta.?.action);
+    try std.testing.expectEqualStrings("beta-worker", beta.?.label);
+
+    _ = try model.handleKey("j");
+    const wrapped = try model.handleKey("j");
+    try std.testing.expectEqual(@as(u32, 1), model.active_proc_id);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, wrapped.?.action);
+    try std.testing.expectEqualStrings("alpha-api", wrapped.?.label);
+}
+
+test "client model running-only toggle filters visible list and selects first running process" {
+    var cfg = try testConfig();
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = 2;
+
+    var views = testViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    const intent = try model.handleKey("R");
+
+    try std.testing.expect(model.show_only_running);
+    try std.testing.expectEqual(@as(usize, 2), model.visibleCount());
+    try std.testing.expectEqualStrings("alpha-api", model.visibleLabel(0));
+    try std.testing.expectEqualStrings("gamma-db", model.visibleLabel(1));
+    try std.testing.expectEqual(@as(u32, 1), model.active_proc_id);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, intent.?.action);
+    try std.testing.expectEqualStrings("alpha-api", intent.?.label);
+}
+
+test "client model process control keys target active process" {
+    var cfg = try testConfig();
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = 2;
+
+    var views = testViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    const start = try model.handleKey("s");
+    try std.testing.expect(start != null);
+    try std.testing.expectEqual(ipc.protocol.Command.start, start.?.action);
+    try std.testing.expectEqualStrings("beta-worker", start.?.label);
+
+    const stop = try model.handleKey("x");
+    try std.testing.expect(stop != null);
+    try std.testing.expectEqual(ipc.protocol.Command.stop, stop.?.action);
+    try std.testing.expectEqualStrings("beta-worker", stop.?.label);
+
+    const restart = try model.handleKey("r");
+    try std.testing.expect(restart != null);
+    try std.testing.expectEqual(ipc.protocol.Command.restart, restart.?.action);
+    try std.testing.expectEqualStrings("beta-worker", restart.?.label);
+}
+
+test "client model help key toggles help visibility" {
+    var cfg = try testConfig();
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+
+    var views = testViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    _ = try model.handleKey("?");
+    try std.testing.expect(model.show_help);
+
+    _ = try model.handleKey("?");
+    try std.testing.expect(!model.show_help);
+}
+
+test "client model quit key emits stop-running intent" {
+    var cfg = try testConfig();
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+
+    var views = testViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    const intent = try model.handleKey("q");
+    try std.testing.expect(intent != null);
+    try std.testing.expectEqual(ipc.protocol.Command.stop_running, intent.?.action);
+    try std.testing.expectEqualStrings("", intent.?.label);
+}
+
+test "client model prunes messages after five second timeout" {
+    var cfg = try testConfig();
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+
+    var views = testViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    try model.addMessageAt("expired", 0);
+    try model.addMessageAt("fresh", 1);
+
+    model.pruneExpiredMessages(message_timeout_ms);
+
+    try std.testing.expectEqual(@as(usize, 1), model.messageCount());
+    try std.testing.expectEqualStrings("fresh", model.message(0));
+}
+
+fn testConfig() !config.schema.Config {
+    var cfg = config.schema.Config.empty(std.testing.allocator);
+    errdefer cfg.deinit();
+    try config.defaults.apply(&cfg, std.testing.allocator);
+    try putProcess(&cfg, "alpha-api", "sleep 1", .running);
+    try putProcess(&cfg, "beta-worker", "sleep 1", .halted);
+    try putProcess(&cfg, "gamma-db", "sleep 1", .running);
+    return cfg;
+}
+
+fn testViews(cfg: *config.schema.Config) [3]domain.process.ProcessView {
+    return .{
+        .{ .id = 1, .label = "alpha-api", .status = .running, .config = cfg.procs.getPtr("alpha-api").? },
+        .{ .id = 2, .label = "beta-worker", .status = .halted, .config = cfg.procs.getPtr("beta-worker").? },
+        .{ .id = 3, .label = "gamma-db", .status = .running, .config = cfg.procs.getPtr("gamma-db").? },
+    };
+}
+
+fn putProcess(
+    cfg: *config.schema.Config,
+    label: []const u8,
+    shell: []const u8,
+    _: domain.process.ProcessStatus,
+) !void {
+    var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
+    errdefer proc_cfg.deinit(std.testing.allocator);
+    proc_cfg.owns_scalar_strings = true;
+    proc_cfg.shell = try std.testing.allocator.dupe(u8, shell);
+
+    const owned_label = try std.testing.allocator.dupe(u8, label);
+    errdefer std.testing.allocator.free(owned_label);
+    try cfg.procs.put(owned_label, proc_cfg);
+}

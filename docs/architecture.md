@@ -12,9 +12,9 @@ graph TB
     end
 
     subgraph "Client (TUI)"
-        CM[ClientModel<br/>Bubble Tea]
-        PL[Process List<br/>bubbles/list]
-        FI[Filter Input<br/>bubbles/textinput]
+        CM[ClientModel]
+        PL[Process List]
+        FI[Filter Input]
     end
 
     subgraph "IPC Layer"
@@ -38,8 +38,8 @@ graph TB
 
     subgraph "Config Pipeline"
         YAML[proctmux.yaml]
-        CL[config.LoadConfig]
-        PD[procdiscover<br/>Makefile / package.json]
+        CL[config loader]
+        PD[discovery<br/>Makefile / package.json]
     end
 
     STDIN --> CM
@@ -56,14 +56,18 @@ graph TB
     PC --> P2
     PC --> PN
     VW -->|scrollback + live relay| STDOUT
-    CM -->|Bubble Tea render| STDOUT
+    CM -->|TUI render| STDOUT
 
     YAML --> CL
     CL --> PD
     PD --> AS
 ```
 
-## Package Map
+## Go Reference Package Map
+
+The shipped runtime is the Zig implementation under `src/`. The Go packages
+below remain in-tree as the reference oracle for parity tests and historical
+architecture context.
 
 | Package | Purpose |
 |---------|---------|
@@ -89,7 +93,7 @@ proctmux supports three runtime modes, each composing the same core components d
 |------|------------|-------------------|
 | **Primary** (`proctmux`) | Standalone server with viewer | PrimaryServer + Viewer + IPC Server |
 | **Client** (`proctmux --client`) | TUI connects to running primary | ClientModel + IPC Client |
-| **Unified** (`proctmux --unified`) | Embedded server process + client TUI in one Bubble Tea app | SplitPaneModel wrapping ClientModel + charmbracelet/x/vt Emulator |
+| **Unified** (`proctmux --unified`) | Embedded server process + client TUI in one split model | Split model wrapping client model + terminal renderer |
 
 ## Data Flow: Config to Screen
 
@@ -236,7 +240,19 @@ See [discovery.md](discovery.md) for naming conventions and detection details.
 
 ## Build and Test Entry Points
 
-The entry point is `cmd/proctmux/main.go`, which:
+The shipped binary is now built from the Zig entry point `src/main.zig`.
+The Go entry point `cmd/proctmux/main.go` remains in-tree as a reference
+oracle for parity tests during the port.
+
+The Zig runtime:
+
+1. Parses flags and subcommands through `src/cli/`
+2. Loads YAML config through `src/config/`
+3. Applies process discovery through `src/discover/`
+4. Routes to primary, client, unified, or signal-command orchestration in
+   `src/app/`
+
+The Go reference entry point:
 
 1. Calls `ParseCLI()` to parse flags and determine the mode
 2. Calls `config.LoadConfig()` to load YAML config
@@ -246,20 +262,22 @@ The entry point is `cmd/proctmux/main.go`, which:
 Build and test commands:
 
 ```bash
-make build          # go build -o bin/proctmux ./cmd/proctmux
-make test           # go test ./... -v
-make tidy           # go mod tidy
-go test ./internal/process -run '^TestName$' -v   # single test
+make build                 # build the Zig implementation at bin/proctmux
+make test-release-parity   # run all Zig port parity gates
+make test-zig              # run Zig unit tests
+make build-go-reference    # build the Go reference binary for parity tests
+make test                  # run Go reference tests
+make tidy                  # go mod tidy for reference-side dependencies
 ```
 
 ## Technology Stack
 
 | Technology | Usage |
 |-----------|-------|
-| **Go 1.24+** | Language |
-| **Bubble Tea** (`charmbracelet/bubbletea`) | TUI framework (event loop, rendering) |
-| **Bubbles** (`charmbracelet/bubbles`) | List and text input components |
-| **Lip Gloss** (`charmbracelet/lipgloss`) | Terminal styling and layout |
-| **creack/pty** | PTY allocation for managed processes |
-| **charmbracelet/x/vt** | Virtual terminal emulator for unified-split mode (full ANSI color/style) |
-| **x/sys/unix** | Terminal raw mode, signal handling |
+| **Zig 0.15.2** | Shipped implementation language |
+| **Zig stdlib** | CLI/runtime orchestration, Unix sockets, process management |
+| **zig-yaml** | Vendored YAML parsing dependency |
+| **forkpty / POSIX APIs** | PTY allocation, terminal sizing, signal handling |
+| **Go 1.24+** | Reference implementation and parity harness |
+| **Bubble Tea / Bubbles / Lip Gloss** | Go reference TUI stack used as parity oracle |
+| **creack/pty / charmbracelet/x/vt** | Go reference PTY and unified terminal stack |

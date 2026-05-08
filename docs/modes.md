@@ -5,12 +5,16 @@ interact. Every mode uses the same [IPC protocol](ipc.md) and
 [configuration format](configuration.md); they differ in how the server runs,
 how the UI renders, and how stdin/stdout are routed.
 
+The shipped implementation is now the Zig runtime under `src/`. Go package and
+Bubble Tea names in this document describe the reference implementation that is
+kept for parity tests while the Zig port is finalized.
+
 ```mermaid
 graph TD
     A["proctmux (or proctmux start)"] -->|Primary Mode| P[PrimaryServer in-process]
-    B["proctmux --client"] -->|Client Mode| C[Bubble Tea TUI]
+    B["proctmux --client"] -->|Client Mode| C[Zig client TUI]
     C -->|IPC socket| P
-    D["proctmux --unified"] -->|Unified Mode| S[SplitPaneModel]
+    D["proctmux --unified"] -->|Unified Mode| S[Zig split model]
     S -->|embeds| P2[PrimaryServer as child process]
     S -->|IPC socket| P2
 ```
@@ -27,12 +31,12 @@ output to stdout.
 
 ### What happens
 
-1. `main()` calls `RunPrimary()` (`cmd/proctmux/primary.go`).
-2. `RunPrimary()` creates an `ipc.Server` and a `proctmux.NewPrimaryServer()`.
-3. `ipc.CreateSocket()` generates a Unix domain socket at
+1. `src/main.zig` routes to primary mode through `src/app/`.
+2. The primary server creates an IPC command server and process controller.
+3. The socket layer generates a Unix domain socket at
    `/tmp/proctmux-<hash>.socket`, where `<hash>` is derived from the config
    file contents (`config.ToHash()`). See [Discovery](discovery.md) for details.
-4. `primaryServer.Start(socketPath)` does the following:
+4. Primary startup does the following:
    - Starts the IPC server on the socket.
    - Sets stdin to raw mode and starts a **stdin forwarder** goroutine that
      reads keystrokes and writes them to the currently selected process PTY.
@@ -63,18 +67,18 @@ Ctrl+C (or SIGTERM) triggers `primaryServer.Stop()`, which:
 
 **Invocation:** `proctmux --client`
 
-A Bubble Tea TUI that connects to an already-running primary server. It does
-not manage processes directly; all actions are sent as IPC commands.
+A Zig TUI that connects to an already-running primary server. It does not
+manage processes directly; all actions are sent as IPC commands.
 
 ### What happens
 
-1. `main()` calls `RunClient()` (`cmd/proctmux/client.go`).
+1. `src/main.zig` routes to client mode through `src/app/`.
 2. The client discovers the socket automatically via `ipc.GetSocket()`, using
    the same config hash as the primary.
 3. If the socket does not exist yet, the client waits up to 30 seconds with a
    progress indicator, polling every 100ms.
-4. `ipc.NewClient(socketPath)` establishes the connection.
-5. `tui.NewClientModel(client, &state)` creates the Bubble Tea model, which:
+4. The Zig IPC client establishes the connection.
+5. The client session creates the process-list model, which:
    - Shows the process list with status indicators.
    - Receives state broadcasts (process views with output) from the primary.
    - Sends commands (`start`, `stop`, `restart`, `switch`) over IPC.
@@ -93,24 +97,21 @@ not manage processes directly; all actions are sent as IPC commands.
 **Invocation:** `proctmux --unified` (or `--unified-left`, `--unified-right`,
 `--unified-top`, `--unified-bottom`)
 
-A single Bubble Tea program that combines the client TUI and an embedded
-terminal running the primary server in a side-by-side (or stacked) split pane.
+A single Zig program that combines the client TUI and an embedded primary
+server in a side-by-side (or stacked) split pane.
 
 ### What happens
 
-1. `main()` calls `RunUnified()` (`cmd/proctmux/unified.go`).
-2. A `charmbracelet/x/vt` emulator is created to host a virtual terminal
-   with full ANSI color/style rendering.
-3. The current `proctmux` executable is re-launched as a child process in
-   primary mode (with `--mode primary`), running inside a real PTY
-   (`creack/pty`). PTY output is piped to the emulator via `io.Copy`.
-   The `unifiedChildArgs()` helper strips all unified/client flags from the
-   original CLI args.
-4. `ipc.WaitForSocket()` blocks until the child primary server creates its
-   socket.
-5. `ipc.NewClient()` connects to the embedded primary.
-6. `tui.NewSplitPaneModel(clientModel, emu, ptmx, cmd, orientation)` creates
-   the composite model (`internal/tui/split_model.go`).
+1. `src/main.zig` routes to unified mode through `src/app/`.
+2. The current `proctmux` executable is re-launched as a child primary process
+   in a PTY. The unified child-argument helper strips unified/client flags from
+   the original CLI args.
+3. The parent waits until the child primary creates its socket, then connects
+   with the same IPC client used by standalone client mode.
+4. The Zig split model composes the process list and terminal-output panes.
+   PTY output is captured, parsed by the in-tree terminal renderer, and redrawn
+   on a polling loop.
+5. The split model reads the PTY window size and reflows on live resize.
 
 ### Layout orientations
 
@@ -151,8 +152,7 @@ available height, clamped between `minClientHeight = 8` and
 
 - Single-terminal operation where you want to see both the process list and
   raw server output side by side.
-- When you prefer a Bubble Tea-rendered view of process output (via the
-  embedded terminal emulator).
+- When you prefer a split-pane view of process output and process controls.
 
 ---
 
@@ -160,10 +160,10 @@ available height, clamped between `minClientHeight = 8` and
 
 | | Primary | Client | Unified |
 |---|---------|--------|---------|
-| **Server** | In-process | External (connects via IPC) | Child process in PTY + vt emulator |
-| **TUI** | None (stdout viewer only) | Bubble Tea (full TUI) | Bubble Tea (SplitPaneModel) |
+| **Server** | In-process | External (connects via IPC) | Child process in PTY |
+| **TUI** | None (stdout viewer only) | Zig client TUI | Zig split model |
 | **Process output** | Viewer relays to stdout | Rendered in TUI via IPC state | Embedded terminal emulator pane |
-| **Stdin routing** | Forwarder goroutine to active PTY | Bubble Tea handles input; commands via IPC | Bubble Tea routes to focused pane |
+| **Stdin routing** | Forwarder goroutine to active PTY | TUI handles input; commands via IPC | Split model routes to focused pane |
 | **Focus switching** | N/A | N/A | `ctrl+left`/`ctrl+right`, `ctrl+w` toggle |
 | **Terminals needed** | 1 (+ clients in other terminals) | 1 (requires running primary) | 1 |
 | **Invocation** | `proctmux` | `proctmux --client` | `proctmux --unified[-left\|right\|top\|bottom]` |

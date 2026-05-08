@@ -6,37 +6,95 @@ VERSION=0.1.0
 BUILD_DIR=bin
 SRC_DIR=cmd/$(APP_NAME)
 INTERNAL_DIR=internal
-ZIG=zig
+ZIG ?= zig
 ZIG_OUT=zig-out
+ZIG_CACHE_DIR ?= .zig-cache/global
+ZIG_YAML_MODULE ?= third_party/zig-yaml/src/lib.zig
 GO_REFERENCE_BINARY=$(BUILD_DIR)/$(BINARY_NAME)-go-reference
+zig_platform_flags = -target $(1) -lc $(if $(findstring macos,$(1)),--sysroot $(MACOS_SDK),)
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+ifeq ($(UNAME_S),Darwin)
+ZIG_NATIVE_TARGET ?= $(if $(filter arm64 aarch64,$(UNAME_M)),aarch64-macos,x86_64-macos)
+MACOS_SDK ?= $(shell xcrun --show-sdk-path 2>/dev/null || echo /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk)
+ZIG_PLATFORM_FLAGS ?= -target $(ZIG_NATIVE_TARGET) -lc --sysroot $(MACOS_SDK)
+else ifeq ($(UNAME_S),Linux)
+ZIG_NATIVE_TARGET ?= $(if $(filter arm64 aarch64,$(UNAME_M)),aarch64-linux-gnu,x86_64-linux-gnu)
+ZIG_PLATFORM_FLAGS ?= -target $(ZIG_NATIVE_TARGET) -lc
+endif
+ZIG_MODULE_ARGS=--dep yaml -Mroot=src/main.zig -Myaml=$(ZIG_YAML_MODULE)
+ZIG_TEST_MODULE_ARGS=--dep yaml -Mroot=src/root.zig -Myaml=$(ZIG_YAML_MODULE)
+ZIG_TEST_CMD=$(ZIG) test --global-cache-dir $(ZIG_CACHE_DIR) $(ZIG_PLATFORM_FLAGS) $(ZIG_TEST_MODULE_ARGS)
+ZIG_BUILD_CMD=$(ZIG) build-exe --global-cache-dir $(ZIG_CACHE_DIR) $(ZIG_PLATFORM_FLAGS) $(ZIG_MODULE_ARGS)
 # Run the app
-PHONY: run 
-run: 
-	@echo "Running the application..."
-	go run ./$(SRC_DIR)
+.PHONY: run
+run:
+	$(MAKE) run-zig
 
 # Build the binary
 .PHONY: build
 build:
-	@echo "Building the application..."
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./$(SRC_DIR)
+	$(MAKE) build-zig
 
 .PHONY: build-zig
 build-zig:
-	@echo "Building the Zig scaffold..."
-	$(ZIG) build -Doptimize=Debug
+	@echo "Building the Zig implementation..."
 	@mkdir -p $(BUILD_DIR)
-	@cp $(ZIG_OUT)/bin/$(BINARY_NAME) $(BUILD_DIR)/$(BINARY_NAME)
+	$(ZIG_BUILD_CMD) -femit-bin=$(BUILD_DIR)/$(BINARY_NAME)
 
 .PHONY: run-zig
-run-zig:
-	@echo "Running the Zig scaffold..."
-	$(ZIG) build run
+run-zig: build-zig
+	@echo "Running the Zig implementation..."
+	./$(BUILD_DIR)/$(BINARY_NAME)
 
 .PHONY: test-zig
 test-zig:
 	@echo "Running Zig tests..."
-	$(ZIG) build test
+	$(ZIG_TEST_CMD)
+
+.PHONY: test-phase2-parity
+test-phase2-parity:
+	go test ./tools/parity/phase2 -v
+	$(MAKE) test-zig
+
+.PHONY: test-phase3-parity
+test-phase3-parity: build-zig build-go-reference
+	PROCTMUX_ZIG_BIN="$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME)" go test ./tools/parity/phase3 -v
+	PROCTMUX_GO_BIN="$(CURDIR)/$(GO_REFERENCE_BINARY)" $(MAKE) test-zig
+
+.PHONY: test-cli-parity
+test-cli-parity:
+	go test ./cmd/proctmux -run 'TestParseCLIParity|TestCheckDeprecatedFlags' -v
+	$(MAKE) test-zig
+
+.PHONY: test-phase4-parity
+test-phase4-parity: build-zig build-go-reference
+	go test ./internal/process -run 'TestBuildCommand|TestBuildEnvironment' -v
+	go test ./internal/buffer -v
+	PROCTMUX_GO_BIN="$(CURDIR)/$(GO_REFERENCE_BINARY)" PROCTMUX_ZIG_BIN="$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME)" go test ./tools/parity/phase4 -v
+	$(MAKE) test-zig
+
+.PHONY: test-phase5-parity
+test-phase5-parity: build-zig build-go-reference
+	PROCTMUX_GO_BIN="$(CURDIR)/$(GO_REFERENCE_BINARY)" PROCTMUX_ZIG_BIN="$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME)" go test ./tools/parity/phase5 -v
+	$(MAKE) test-zig
+
+.PHONY: test-phase6-parity
+test-phase6-parity: build-zig build-go-reference
+	PROCTMUX_GO_BIN="$(CURDIR)/$(GO_REFERENCE_BINARY)" PROCTMUX_ZIG_BIN="$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME)" go test ./tools/parity/phase6 -v
+	$(MAKE) test-zig
+
+.PHONY: test-phase7-parity
+test-phase7-parity: build-zig build-go-reference
+	PROCTMUX_GO_BIN="$(CURDIR)/$(GO_REFERENCE_BINARY)" PROCTMUX_ZIG_BIN="$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME)" go test ./tools/parity/phase7 -v
+	$(MAKE) test-zig
+
+.PHONY: test-phase8-parity
+test-phase8-parity:
+	go test ./tools/parity/phase8 -v
+
+.PHONY: test-release-parity
+test-release-parity: test-cli-parity test-phase2-parity test-phase3-parity test-phase4-parity test-phase5-parity test-phase6-parity test-phase7-parity test-phase8-parity
 
 .PHONY: build-go-reference
 build-go-reference:
@@ -51,14 +109,23 @@ fmt-zig:
 # Build for all supported Unix platforms
 .PHONY: build-all
 build-all:
-	@echo "Building for all Unix platforms..."
-	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 ./$(SRC_DIR)
-	GOOS=linux GOARCH=arm64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 ./$(SRC_DIR)
-	GOOS=darwin GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 ./$(SRC_DIR)
-	GOOS=darwin GOARCH=arm64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./$(SRC_DIR)
+	@echo "Building Zig release artifacts for all Unix platforms..."
+	$(MAKE) build-release-artifact ZIG_TARGET=x86_64-linux-gnu ARTIFACT_NAME=$(BINARY_NAME)-linux-amd64
+	$(MAKE) build-release-artifact ZIG_TARGET=aarch64-linux-gnu ARTIFACT_NAME=$(BINARY_NAME)-linux-arm64
+	$(MAKE) build-release-artifact ZIG_TARGET=x86_64-macos ARTIFACT_NAME=$(BINARY_NAME)-darwin-amd64
+	$(MAKE) build-release-artifact ZIG_TARGET=aarch64-macos ARTIFACT_NAME=$(BINARY_NAME)-darwin-arm64
 	@echo "Built binaries:"
 	@ls -lh $(BUILD_DIR)/$(BINARY_NAME)-*
+
+.PHONY: build-release-artifact
+build-release-artifact:
+	@if [ -z "$(ZIG_TARGET)" ] || [ -z "$(ARTIFACT_NAME)" ]; then \
+		echo "Usage: make build-release-artifact ZIG_TARGET=<zig-target> ARTIFACT_NAME=<output-name>" >&2; \
+		exit 2; \
+	fi
+	@echo "Building Zig release artifact $(ARTIFACT_NAME) for $(ZIG_TARGET)..."
+	@mkdir -p $(BUILD_DIR)
+	$(ZIG) build-exe --global-cache-dir $(ZIG_CACHE_DIR) $(call zig_platform_flags,$(ZIG_TARGET)) $(ZIG_MODULE_ARGS) -femit-bin=$(BUILD_DIR)/$(ARTIFACT_NAME)
 
 
 # Clean build artifacts
@@ -196,11 +263,8 @@ release-create:
 	fi; \
 	echo "Preparing release $$TAG"; \
 	echo ""; \
-	echo "Running tests..."; \
-	$(MAKE) test; \
-	echo ""; \
-	echo "Running vet..."; \
-	go vet ./...; \
+	echo "Running release parity tests..."; \
+	$(MAKE) test-release-parity; \
 	echo ""; \
 	echo "Tagging $$TAG"; \
 	git tag -a "$$TAG" -m "Release $$TAG"; \
@@ -275,10 +339,11 @@ update-brew-latest:
 help:
 	@echo "Makefile commands:"
 	@echo "  make build      - Build the application for current platform"
-	@echo "  make build-zig  - Build the Zig scaffold for current platform"
+	@echo "  make build-zig  - Build the Zig implementation for current platform"
+	@echo "  make build-release-artifact ZIG_TARGET=<target> ARTIFACT_NAME=<name> - Build one Zig release artifact"
 	@echo "  make build-all  - Build for all supported Unix platforms (Linux, macOS)"
 	@echo "  make run        - Build and run the application"
-	@echo "  make run-zig    - Run the Zig scaffold"
+	@echo "  make run-zig    - Run the Zig implementation"
 	@echo "  make clean      - Clean up build artifacts"
 	@echo "  make dist       - Create a distribution archive"
 	@echo "  make watch      - Watch for changes and rebuild"
@@ -286,6 +351,7 @@ help:
 	@echo "  make tidy       - Tidy up dependencies"
 	@echo "  make test       - Run tests"
 	@echo "  make test-zig   - Run Zig tests"
+	@echo "  make test-release-parity - Run all Zig port parity gates"
 	@echo "  make build-go-reference - Build Go reference binary for parity tests"
 	@echo "  make test-e2e   - Run integration (e2e) tests"
 	@echo "  make test-race  - Run tests with race detector"
@@ -297,4 +363,3 @@ help:
 	@echo "  make update-brew VERSION=vX.Y.Z - Update Homebrew formula for a specific version"
 	@echo "  make update-brew-latest - Update Homebrew formula for the latest git tag"
 	@echo "  make help       - Show this help message"
-

@@ -230,6 +230,43 @@ func (t *terminalState) render() string {
 	return strings.TrimRight(builder.String(), "\n")
 }
 
+func (t *terminalState) resize(rows, cols int) {
+	if rows <= 0 {
+		rows = 1
+	}
+	if cols <= 0 {
+		cols = 1
+	}
+
+	oldCells := t.cells
+	oldRows := t.rows
+	oldCols := t.cols
+
+	t.rows = rows
+	t.cols = cols
+	t.cells = make([][]rune, rows)
+	for r := range t.cells {
+		t.cells[r] = make([]rune, cols)
+		for c := range t.cells[r] {
+			t.cells[r][c] = ' '
+		}
+	}
+
+	copyRows := oldRows
+	if rows < copyRows {
+		copyRows = rows
+	}
+	copyCols := oldCols
+	if cols < copyCols {
+		copyCols = cols
+	}
+	for r := 0; r < copyRows; r++ {
+		copy(t.cells[r][:copyCols], oldCells[r][:copyCols])
+	}
+	t.cursorRow = clamp(t.cursorRow, 0, rows-1)
+	t.cursorCol = clamp(t.cursorCol, 0, cols-1)
+}
+
 func getParam(params []int, index int, def int) int {
 	if index < len(params) {
 		if params[index] == 0 {
@@ -270,32 +307,67 @@ type Session struct {
 	done chan struct{}
 }
 
+type TerminalSize struct {
+	Rows uint16
+	Cols uint16
+}
+
 func startSession(binary string, args []string, dir string, env []string) (*Session, error) {
+	return startSessionWithSize(binary, args, dir, env, TerminalSize{Rows: 40, Cols: 120})
+}
+
+func startSessionWithSize(binary string, args []string, dir string, env []string, size TerminalSize) (*Session, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = dir
 	cmd.Env = mergeEnv(env)
 
-	ptyFile, err := pty.Start(cmd)
+	if size.Rows == 0 {
+		size.Rows = 40
+	}
+	if size.Cols == 0 {
+		size.Cols = 120
+	}
+
+	ptyFile, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: size.Rows, Cols: size.Cols})
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("start session: %w", err)
 	}
 
-	_ = pty.Setsize(ptyFile, &pty.Winsize{Rows: 40, Cols: 120})
-
 	s := &Session{
 		Cmd:    cmd,
 		PTY:    ptyFile,
 		cancel: cancel,
-		screen: newTerminalState(40, 120),
+		screen: newTerminalState(int(size.Rows), int(size.Cols)),
 		done:   make(chan struct{}),
 	}
 
 	go s.readLoop()
 
 	return s, nil
+}
+
+func (s *Session) Resize(size TerminalSize) error {
+	if s == nil {
+		return fmt.Errorf("session is nil")
+	}
+	if size.Rows == 0 {
+		size.Rows = 1
+	}
+	if size.Cols == 0 {
+		size.Cols = 1
+	}
+	if err := pty.Setsize(s.PTY, &pty.Winsize{Rows: size.Rows, Cols: size.Cols}); err != nil {
+		return fmt.Errorf("resize session: %w", err)
+	}
+
+	s.mu.Lock()
+	s.screen.resize(int(size.Rows), int(size.Cols))
+	s.lastFrame = s.screen.render()
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Session) readLoop() {

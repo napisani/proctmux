@@ -4,7 +4,11 @@ Technical documentation for the proctmux terminal user interface.
 
 ## Overview
 
-The proctmux TUI is built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) (the Elm-architecture framework for Go terminal apps). The main model is `ClientModel` in `internal/tui/client_model.go`.
+The shipped Zig TUI keeps the same process-list workflows, keybindings, filter
+semantics, and split-pane behavior described here, but it is implemented under
+`src/tui/` and orchestrated by `src/app/`. The Go Bubble Tea implementation
+under `internal/tui/` remains the reference oracle for parity tests during the
+port. The Go reference TUI is built with [Bubble Tea](https://github.com/charmbracelet/bubbletea); its main model is `ClientModel` in `internal/tui/client_model.go`.
 
 Key dependencies:
 
@@ -96,7 +100,7 @@ While in filter mode, pressing `/` again exits filter mode but keeps the current
 |---|---|---|
 | Toggle running only | `R` | Show only running processes / show all |
 | Toggle help | `?` | Show/hide the help panel |
-| Show docs | `d` | Show docs for the selected process |
+| Show docs | `d` | Listed in help/config for compatibility; the active Go reference does not currently handle it |
 
 ### Focus (Split Pane Mode)
 
@@ -141,12 +145,15 @@ Both can be combined: running-first groups are sorted alphabetically within each
 
 ## Split Pane Mode
 
-When running in unified split mode, the TUI is wrapped in a `SplitPaneModel` (`internal/tui/split_model.go`) that composes two panes and a status bar.
+When running in unified split mode, the TUI is wrapped in a split model that
+composes two panes and a status bar. The shipped Zig model is in
+`src/tui/split_model.zig`; the Go reference model is in
+`internal/tui/split_model.go`.
 
 ### Layout
 
 - **Client pane:** The normal `ClientModel` process list TUI
-- **Server pane:** A `charmbracelet/x/vt` emulator showing primary server output with full ANSI color/style rendering, polled every 75ms
+- **Server pane:** Terminal-rendered primary server output with ANSI cursor, alternate-screen, and SGR style handling, polled every 75ms
 - **Status bar:** One line at the bottom showing which pane is focused (bold = focused, faint = unfocused) and keybinding hints for switching focus
 
 ### Orientation
@@ -163,8 +170,14 @@ For left/right splits, client pane width is auto-calculated based on the longest
 
 For top/bottom splits, the client pane gets approximately 55% of content height, constrained by minimums of 8 (client) and 10 (server) lines.
 
-Resize is handled automatically when `tea.WindowSizeMsg` is received -- both the client model and the emulator are resized accordingly.
+Resize is handled automatically. The Zig runtime reads the PTY window size and
+reflows the split layout on the render loop; the Go reference handles
+`tea.WindowSizeMsg` and resizes both the client model and emulator.
 
 ### Focus Behavior
 
-When the server pane is focused, all keypresses are converted to ANSI terminal input sequences and written to the emulator. Focus-switching keys (`ctrl+w`, `ctrl+left`, `ctrl+right`) are intercepted before forwarding. When the client pane is focused, keys are handled by the normal `ClientModel` input handler.
+When the server pane is focused, all keypresses are converted to ANSI terminal
+input sequences and written to the selected process input path. Focus-switching
+keys (`ctrl+w`, `ctrl+left`, `ctrl+right`) are intercepted before forwarding.
+When the client pane is focused, keys are handled by the normal client model
+input handler.

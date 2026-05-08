@@ -3,10 +3,15 @@
     .version = "0.1.0",
     .fingerprint = 0x3d7124ec04f5452a,
     .minimum_zig_version = "0.15.2",
-    .dependencies = .{},
+    .dependencies = .{
+        .yaml = .{
+            .path = "third_party/zig-yaml",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+        "third_party/zig-yaml",
     },
 }

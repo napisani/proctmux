@@ -8,6 +8,12 @@
 
 **Tech Stack:** Zig 0.15.2 from the pinned `nixpkgs`, Zig build system, Go 1.26 reference binary, existing Makefile and Nix flake.
 
+> Current repo note: the active Makefile uses direct `zig test` and
+> `zig build-exe` invocations for local Zig verification. On macOS with the
+> pinned Nix Zig 0.15.2 compiler, the `zig build` runner path can fail before
+> project code runs because it does not receive the SDK/libc context. Use
+> `make test-zig` and `make build-zig` for current verification.
+
 ---
 
 ## Scope
@@ -337,7 +343,7 @@ Expected: PASS with no output.
 Run:
 
 ```bash
-nix develop --command zig build test
+nix develop --command make test-zig
 ```
 
 Expected: PASS with all Zig tests passing.
@@ -347,7 +353,7 @@ Expected: PASS with all Zig tests passing.
 Run:
 
 ```bash
-nix develop --command zig build
+nix develop --command make build-zig
 ```
 
 Expected: PASS and create:
@@ -361,7 +367,7 @@ zig-out/bin/proctmux
 Run:
 
 ```bash
-nix develop --command zig build run
+nix develop --command make run-zig
 ```
 
 Expected: PASS with:
@@ -581,15 +587,21 @@ Create `docs/zig-port/target-matrix.md` with this content:
 ````markdown
 # Zig Port Target Matrix
 
-Phase 1 establishes the Zig build foundation for the same platform families
-supported by the existing Go release process.
+The Zig release path targets the same platform families supported by the
+previous Go release process.
 
-| Product platform | Zig target | Build command |
+| Product platform | Zig target | Release build target |
 | --- | --- | --- |
-| Linux amd64 | `x86_64-linux-gnu` | `zig build -Dtarget=x86_64-linux-gnu -Doptimize=ReleaseFast` |
-| Linux arm64 | `aarch64-linux-gnu` | `zig build -Dtarget=aarch64-linux-gnu -Doptimize=ReleaseFast` |
-| macOS amd64 | `x86_64-macos` | `zig build -Dtarget=x86_64-macos -Doptimize=ReleaseFast` |
-| macOS arm64 | `aarch64-macos` | `zig build -Dtarget=aarch64-macos -Doptimize=ReleaseFast` |
+| Linux amd64 | `x86_64-linux-gnu` | `proctmux-linux-amd64` |
+| Linux arm64 | `aarch64-linux-gnu` | `proctmux-linux-arm64` |
+| macOS amd64 | `x86_64-macos` | `proctmux-darwin-amd64` |
+| macOS arm64 | `aarch64-macos` | `proctmux-darwin-arm64` |
+
+Release artifacts are built with:
+
+```bash
+make build-release-artifact ZIG_TARGET=<zig-target> ARTIFACT_NAME=<artifact-name>
+```
 
 ## Phase 1 Checks
 

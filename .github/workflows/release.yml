@@ -18,13 +18,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
 
-      - name: Run tests
-        run: make test
+      - name: Run release parity tests
+        run: nix develop --command make test-release-parity
 
   # Build for multiple platforms
   build:
@@ -34,20 +32,16 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
+            zig_target: x86_64-linux-gnu
             artifact_name: proctmux-linux-amd64
           - os: ubuntu-latest
-            goos: linux
-            goarch: arm64
+            zig_target: aarch64-linux-gnu
             artifact_name: proctmux-linux-arm64
           - os: macos-latest
-            goos: darwin
-            goarch: amd64
+            zig_target: x86_64-macos
             artifact_name: proctmux-darwin-amd64
           - os: macos-latest
-            goos: darwin
-            goarch: arm64
+            zig_target: aarch64-macos
             artifact_name: proctmux-darwin-arm64
 
     runs-on: ${{ matrix.os }}
@@ -55,17 +49,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
 
       - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
         run: |
-          go build -o bin/${{ matrix.artifact_name }} -ldflags "-X main.Version=${{ github.ref_name }}" ./cmd/proctmux
+          nix develop --command make build-release-artifact ZIG_TARGET=${{ matrix.zig_target }} ARTIFACT_NAME=${{ matrix.artifact_name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

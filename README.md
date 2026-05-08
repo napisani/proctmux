@@ -386,6 +386,10 @@ Notes:
 ### Running Tests
 
 ```bash
+# Full Zig-port parity gate
+make test-release-parity
+
+# Go reference tests, retained for parity during the port
 make test
 ```
 
@@ -405,7 +409,7 @@ See [.githooks/README.md](.githooks/README.md) for more details.
 ### Building from Source
 
 ```bash
-# Build for current platform
+# Build the Zig implementation for the current platform
 make build
 
 # Build for all supported Unix platforms (Linux amd64/arm64, macOS amd64/arm64)
@@ -416,7 +420,9 @@ make build-all
 
 ### Updating Nix Flake Dependencies
 
-If you update Go dependencies (via `go get` or `go mod tidy`), you must update the `vendorHash` in `flake.nix`:
+Go remains in the repository as a reference implementation for parity tests.
+If you update Go dependencies (via `go get` or `go mod tidy`), you must update
+the `vendorHash` in `flake.nix`:
 
 ```bash
 # After updating go.mod/go.sum

