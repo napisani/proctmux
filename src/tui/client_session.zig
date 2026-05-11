@@ -1,7 +1,8 @@
 const std = @import("std");
-const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
+const test_config = @import("../test_support/config.zig");
+const test_ipc = @import("../test_support/ipc.zig");
 const client_model = @import("client_model.zig");
 
 pub const Transport = struct {
@@ -185,18 +186,18 @@ pub const IpcTransport = struct {
 };
 
 test "client session initializes from transport state and dispatches key intents" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardSessionConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var fake_controller = FakeProcessController{};
+    var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
     const line = try ipc.protocol.stateLine(
         std.testing.allocator,
         &app_state,
-        FakeProcessController.controller(&fake_controller),
+        fake_controller.controller(),
     );
     defer std.testing.allocator.free(line);
 
@@ -204,7 +205,7 @@ test "client session initializes from transport state and dispatches key intents
     var session = try ClientSession.init(std.testing.allocator, FakeTransport.transport(&fake));
     defer session.deinit();
 
-    try std.testing.expectEqual(@as(u32, 2), session.model.active_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(2), session.model.active_proc_id);
     try std.testing.expectEqual(@as(usize, 3), session.model.visibleCount());
 
     try session.handleKey("s");
@@ -218,32 +219,32 @@ test "client session dispatches key intents through persistent IPC transport" {
     std.fs.deleteFileAbsolute(path) catch {};
     defer std.fs.deleteFileAbsolute(path) catch {};
 
-    var cfg = try testConfig();
+    var cfg = try test_config.standardSessionConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var fake_controller = FakeProcessController{};
+    var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
     const line = try ipc.protocol.stateLine(
         std.testing.allocator,
         &app_state,
-        FakeProcessController.controller(&fake_controller),
+        fake_controller.controller(),
     );
     defer std.testing.allocator.free(line);
 
-    var handler = FakeCommandHandler{};
-    var state_provider = FakeStateProvider{ .line = line };
+    var handler = test_ipc.FakeCommandHandler{};
+    var state_provider = test_ipc.FakeStateProvider{ .line = line };
     var stopped = std.atomic.Value(bool).init(false);
     const thread = try std.Thread.spawn(.{}, ipc.server.serveCommandsAtPathWithState, .{
         std.testing.allocator,
         path,
-        FakeCommandHandler.handler(&handler),
-        FakeStateProvider.provider(&state_provider),
+        handler.handler(),
+        state_provider.provider(),
         &stopped,
     });
-    waitForSocketFile(path);
+    test_ipc.waitForSocketFile(path);
 
     var persistent = try ipc.client.Client.connect(std.testing.allocator, path);
     defer persistent.deinit();
@@ -258,23 +259,23 @@ test "client session dispatches key intents through persistent IPC transport" {
 
     stopped.store(true, .seq_cst);
     persistent.close();
-    unblockServer(path);
+    test_ipc.unblockServer(path);
     thread.join();
 }
 
 test "client session records command failures as messages without exiting" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardSessionConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var fake_controller = FakeProcessController{};
+    var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
     const line = try ipc.protocol.stateLine(
         std.testing.allocator,
         &app_state,
-        FakeProcessController.controller(&fake_controller),
+        fake_controller.controller(),
     );
     defer std.testing.allocator.free(line);
 
@@ -295,18 +296,18 @@ test "client session records command failures as messages without exiting" {
 }
 
 test "client session records no process selected locally without IPC command" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardSessionConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 0;
+    app_state.current_proc_id = .none;
 
-    var fake_controller = FakeProcessController{};
+    var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
     const line = try ipc.protocol.stateLine(
         std.testing.allocator,
         &app_state,
-        FakeProcessController.controller(&fake_controller),
+        fake_controller.controller(),
     );
     defer std.testing.allocator.free(line);
 
@@ -323,26 +324,26 @@ test "client session records no process selected locally without IPC command" {
 }
 
 test "client session applies subsequent state updates to model" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardSessionConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
 
-    var fake_controller = FakeProcessController{};
-    app_state.current_proc_id = 1;
+    var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
     const first_line = try ipc.protocol.stateLine(
         std.testing.allocator,
         &app_state,
-        FakeProcessController.controller(&fake_controller),
+        fake_controller.controller(),
     );
     defer std.testing.allocator.free(first_line);
 
-    app_state.current_proc_id = 3;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(3);
     const second_line = try ipc.protocol.stateLine(
         std.testing.allocator,
         &app_state,
-        FakeProcessController.controller(&fake_controller),
+        fake_controller.controller(),
     );
     defer std.testing.allocator.free(second_line);
 
@@ -352,36 +353,36 @@ test "client session applies subsequent state updates to model" {
     };
     var session = try ClientSession.init(std.testing.allocator, FakeTransport.transport(&fake));
     defer session.deinit();
-    try std.testing.expectEqual(@as(u32, 1), session.model.active_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(1), session.model.active_proc_id);
 
     try session.readStateUpdate();
 
-    try std.testing.expectEqual(@as(u32, 3), session.model.app_state.current_proc_id);
-    try std.testing.expectEqual(@as(u32, 1), session.model.active_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(3), session.model.app_state.current_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(1), session.model.active_proc_id);
     try std.testing.expectEqual(@as(usize, 3), session.model.visibleCount());
 }
 
 test "client session preserves local ui state across state updates" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardSessionConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
 
-    var fake_controller = FakeProcessController{};
-    app_state.current_proc_id = 1;
+    var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
     const first_line = try ipc.protocol.stateLine(
         std.testing.allocator,
         &app_state,
-        FakeProcessController.controller(&fake_controller),
+        fake_controller.controller(),
     );
     defer std.testing.allocator.free(first_line);
 
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
     const second_line = try ipc.protocol.stateLine(
         std.testing.allocator,
         &app_state,
-        FakeProcessController.controller(&fake_controller),
+        fake_controller.controller(),
     );
     defer std.testing.allocator.free(second_line);
 
@@ -407,47 +408,8 @@ test "client session preserves local ui state across state updates" {
     try std.testing.expect(session.model.show_help);
     try std.testing.expectEqual(@as(usize, 1), session.model.visibleCount());
     try std.testing.expectEqualStrings("gamma-db", session.model.visibleLabel(0));
-    try std.testing.expectEqual(@as(u32, 3), session.model.active_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(3), session.model.active_proc_id);
 }
-
-fn testConfig() !config.schema.Config {
-    var cfg = config.schema.Config.empty(std.testing.allocator);
-    errdefer cfg.deinit();
-    try config.defaults.apply(&cfg, std.testing.allocator);
-    try putProcess(&cfg, "alpha-api", "sleep 1");
-    try putProcess(&cfg, "beta-worker", "sleep 1");
-    try putProcess(&cfg, "gamma-db", "sleep 1");
-    return cfg;
-}
-
-fn putProcess(cfg: *config.schema.Config, label: []const u8, shell: []const u8) !void {
-    var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
-    errdefer proc_cfg.deinit(std.testing.allocator);
-    proc_cfg.owns_scalar_strings = true;
-    proc_cfg.shell = try std.testing.allocator.dupe(u8, shell);
-
-    const owned_label = try std.testing.allocator.dupe(u8, label);
-    errdefer std.testing.allocator.free(owned_label);
-    try cfg.procs.put(owned_label, proc_cfg);
-}
-
-const FakeProcessController = struct {
-    fn controller(self: *FakeProcessController) domain.process.ProcessController {
-        return .{
-            .context = self,
-            .get_process_status = getProcessStatus,
-            .get_pid = getPID,
-        };
-    }
-
-    fn getProcessStatus(_: *anyopaque, id: u32) domain.process.ProcessStatus {
-        return if (id == 2) .running else .halted;
-    }
-
-    fn getPID(_: *anyopaque, id: u32) i32 {
-        return @intCast(1000 + id);
-    }
-};
 
 const FakeTransport = struct {
     state_line: []const u8,
@@ -497,70 +459,3 @@ const FakeTransport = struct {
         };
     }
 };
-
-const FakeCommandHandler = struct {
-    action: ipc.protocol.Command = .list,
-    label_buf: [64]u8 = undefined,
-    label_len: usize = 0,
-
-    fn handler(self: *FakeCommandHandler) ipc.server.CommandHandler {
-        return .{
-            .context = self,
-            .handle = handle,
-        };
-    }
-
-    fn label(self: *const FakeCommandHandler) []const u8 {
-        return self.label_buf[0..self.label_len];
-    }
-
-    fn handle(
-        context: *anyopaque,
-        allocator: std.mem.Allocator,
-        request: ipc.protocol.CommandRequest,
-    ) anyerror!ipc.protocol.Response {
-        const self: *FakeCommandHandler = @ptrCast(@alignCast(context));
-        self.action = request.action;
-        @memcpy(self.label_buf[0..request.label.len], request.label);
-        self.label_len = request.label.len;
-
-        return .{
-            .request_id = try allocator.dupe(u8, request.request_id),
-            .success = true,
-            .error_message = try allocator.dupe(u8, ""),
-            .process_list = try allocator.alloc(ipc.protocol.ProcessListItem, 0),
-        };
-    }
-};
-
-const FakeStateProvider = struct {
-    line: []const u8,
-
-    fn provider(self: *FakeStateProvider) ipc.server.StateProvider {
-        return .{
-            .context = self,
-            .state_line = stateLine,
-        };
-    }
-
-    fn stateLine(context: *anyopaque, allocator: std.mem.Allocator) anyerror![]const u8 {
-        const self: *FakeStateProvider = @ptrCast(@alignCast(context));
-        return allocator.dupe(u8, self.line);
-    }
-};
-
-fn unblockServer(path: []const u8) void {
-    var stream = std.net.connectUnixSocket(path) catch return;
-    stream.close();
-}
-
-fn waitForSocketFile(path: []const u8) void {
-    var attempts: usize = 0;
-    while (attempts < 200) : (attempts += 1) {
-        std.fs.accessAbsolute(path, .{}) catch {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
-            continue;
-        };
-        return;
-    }
-}

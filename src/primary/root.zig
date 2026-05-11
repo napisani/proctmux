@@ -3,6 +3,10 @@ const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
 const proc_mod = @import("../proc/root.zig");
+const test_config = @import("../test_support/config.zig");
+const test_ipc = @import("../test_support/ipc.zig");
+
+const log = std.log.scoped(.primary);
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
@@ -32,13 +36,13 @@ pub const Server = struct {
         return &self.state;
     }
 
-    pub fn currentProcessID(self: *const Server) u32 {
-        return self.current_proc_id.load(.seq_cst);
+    pub fn currentProcessID(self: *const Server) domain.process.ProcessId {
+        return domain.process.ProcessId.fromInt(self.current_proc_id.load(.seq_cst));
     }
 
-    pub fn setCurrentProcess(self: *Server, id: u32) void {
+    pub fn setCurrentProcess(self: *Server, id: domain.process.ProcessId) void {
         self.state.current_proc_id = id;
-        self.current_proc_id.store(id, .seq_cst);
+        self.current_proc_id.store(id.toInt(), .seq_cst);
     }
 
     pub fn getProcessController(self: *Server) domain.process.ProcessController {
@@ -61,13 +65,15 @@ pub const Server = struct {
 
     pub fn startAutostartProcesses(self: *Server) void {
         for (self.state.processes.items) |*process| {
-            if (process.config.autostart) self.startProcess(process) catch {};
+            if (process.config.autostart) self.startProcess(process) catch |err| {
+                log.warn("autostart failed for process '{s}': {s}", .{ process.label, @errorName(err) });
+            };
         }
     }
 
     pub fn sendInputToCurrentProcess(self: *Server, bytes: []const u8) !void {
         const id = self.currentProcessID();
-        if (id == 0) return;
+        if (id.isNone()) return;
         self.controller.sendBytes(id, bytes) catch |err| switch (err) {
             error.ProcessNotFound, error.ProcessNotRunning => return,
             else => return err,
@@ -142,7 +148,7 @@ pub const Server = struct {
     fn startProcess(self: *Server, process: *domain.process.Process) !void {
         if (self.controller.isRunning(process.id)) return;
         try self.controller.cleanupProcess(process.id);
-        if (self.currentProcessID() == 0) self.setCurrentProcess(process.id);
+        if (self.currentProcessID().isNone()) self.setCurrentProcess(process.id);
         _ = try self.controller.startProcess(process.id, process.config);
     }
 
@@ -182,7 +188,7 @@ pub const Server = struct {
             process_list[index] = .{
                 .name = try allocator.dupe(u8, view.label),
                 .running = view.status == .running,
-                .index = view.id,
+                .index = @intCast(view.id.toInt()),
             };
             initialized += 1;
         }
@@ -240,8 +246,8 @@ test "primary command handler lists starts switches and stops processes" {
     var cfg = config.schema.Config.empty(std.testing.allocator);
     defer cfg.deinit();
     try config.defaults.apply(&cfg, std.testing.allocator);
-    try putShellProcess(&cfg, "api", "sleep 5");
-    try putShellProcess(&cfg, "worker", "sleep 5");
+    try test_config.putShellProcessWithStopTimeout(&cfg, "api", "sleep 5", 500);
+    try test_config.putShellProcessWithStopTimeout(&cfg, "worker", "sleep 5", 500);
 
     var primary = try Server.init(std.testing.allocator, &cfg);
     defer primary.deinit();
@@ -276,7 +282,7 @@ test "primary command handler lists starts switches and stops processes" {
     });
     defer switched.deinit(std.testing.allocator);
     try std.testing.expect(switched.success);
-    try std.testing.expectEqual(@as(u32, 1), primary.getState().current_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(1), primary.getState().current_proc_id);
 
     var after_start = try primary.handleRequest(std.testing.allocator, .{
         .request_id = "4",
@@ -310,8 +316,8 @@ test "primary command handler stops all running processes" {
     var cfg = config.schema.Config.empty(std.testing.allocator);
     defer cfg.deinit();
     try config.defaults.apply(&cfg, std.testing.allocator);
-    try putShellProcess(&cfg, "api", "sleep 5");
-    try putShellProcess(&cfg, "worker", "sleep 5");
+    try test_config.putShellProcessWithStopTimeout(&cfg, "api", "sleep 5", 500);
+    try test_config.putShellProcessWithStopTimeout(&cfg, "worker", "sleep 5", 500);
 
     var primary = try Server.init(std.testing.allocator, &cfg);
     defer primary.deinit();
@@ -370,8 +376,8 @@ test "primary startup starts autostart processes only" {
     var cfg = config.schema.Config.empty(std.testing.allocator);
     defer cfg.deinit();
     try config.defaults.apply(&cfg, std.testing.allocator);
-    try putShellProcess(&cfg, "api", "sleep 5");
-    try putShellProcess(&cfg, "worker", "sleep 5");
+    try test_config.putShellProcessWithStopTimeout(&cfg, "api", "sleep 5", 500);
+    try test_config.putShellProcessWithStopTimeout(&cfg, "worker", "sleep 5", 500);
     cfg.procs.getPtr("api").?.autostart = true;
 
     var primary = try Server.init(std.testing.allocator, &cfg);
@@ -394,7 +400,7 @@ test "primary can start a process again after natural exit" {
     var cfg = config.schema.Config.empty(std.testing.allocator);
     defer cfg.deinit();
     try config.defaults.apply(&cfg, std.testing.allocator);
-    try putShellProcess(&cfg, "api", "printf done");
+    try test_config.putShellProcessWithStopTimeout(&cfg, "api", "printf done", 500);
 
     var primary = try Server.init(std.testing.allocator, &cfg);
     defer primary.deinit();
@@ -407,7 +413,7 @@ test "primary can start a process again after natural exit" {
     defer first.deinit(std.testing.allocator);
     try std.testing.expect(first.success);
 
-    try waitForProcessStopped(&primary, 1);
+    try waitForProcessStopped(&primary, domain.process.ProcessId.fromInt(1));
 
     var second = try primary.handleRequest(std.testing.allocator, .{
         .request_id = "2",
@@ -453,19 +459,19 @@ test "primary forwards stdin bytes to selected running process" {
     try std.testing.expect(switched.success);
 
     try primary.sendInputToCurrentProcess("hello\n");
-    try waitForPrimaryScrollbackContains(&primary, 1, "got:hello");
+    try waitForPrimaryScrollbackContains(&primary, domain.process.ProcessId.fromInt(1), "got:hello");
 }
 
 test "primary state provider serializes redacted current state" {
     var cfg = config.schema.Config.empty(std.testing.allocator);
     defer cfg.deinit();
     try config.defaults.apply(&cfg, std.testing.allocator);
-    try putShellProcess(&cfg, "api", "sleep 5");
+    try test_config.putShellProcessWithStopTimeout(&cfg, "api", "sleep 5", 500);
     try config.schema.putOwnedString(std.testing.allocator, &cfg.procs.getPtr("api").?.env, "TOKEN", "secret");
 
     var primary = try Server.init(std.testing.allocator, &cfg);
     defer primary.deinit();
-    primary.setCurrentProcess(1);
+    primary.setCurrentProcess(domain.process.ProcessId.fromInt(1));
 
     const provider = primary.stateProvider();
     const line = try provider.state_line(provider.context, std.testing.allocator);
@@ -493,7 +499,7 @@ test "primary command server handles repeated IPC clients" {
     var cfg = config.schema.Config.empty(std.testing.allocator);
     defer cfg.deinit();
     try config.defaults.apply(&cfg, std.testing.allocator);
-    try putShellProcess(&cfg, "api", "sleep 5");
+    try test_config.putShellProcessWithStopTimeout(&cfg, "api", "sleep 5", 500);
 
     var primary = try Server.init(std.testing.allocator, &cfg);
     defer primary.deinit();
@@ -505,7 +511,7 @@ test "primary command server handles repeated IPC clients" {
         .stopped = &stopped,
     };
     const thread = try std.Thread.spawn(.{}, runPrimaryServer, .{&run});
-    waitForSocketFile(path);
+    test_ipc.waitForSocketFile(path);
 
     var start_response = try ipc.client.sendCommandToPath(std.testing.allocator, path, "1", .start, "api");
     defer start_response.deinit(std.testing.allocator);
@@ -519,21 +525,9 @@ test "primary command server handles repeated IPC clients" {
     try std.testing.expect(list_response.process_list[0].running);
 
     stopped.store(true, .seq_cst);
-    unblockServer(path);
+    test_ipc.unblockServer(path);
     thread.join();
     if (run.err) |err| return err;
-}
-
-fn putShellProcess(cfg: *config.schema.Config, label: []const u8, shell: []const u8) !void {
-    var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
-    errdefer proc_cfg.deinit(std.testing.allocator);
-    proc_cfg.owns_scalar_strings = true;
-    proc_cfg.shell = try std.testing.allocator.dupe(u8, shell);
-    proc_cfg.stop_timeout_ms = 500;
-
-    const owned_label = try std.testing.allocator.dupe(u8, label);
-    errdefer std.testing.allocator.free(owned_label);
-    try cfg.procs.put(owned_label, proc_cfg);
 }
 
 const PrimaryServerRun = struct {
@@ -549,23 +543,7 @@ fn runPrimaryServer(run: *PrimaryServerRun) void {
     };
 }
 
-fn unblockServer(path: []const u8) void {
-    var stream = std.net.connectUnixSocket(path) catch return;
-    stream.close();
-}
-
-fn waitForSocketFile(path: []const u8) void {
-    var attempts: usize = 0;
-    while (attempts < 200) : (attempts += 1) {
-        std.fs.accessAbsolute(path, .{}) catch {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
-            continue;
-        };
-        return;
-    }
-}
-
-fn waitForPrimaryScrollbackContains(primary: *Server, id: u32, needle: []const u8) !void {
+fn waitForPrimaryScrollbackContains(primary: *Server, id: domain.process.ProcessId, needle: []const u8) !void {
     var attempts: usize = 0;
     while (attempts < 200) : (attempts += 1) {
         const bytes = try primary.controller.getScrollback(std.testing.allocator, id);
@@ -576,7 +554,7 @@ fn waitForPrimaryScrollbackContains(primary: *Server, id: u32, needle: []const u
     return error.ExpectedScrollback;
 }
 
-fn waitForProcessStopped(primary: *Server, id: u32) !void {
+fn waitForProcessStopped(primary: *Server, id: domain.process.ProcessId) !void {
     var attempts: usize = 0;
     while (attempts < 200) : (attempts += 1) {
         if (!primary.controller.isRunning(id)) return;

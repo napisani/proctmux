@@ -85,15 +85,34 @@ architecture context.
 | `internal/procdiscover/` | Auto-discovers processes from Makefile targets and package.json scripts |
 | `internal/testharness/` | Test utilities for integration tests |
 
+## Zig Module Map
+
+The Zig runtime keeps the CLI entrypoint thin and pushes runtime ownership into
+domain modules:
+
+| Module | Purpose |
+|--------|---------|
+| `src/app/` | App entrypoints, CLI parsing/routing, exit-code behavior, raw terminal entry/restore |
+| `src/modes/` | Primary, client, and signal runtime modes plus shared production input/output adapters |
+| `src/config/runtime.zig` | Loads Project Config and applies discovery in one place |
+| `src/terminal/` | Terminal text rendering, raw terminal mode management, and terminal size probing |
+| `src/unified/` | Unified runtime loop, child-primary PTY adapter, in-process test adapter, and split rendering |
+| `src/ipc/line.zig` | JSON-line reading, timeout reads, and message-kind detection |
+| `src/ipc/command_codec.zig` | Command request and response wire encoding/parsing |
+| `src/ipc/state_codec.zig` | State broadcast wire encoding/parsing |
+| `src/ipc/protocol.zig` | Compatibility export layer for existing callers |
+| `src/proc/` | Process controller plus focused internals for environment, spawn/wait, output capture, and `on_kill` |
+| `src/test_support/` | Shared fake adapters and fixtures used by Zig tests |
+
 ## Mode Variants
 
 proctmux supports three runtime modes, each composing the same core components differently. See [modes.md](modes.md) for full details.
 
 | Mode | How it runs | Components in play |
 |------|------------|-------------------|
-| **Primary** (`proctmux`) | Standalone server with viewer | PrimaryServer + Viewer + IPC Server |
-| **Client** (`proctmux --client`) | TUI connects to running primary | ClientModel + IPC Client |
-| **Unified** (`proctmux --unified`) | Embedded server process + client TUI in one split model | Split model wrapping client model + terminal renderer |
+| **Primary** (`proctmux`) | Standalone server with viewer | `modes.primary` + Primary Server + IPC Server |
+| **Client** (`proctmux --client`) | TUI connects to running primary | `modes.client` + Client Session + IPC Client |
+| **Unified** (`proctmux --unified`) | Embedded server process + client TUI in one split model | `unified.runtime` + split model + terminal renderer |
 
 ## Data Flow: Config to Screen
 
@@ -101,10 +120,10 @@ proctmux supports three runtime modes, each composing the same core components d
 proctmux.yaml
     |
     v
-config.LoadConfig()          -- internal/config/
+config.runtime.loadInDir()   -- src/config/runtime.zig
     |
     v
-procdiscover.Apply()         -- internal/procdiscover/
+discover.apply               -- src/discover/
     |                           (merges Makefile / package.json entries)
     v
 ProcTmuxConfig.Procs         -- map[string]ProcessConfig
@@ -113,19 +132,19 @@ ProcTmuxConfig.Procs         -- map[string]ProcessConfig
 domain.NewAppState()         -- internal/domain/
     |                           (creates Process list with sequential IDs)
     v
-PrimaryServer                -- internal/proctmux/
+Primary Server               -- src/primary/
     |
     v
-ipcServer.BroadcastState()   -- internal/ipc/
+IPC Server broadcast         -- src/ipc/server.zig
     |                           (calls redact.StateForIPC to strip env vars)
     v
-IPC Client.readResponses()   -- internal/ipc/
+IPC Client read              -- src/ipc/client.zig
     |                           (pushes StateUpdate onto buffered channel)
     v
-ClientModel.Update()         -- internal/tui/
+Client Session / Model       -- src/tui/
     |                           (processes clientStateUpdateMsg)
     v
-ClientModel.View()           -- internal/tui/
+TUI renderer                 -- src/tui/render.zig
     |                           (renders process list via Bubble Tea)
     v
 Terminal output
@@ -139,10 +158,10 @@ Each managed process runs inside a PTY. Output flows through a ring buffer to ei
 Process stdout/stderr
     |
     v
-PTY slave --> PTY master     -- internal/process/
+PTY slave --> PTY master     -- src/proc/spawn.zig
     |
     v
-io.Copy to RingBuffer        -- internal/buffer/
+output capture to RingBuffer -- src/proc/output.zig + src/ring/
     |
     +---> Viewer.SwitchToProcess()
     |         |
@@ -166,20 +185,20 @@ io.Copy to RingBuffer        -- internal/buffer/
 Keystroke
     |
     v
-Bubble Tea framework         -- internal/tui/
+TUI key input                -- src/tui/key_input.zig
     |
     +---> Local UI action (navigate list, filter, toggle help)
     |
     +---> IPC command (start, stop, restart, switch)
               |
               v
-          ipcClient.sendCommand()
+          IPC client command
               |
               v
-          IPC Server.handleCommand()   -- internal/ipc/
+          IPC Server.handleCommand()   -- src/ipc/server.zig
               |
               v
-          PrimaryServer.HandleCommand()  -- internal/proctmux/
+          Primary Server command handler -- src/primary/
               |
               +---> ProcessController.StartProcess()
               +---> ProcessController.StopProcess()
@@ -204,9 +223,9 @@ See [ipc.md](ipc.md) for the full protocol reference.
 
 Responsibilities are split across three layers:
 
-- **`ProcessController`** (`internal/process/`) — owns PTY lifecycle. Starts processes in PTYs, sends signals, manages stop escalation (SIGTERM then SIGKILL after timeout), runs on_kill hooks, provides scrollback ring buffers.
-- **`PrimaryServer`** (`internal/proctmux/`) — owns application state. Coordinates process commands, updates `AppState`, triggers IPC broadcasts, manages the viewer and stdin forwarding.
-- **`IPC Server`** (`internal/ipc/`) — owns client connections. Accepts clients, authenticates peer UIDs, routes commands to the PrimaryServer, broadcasts state updates.
+- **`ProcessController`** (`src/proc/controller.zig`) — owns process lifecycle orchestration and delegates environment construction, spawn/wait, output capture, and `on_kill` hooks to focused proc internals.
+- **`Primary Server`** (`src/primary/`) — owns application state. Coordinates process commands, updates `AppState`, triggers IPC broadcasts, and tracks the current process for stdin forwarding.
+- **`IPC Server`** (`src/ipc/server.zig`) — owns client connections. Accepts clients, authenticates peer UIDs, routes commands to the Primary Server, broadcasts state updates, and uses `ipc.line` plus codec modules for wire IO.
 
 ## Security Model
 
@@ -216,17 +235,16 @@ Responsibilities are split across three layers:
 
 ## Concurrency Model
 
-proctmux uses goroutines and channels throughout:
+The Zig runtime uses `std.Thread`, atomics, mutexes, and Unix socket polling:
 
-- **Per-process exit watcher**: A goroutine per started process blocks on the process's exit channel, then triggers cleanup and a state broadcast.
-- **IPC accept loop**: A goroutine continuously accepts new client connections and spawns a handler goroutine per client.
-- **IPC client reader**: Each IPC client has a `readResponses()` goroutine that reads from the socket and dispatches to either the state update channel or pending request channels.
-- **State broadcast**: The IPC server iterates over connected clients and writes state messages with a 2-second write deadline per client.
-- **Stdin forwarder** (primary mode): A goroutine reads from stdin and forwards bytes to the currently selected process's PTY.
-- **Viewer relay**: When viewing a process, a goroutine copies live output from the ring buffer's reader channel to stdout.
-- **Bubble Tea command loop**: The `subscribeToStateUpdates()` Cmd blocks on the IPC update channel and returns messages to the Bubble Tea event loop.
+- **Per-process output capture**: `src/proc/output.zig` reads PTY or pipe output and appends to the process ring buffer.
+- **Per-process exit watcher**: `src/proc/spawn.zig` waits for child exit and marks the process instance halted.
+- **IPC accept loop**: `src/ipc/server.zig` accepts Unix socket clients and serves command/state traffic.
+- **State broadcast**: The IPC server writes state messages to connected clients with a bounded write timeout.
+- **Stdin forwarder**: `src/modes/primary.zig` reads stdin and forwards bytes to the currently selected process.
+- **Unified render loop**: `src/unified/runtime.zig` polls IPC state, terminal dimensions, and split rendering on one shared path for production and tests.
 
-Shared state is protected by `sync.RWMutex` (state access) and `sync.Mutex` (per-connection writes, stdin target). Ring buffer readers use buffered channels (size 100) with non-blocking sends to avoid slow readers blocking writes.
+Shared state is protected with `std.Thread.Mutex` and `std.atomic.Value`. Ring buffer readers use bounded queues with non-blocking sends so slow readers do not block process output capture.
 
 ## Config Discovery Pipeline
 

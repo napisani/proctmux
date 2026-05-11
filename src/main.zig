@@ -24,7 +24,7 @@ pub fn main() !void {
         .fd = stdout.handle,
     };
 
-    app.run(args, output) catch |err| {
+    app.run(allocator, args, output) catch |err| {
         var stderr = std.fs.File.stderr();
         if (app.shouldPrintGenericError(err)) {
             try stderr.writeAll("Error: ");

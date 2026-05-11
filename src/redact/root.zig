@@ -263,7 +263,7 @@ test "app state redaction points processes at redacted configs" {
 
     var app = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app.deinit();
-    app.current_proc_id = 1;
+    app.current_proc_id = domain.process.ProcessId.fromInt(1);
     app.exiting = true;
 
     var redacted = try appStateForIPC(std.testing.allocator, &app);

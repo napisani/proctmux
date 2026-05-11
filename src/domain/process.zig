@@ -9,6 +9,27 @@ pub const ProcessStatus = enum(u8) {
     exited = 4,
 };
 
+pub const ProcessId = enum(u32) {
+    none = 0,
+    _,
+
+    pub fn fromInt(value: u32) ProcessId {
+        return @enumFromInt(value);
+    }
+
+    pub fn toInt(self: ProcessId) u32 {
+        return @intFromEnum(self);
+    }
+
+    pub fn isNone(self: ProcessId) bool {
+        return self == .none;
+    }
+};
+
+pub fn processIdFromIndex(index: usize) ProcessId {
+    return ProcessId.fromInt(@intCast(index + 1));
+}
+
 pub fn statusName(status: ProcessStatus) []const u8 {
     return switch (status) {
         .running => "Running",
@@ -20,13 +41,13 @@ pub fn statusName(status: ProcessStatus) []const u8 {
 }
 
 pub const Process = struct {
-    id: u32,
+    id: ProcessId,
     label: []const u8,
     config: *config.schema.ProcessConfig,
 };
 
 pub const ProcessView = struct {
-    id: u32,
+    id: ProcessId,
     label: []const u8,
     status: ProcessStatus = .halted,
     pid: i32 = -1,
@@ -35,14 +56,14 @@ pub const ProcessView = struct {
 
 pub const ProcessController = struct {
     context: *anyopaque,
-    get_process_status: *const fn (context: *anyopaque, id: u32) ProcessStatus,
-    get_pid: *const fn (context: *anyopaque, id: u32) i32,
+    get_process_status: *const fn (context: *anyopaque, id: ProcessId) ProcessStatus,
+    get_pid: *const fn (context: *anyopaque, id: ProcessId) i32,
 
-    pub fn getProcessStatus(self: ProcessController, id: u32) ProcessStatus {
+    pub fn getProcessStatus(self: ProcessController, id: ProcessId) ProcessStatus {
         return self.get_process_status(self.context, id);
     }
 
-    pub fn getPID(self: ProcessController, id: u32) i32 {
+    pub fn getPID(self: ProcessController, id: ProcessId) i32 {
         return self.get_pid(self.context, id);
     }
 };

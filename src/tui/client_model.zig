@@ -2,6 +2,7 @@ const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
+const test_config = @import("../test_support/config.zig");
 
 pub const CommandIntent = struct {
     action: ipc.protocol.Command,
@@ -26,7 +27,7 @@ pub const ClientModel = struct {
     show_only_running: bool = false,
     show_help: bool = false,
     mode: domain.state.Mode = .normal,
-    active_proc_id: u32 = 0,
+    active_proc_id: domain.process.ProcessId = .none,
     term_width: usize = 80,
 
     pub fn init(
@@ -160,7 +161,7 @@ pub const ClientModel = struct {
             self.entering_filter_text = true;
             self.mode = .filter;
             self.filter_text.clearRetainingCapacity();
-            self.active_proc_id = 0;
+            self.active_proc_id = .none;
             try self.rebuildProcessList();
             return null;
         }
@@ -201,7 +202,7 @@ pub const ClientModel = struct {
     fn applyFilterNow(self: *ClientModel) !?CommandIntent {
         try self.rebuildProcessList();
         if (self.filtered_views.len == 0) {
-            self.active_proc_id = 0;
+            self.active_proc_id = .none;
             return null;
         }
 
@@ -225,7 +226,7 @@ pub const ClientModel = struct {
 
     fn moveSelection(self: *ClientModel, delta: i32) void {
         if (self.filtered_views.len == 0) {
-            self.active_proc_id = 0;
+            self.active_proc_id = .none;
             return;
         }
         if (self.filtered_views.len == 1) {
@@ -279,14 +280,14 @@ fn matches(bindings: config.schema.StringList, key: []const u8) bool {
 }
 
 test "client model enters filter mode with configured filter key" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 1;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardClientModelViews(&cfg);
 
     var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
@@ -296,18 +297,18 @@ test "client model enters filter mode with configured filter key" {
     try std.testing.expect(model.entering_filter_text);
     try std.testing.expectEqual(domain.state.Mode.filter, model.mode);
     try std.testing.expectEqualStrings("", model.filterText());
-    try std.testing.expectEqual(@as(u32, 0), model.active_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.none, model.active_proc_id);
 }
 
 test "client model typing filter narrows list and selects first match" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 1;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardClientModelViews(&cfg);
     var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -321,20 +322,20 @@ test "client model typing filter narrows list and selects first match" {
     try std.testing.expectEqualStrings("gamma", model.filterText());
     try std.testing.expectEqual(@as(usize, 1), model.visibleCount());
     try std.testing.expectEqualStrings("gamma-db", model.visibleLabel(0));
-    try std.testing.expectEqual(@as(u32, 3), model.active_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(3), model.active_proc_id);
     try std.testing.expectEqual(ipc.protocol.Command.switch_process, intent.?.action);
     try std.testing.expectEqualStrings("gamma-db", intent.?.label);
 }
 
 test "client model backspace edits filter text" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 1;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardClientModelViews(&cfg);
     var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -351,38 +352,38 @@ test "client model backspace edits filter text" {
 }
 
 test "client model down key moves selection and wraps within visible list" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 1;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardClientModelViews(&cfg);
     var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
     const beta = try model.handleKey("j");
-    try std.testing.expectEqual(@as(u32, 2), model.active_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(2), model.active_proc_id);
     try std.testing.expectEqual(ipc.protocol.Command.switch_process, beta.?.action);
     try std.testing.expectEqualStrings("beta-worker", beta.?.label);
 
     _ = try model.handleKey("j");
     const wrapped = try model.handleKey("j");
-    try std.testing.expectEqual(@as(u32, 1), model.active_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(1), model.active_proc_id);
     try std.testing.expectEqual(ipc.protocol.Command.switch_process, wrapped.?.action);
     try std.testing.expectEqualStrings("alpha-api", wrapped.?.label);
 }
 
 test "client model running-only toggle filters visible list and selects first running process" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardClientModelViews(&cfg);
     var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -392,20 +393,20 @@ test "client model running-only toggle filters visible list and selects first ru
     try std.testing.expectEqual(@as(usize, 2), model.visibleCount());
     try std.testing.expectEqualStrings("alpha-api", model.visibleLabel(0));
     try std.testing.expectEqualStrings("gamma-db", model.visibleLabel(1));
-    try std.testing.expectEqual(@as(u32, 1), model.active_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(1), model.active_proc_id);
     try std.testing.expectEqual(ipc.protocol.Command.switch_process, intent.?.action);
     try std.testing.expectEqualStrings("alpha-api", intent.?.label);
 }
 
 test "client model process control keys target active process" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardClientModelViews(&cfg);
     var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -426,13 +427,13 @@ test "client model process control keys target active process" {
 }
 
 test "client model help key toggles help visibility" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
 
-    var views = testViews(&cfg);
+    var views = test_config.standardClientModelViews(&cfg);
     var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -444,13 +445,13 @@ test "client model help key toggles help visibility" {
 }
 
 test "client model quit key emits stop-running intent" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
 
-    var views = testViews(&cfg);
+    var views = test_config.standardClientModelViews(&cfg);
     var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -461,13 +462,13 @@ test "client model quit key emits stop-running intent" {
 }
 
 test "client model prunes messages after five second timeout" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
 
-    var views = testViews(&cfg);
+    var views = test_config.standardClientModelViews(&cfg);
     var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -478,38 +479,4 @@ test "client model prunes messages after five second timeout" {
 
     try std.testing.expectEqual(@as(usize, 1), model.messageCount());
     try std.testing.expectEqualStrings("fresh", model.message(0));
-}
-
-fn testConfig() !config.schema.Config {
-    var cfg = config.schema.Config.empty(std.testing.allocator);
-    errdefer cfg.deinit();
-    try config.defaults.apply(&cfg, std.testing.allocator);
-    try putProcess(&cfg, "alpha-api", "sleep 1", .running);
-    try putProcess(&cfg, "beta-worker", "sleep 1", .halted);
-    try putProcess(&cfg, "gamma-db", "sleep 1", .running);
-    return cfg;
-}
-
-fn testViews(cfg: *config.schema.Config) [3]domain.process.ProcessView {
-    return .{
-        .{ .id = 1, .label = "alpha-api", .status = .running, .config = cfg.procs.getPtr("alpha-api").? },
-        .{ .id = 2, .label = "beta-worker", .status = .halted, .config = cfg.procs.getPtr("beta-worker").? },
-        .{ .id = 3, .label = "gamma-db", .status = .running, .config = cfg.procs.getPtr("gamma-db").? },
-    };
-}
-
-fn putProcess(
-    cfg: *config.schema.Config,
-    label: []const u8,
-    shell: []const u8,
-    _: domain.process.ProcessStatus,
-) !void {
-    var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
-    errdefer proc_cfg.deinit(std.testing.allocator);
-    proc_cfg.owns_scalar_strings = true;
-    proc_cfg.shell = try std.testing.allocator.dupe(u8, shell);
-
-    const owned_label = try std.testing.allocator.dupe(u8, label);
-    errdefer std.testing.allocator.free(owned_label);
-    try cfg.procs.put(owned_label, proc_cfg);
 }

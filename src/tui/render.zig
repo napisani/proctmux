@@ -1,6 +1,7 @@
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
+const test_config = @import("../test_support/config.zig");
 const client_model = @import("client_model.zig");
 
 pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_model.ClientModel) ![]const u8 {
@@ -18,7 +19,7 @@ pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_mode
     }
 
     for (model.filtered_views, 0..) |view, index| {
-        const selected = if (model.active_proc_id == 0)
+        const selected = if (model.active_proc_id.isNone())
             index == 0
         else
             view.id == model.active_proc_id;
@@ -279,15 +280,15 @@ fn statusMarker(status: domain.process.ProcessStatus) []const u8 {
 }
 
 test "process list renderer writes pointer status marker and labels" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -301,15 +302,15 @@ test "process list renderer writes pointer status marker and labels" {
 }
 
 test "process list renderer selects first row when active id is zero like Go" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 0;
+    app_state.current_proc_id = .none;
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -323,7 +324,7 @@ test "process list renderer selects first row when active id is zero like Go" {
 }
 
 test "process list renderer includes status pid and categories in debug mode" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
     cfg.layout.enable_debug_process_info = true;
@@ -332,9 +333,9 @@ test "process list renderer includes status pid and categories in debug mode" {
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -349,13 +350,13 @@ test "process list renderer includes status pid and categories in debug mode" {
 }
 
 test "process list renderer shows friendly empty message" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -372,16 +373,16 @@ test "process list renderer shows friendly empty message" {
 }
 
 test "process list renderer shows selected process description above list" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
     cfg.procs.getPtr("beta-worker").?.description = try std.testing.allocator.dupe(u8, "Runs background jobs");
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -395,16 +396,16 @@ test "process list renderer shows selected process description above list" {
 }
 
 test "process list renderer wraps selected process description to terminal width" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
     cfg.procs.getPtr("beta-worker").?.description = try std.testing.allocator.dupe(u8, "alpha beta gamma delta");
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
     model.term_width = 12;
@@ -419,7 +420,7 @@ test "process list renderer wraps selected process description to terminal width
 }
 
 test "process list renderer hides selected process description when configured" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
     cfg.layout.hide_process_description_panel = true;
@@ -427,9 +428,9 @@ test "process list renderer hides selected process description when configured" 
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -443,15 +444,15 @@ test "process list renderer hides selected process description when configured" 
 }
 
 test "process list renderer shows help panel when toggled" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -474,15 +475,15 @@ test "process list renderer shows help panel when toggled" {
 }
 
 test "process list renderer shows only the five most recent messages" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -502,15 +503,15 @@ test "process list renderer shows only the five most recent messages" {
 }
 
 test "process list renderer wraps long messages with bullet indentation" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
     model.term_width = 10;
@@ -524,15 +525,15 @@ test "process list renderer wraps long messages with bullet indentation" {
 }
 
 test "process list renderer hides expired messages before pruning" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -545,15 +546,15 @@ test "process list renderer hides expired messages before pruning" {
 }
 
 test "process list renderer shows focused filter prompt" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -570,15 +571,15 @@ test "process list renderer shows focused filter prompt" {
 }
 
 test "process list renderer shows submitted filter indicator" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -596,14 +597,14 @@ test "process list renderer shows submitted filter indicator" {
 }
 
 test "process list renderer keeps filter prompt when no processes match" {
-    var cfg = try testConfig();
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
 
     var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
     defer app_state.deinit();
-    app_state.current_proc_id = 2;
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
-    var views = testViews(&cfg);
+    var views = test_config.standardRenderViews(&cfg);
     var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
     defer model.deinit();
 
@@ -617,33 +618,4 @@ test "process list renderer keeps filter prompt when no processes match" {
     defer std.testing.allocator.free(rendered);
 
     try std.testing.expectEqualStrings("Filter: zzzzz\nNo matching processes\n", rendered);
-}
-
-fn testConfig() !config.schema.Config {
-    var cfg = config.schema.Config.empty(std.testing.allocator);
-    errdefer cfg.deinit();
-    try config.defaults.apply(&cfg, std.testing.allocator);
-    try putProcess(&cfg, "alpha-api", "sleep 1");
-    try putProcess(&cfg, "beta-worker", "sleep 1");
-    try putProcess(&cfg, "gamma-db", "sleep 1");
-    return cfg;
-}
-
-fn testViews(cfg: *config.schema.Config) [3]domain.process.ProcessView {
-    return .{
-        .{ .id = 1, .label = "alpha-api", .status = .halted, .pid = -1, .config = cfg.procs.getPtr("alpha-api").? },
-        .{ .id = 2, .label = "beta-worker", .status = .running, .pid = 1234, .config = cfg.procs.getPtr("beta-worker").? },
-        .{ .id = 3, .label = "gamma-db", .status = .exited, .pid = -1, .config = cfg.procs.getPtr("gamma-db").? },
-    };
-}
-
-fn putProcess(cfg: *config.schema.Config, label: []const u8, shell: []const u8) !void {
-    var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
-    errdefer proc_cfg.deinit(std.testing.allocator);
-    proc_cfg.owns_scalar_strings = true;
-    proc_cfg.shell = try std.testing.allocator.dupe(u8, shell);
-
-    const owned_label = try std.testing.allocator.dupe(u8, label);
-    errdefer std.testing.allocator.free(owned_label);
-    try cfg.procs.put(owned_label, proc_cfg);
 }

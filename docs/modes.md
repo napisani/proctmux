@@ -5,9 +5,8 @@ interact. Every mode uses the same [IPC protocol](ipc.md) and
 [configuration format](configuration.md); they differ in how the server runs,
 how the UI renders, and how stdin/stdout are routed.
 
-The shipped implementation is now the Zig runtime under `src/`. Go package and
-Bubble Tea names in this document describe the reference implementation that is
-kept for parity tests while the Zig port is finalized.
+The shipped implementation is the Zig runtime under `src/`. The Go code remains
+in-tree only as a parity reference.
 
 ```mermaid
 graph TD
@@ -31,7 +30,7 @@ output to stdout.
 
 ### What happens
 
-1. `src/main.zig` routes to primary mode through `src/app/`.
+1. `src/main.zig` routes through `src/app/` into `src/modes/primary.zig`.
 2. The primary server creates an IPC command server and process controller.
 3. The socket layer generates a Unix domain socket at
    `/tmp/proctmux-<hash>.socket`, where `<hash>` is derived from the config
@@ -41,10 +40,9 @@ output to stdout.
    - Sets stdin to raw mode and starts a **stdin forwarder** goroutine that
      reads keystrokes and writes them to the currently selected process PTY.
    - Auto-starts any processes that have `autostart: true`.
-5. A **viewer** (`internal/viewer`) relays the selected process's scrollback
-   and live output to stdout.
-6. The server blocks on `waitForShutdown()`, listening for `SIGINT` or
-   `SIGTERM`.
+5. The primary output loop relays the selected process's scrollback and live
+   output to stdout.
+6. The server runs until the app stop flag is set or the command server exits.
 
 ### Shutdown
 
@@ -72,12 +70,13 @@ manage processes directly; all actions are sent as IPC commands.
 
 ### What happens
 
-1. `src/main.zig` routes to client mode through `src/app/`.
-2. The client discovers the socket automatically via `ipc.GetSocket()`, using
-   the same config hash as the primary.
+1. `src/main.zig` routes through `src/app/` into `src/modes/client.zig`.
+2. The client discovers the socket automatically through `src/ipc/socket.zig`,
+   using the same config hash as the primary.
 3. If the socket does not exist yet, the client waits up to 30 seconds with a
    progress indicator, polling every 100ms.
-4. The Zig IPC client establishes the connection.
+4. The Zig IPC client establishes the connection and uses `ipc.line` plus the
+   codec modules to read state and response lines.
 5. The client session creates the process-list model, which:
    - Shows the process list with status indicators.
    - Receives state broadcasts (process views with output) from the primary.
@@ -102,16 +101,18 @@ server in a side-by-side (or stacked) split pane.
 
 ### What happens
 
-1. `src/main.zig` routes to unified mode through `src/app/`.
+1. `src/main.zig` routes through `src/app/` into `src/unified/runtime.zig`.
 2. The current `proctmux` executable is re-launched as a child primary process
-   in a PTY. The unified child-argument helper strips unified/client flags from
-   the original CLI args.
+   in a PTY by `src/unified/child_primary.zig`. The unified child-argument
+   helper strips unified/client flags from the original CLI args.
 3. The parent waits until the child primary creates its socket, then connects
    with the same IPC client used by standalone client mode.
-4. The Zig split model composes the process list and terminal-output panes.
-   PTY output is captured, parsed by the in-tree terminal renderer, and redrawn
-   on a polling loop.
-5. The split model reads the PTY window size and reflows on live resize.
+4. The shared unified runtime loop handles key input, IPC state polling,
+   terminal resize, and rendering for both production and the in-process test
+   adapter in `src/unified/in_process_primary.zig`.
+5. `src/unified/render.zig` composes the process list and terminal-output panes.
+   PTY output is captured, parsed by `src/terminal/text.zig`, and redrawn on a
+   polling loop.
 
 ### Layout orientations
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const line_io = @import("line.zig");
 const protocol = @import("protocol.zig");
 
 const max_response_line = 1024 * 1024;
@@ -50,20 +51,20 @@ pub const Client = struct {
         }
 
         while (true) {
-            const line = try readLine(self.allocator, self.stream, max_response_line);
+            const line = try line_io.read(self.allocator, self.stream, max_response_line);
             defer self.allocator.free(line);
 
-            switch (try messageKind(self.allocator, line)) {
+            switch (try line_io.messageKind(self.allocator, line)) {
                 .state => return protocol.parseStateLine(self.allocator, line),
                 .response => continue,
-                .unknown => return error.InvalidState,
+                .command, .unknown => return error.InvalidState,
             }
         }
     }
 
     pub fn readResponse(self: *Client) !protocol.Response {
         while (true) {
-            const line = try readLineTimeout(
+            const line = try line_io.readTimeout(
                 self.allocator,
                 self.stream,
                 max_response_line,
@@ -71,14 +72,14 @@ pub const Client = struct {
             );
             defer self.allocator.free(line);
 
-            switch (try messageKind(self.allocator, line)) {
+            switch (try line_io.messageKind(self.allocator, line)) {
                 .response => return protocol.parseResponseLine(self.allocator, line),
                 .state => {
                     if (self.pending_state) |*state| state.deinit();
                     self.pending_state = try protocol.parseStateLine(self.allocator, line);
                     continue;
                 },
-                .unknown => return error.InvalidResponse,
+                .command, .unknown => return error.InvalidResponse,
             }
         }
     }
@@ -117,79 +118,13 @@ pub fn sendCommandToPathWithTimeout(
     try stream.writeAll(request);
 
     while (true) {
-        const response_line = try readLineTimeout(allocator, stream, max_response_line, response_timeout_ms);
+        const response_line = try line_io.readTimeout(allocator, stream, max_response_line, response_timeout_ms);
         defer allocator.free(response_line);
 
-        switch (try messageKind(allocator, response_line)) {
+        switch (try line_io.messageKind(allocator, response_line)) {
             .response => return protocol.parseResponseLine(allocator, response_line),
             .state => continue,
-            .unknown => return error.InvalidResponse,
+            .command, .unknown => return error.InvalidResponse,
         }
     }
-}
-
-const MessageKind = enum {
-    response,
-    state,
-    unknown,
-};
-
-fn messageKind(allocator: std.mem.Allocator, line: []const u8) !MessageKind {
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, line, .{});
-    defer parsed.deinit();
-
-    if (parsed.value != .object) return .unknown;
-    const type_value = parsed.value.object.get("type") orelse return .unknown;
-    if (type_value != .string) return .unknown;
-
-    if (std.mem.eql(u8, type_value.string, "response")) return .response;
-    if (std.mem.eql(u8, type_value.string, "state")) return .state;
-    return .unknown;
-}
-
-fn readLine(allocator: std.mem.Allocator, stream: std.net.Stream, max_len: usize) ![]const u8 {
-    var out = std.array_list.Managed(u8).init(allocator);
-    errdefer out.deinit();
-
-    while (out.items.len < max_len) {
-        var byte: [1]u8 = undefined;
-        const n = try stream.read(&byte);
-        if (n == 0) return error.EndOfStream;
-
-        try out.append(byte[0]);
-        if (byte[0] == '\n') return out.toOwnedSlice();
-    }
-
-    return error.LineTooLong;
-}
-
-fn readLineTimeout(
-    allocator: std.mem.Allocator,
-    stream: std.net.Stream,
-    max_len: usize,
-    timeout_ms: i32,
-) ![]const u8 {
-    var out = std.array_list.Managed(u8).init(allocator);
-    errdefer out.deinit();
-
-    while (out.items.len < max_len) {
-        var poll_fds = [_]std.posix.pollfd{
-            .{
-                .fd = stream.handle,
-                .events = std.posix.POLL.IN,
-                .revents = 0,
-            },
-        };
-        const ready = try std.posix.poll(&poll_fds, timeout_ms);
-        if (ready == 0) return error.CommandTimeout;
-
-        var byte: [1]u8 = undefined;
-        const n = try stream.read(&byte);
-        if (n == 0) return error.EndOfStream;
-
-        try out.append(byte[0]);
-        if (byte[0] == '\n') return out.toOwnedSlice();
-    }
-
-    return error.LineTooLong;
 }

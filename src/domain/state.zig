@@ -11,7 +11,7 @@ pub const AppState = struct {
     allocator: std.mem.Allocator,
     config: *config.schema.Config,
     processes: std.array_list.Managed(process.Process),
-    current_proc_id: u32 = 0,
+    current_proc_id: process.ProcessId = .none,
     exiting: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, cfg: *config.schema.Config) !AppState {
@@ -31,7 +31,7 @@ pub const AppState = struct {
 
         for (keys, 0..) |label, i| {
             try app.processes.append(.{
-                .id = @intCast(i + 1),
+                .id = process.processIdFromIndex(i),
                 .label = label,
                 .config = cfg.procs.getPtr(label).?,
             });
@@ -43,7 +43,7 @@ pub const AppState = struct {
         self.processes.deinit();
     }
 
-    pub fn getProcessByID(self: *AppState, id: u32) ?*process.Process {
+    pub fn getProcessByID(self: *AppState, id: process.ProcessId) ?*process.Process {
         for (self.processes.items) |*proc| {
             if (proc.id == id) return proc;
         }

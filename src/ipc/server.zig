@@ -1,10 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const line_io = @import("line.zig");
 const protocol = @import("protocol.zig");
 
 const max_request_line = 1024 * 1024;
 const default_client_write_timeout_ms: u64 = 2000;
 var peer_credential_warning_logged = std.atomic.Value(bool).init(false);
+
+const log = std.log.scoped(.ipc_server);
 
 pub const CommandHandler = struct {
     context: *anyopaque,
@@ -56,7 +59,7 @@ pub fn serveOneCommandAtPath(
     socket_path: []const u8,
     handler: CommandHandler,
 ) !void {
-    try serveOneCommandAtPathWithAuthorizer(allocator, socket_path, handler, defaultPeerAuthorizer());
+    try serveAtPath(allocator, socket_path, handler, .one_command, null);
 }
 
 pub fn serveOneCommandAtPathWithAuthorizer(
@@ -65,22 +68,7 @@ pub fn serveOneCommandAtPathWithAuthorizer(
     handler: CommandHandler,
     authorizer: PeerAuthorizer,
 ) !void {
-    std.fs.deleteFileAbsolute(socket_path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => return err,
-    };
-
-    const address = try std.net.Address.initUnix(socket_path);
-    var listener = try address.listen(.{});
-    defer listener.deinit();
-    try setSocketPermissions(socket_path);
-
-    const conn = try listener.accept();
-    authorizer.authorizeStream(conn.stream) catch |err| {
-        conn.stream.close();
-        return err;
-    };
-    try serveCommandConnection(allocator, conn.stream, handler, null);
+    try serveAtPath(allocator, socket_path, handler, .one_command, authorizer);
 }
 
 pub fn serveCommandsAtPath(
@@ -89,7 +77,7 @@ pub fn serveCommandsAtPath(
     handler: CommandHandler,
     stopped: *std.atomic.Value(bool),
 ) !void {
-    try serveCommandsAtPathInternal(allocator, socket_path, handler, null, stopped, defaultPeerAuthorizer());
+    try serveAtPath(allocator, socket_path, handler, .{ .command_loop = stopped }, null);
 }
 
 pub fn serveCommandsAtPathWithAuthorizer(
@@ -99,7 +87,7 @@ pub fn serveCommandsAtPathWithAuthorizer(
     stopped: *std.atomic.Value(bool),
     authorizer: PeerAuthorizer,
 ) !void {
-    try serveCommandsAtPathInternal(allocator, socket_path, handler, null, stopped, authorizer);
+    try serveAtPath(allocator, socket_path, handler, .{ .command_loop = stopped }, authorizer);
 }
 
 pub fn serveCommandsAtPathWithState(
@@ -109,7 +97,10 @@ pub fn serveCommandsAtPathWithState(
     state_provider: StateProvider,
     stopped: *std.atomic.Value(bool),
 ) !void {
-    try serveCommandsAtPathInternal(allocator, socket_path, handler, state_provider, stopped, defaultPeerAuthorizer());
+    try serveAtPath(allocator, socket_path, handler, .{ .state_loop = .{
+        .provider = state_provider,
+        .stopped = stopped,
+    } }, null);
 }
 
 pub fn serveCommandsAtPathWithStateAndAuthorizer(
@@ -120,24 +111,56 @@ pub fn serveCommandsAtPathWithStateAndAuthorizer(
     stopped: *std.atomic.Value(bool),
     authorizer: PeerAuthorizer,
 ) !void {
-    try serveCommandsAtPathInternal(allocator, socket_path, handler, state_provider, stopped, authorizer);
+    try serveAtPath(allocator, socket_path, handler, .{ .state_loop = .{
+        .provider = state_provider,
+        .stopped = stopped,
+    } }, authorizer);
 }
 
-fn serveCommandsAtPathInternal(
+const ServeMode = union(enum) {
+    one_command,
+    command_loop: *std.atomic.Value(bool),
+    state_loop: StateLoop,
+};
+
+const StateLoop = struct {
+    provider: StateProvider,
+    stopped: *std.atomic.Value(bool),
+};
+
+fn serveAtPath(
     allocator: std.mem.Allocator,
     socket_path: []const u8,
     handler: CommandHandler,
-    state_provider: ?StateProvider,
-    stopped: *std.atomic.Value(bool),
-    authorizer: PeerAuthorizer,
+    mode: ServeMode,
+    maybe_authorizer: ?PeerAuthorizer,
 ) !void {
-    if (state_provider) |provider| {
-        var state_server = StateCommandServer.init(allocator, handler, provider, stopped, authorizer);
-        defer state_server.deinit();
-        try state_server.serve(socket_path);
-        return;
-    }
+    const authorizer = maybe_authorizer orelse defaultPeerAuthorizer();
 
+    switch (mode) {
+        .state_loop => |state_loop| {
+            var state_server = StateCommandServer.init(
+                allocator,
+                handler,
+                state_loop.provider,
+                state_loop.stopped,
+                authorizer,
+            );
+            defer state_server.deinit();
+            try state_server.serve(socket_path);
+        },
+        .one_command => try serveCommandListener(allocator, socket_path, handler, authorizer, null),
+        .command_loop => |stopped| try serveCommandListener(allocator, socket_path, handler, authorizer, stopped),
+    }
+}
+
+fn serveCommandListener(
+    allocator: std.mem.Allocator,
+    socket_path: []const u8,
+    handler: CommandHandler,
+    authorizer: PeerAuthorizer,
+    stopped: ?*std.atomic.Value(bool),
+) !void {
     std.fs.deleteFileAbsolute(socket_path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
@@ -148,18 +171,29 @@ fn serveCommandsAtPathInternal(
     defer listener.deinit();
     try setSocketPermissions(socket_path);
 
-    while (!stopped.load(.seq_cst)) {
+    if (stopped == null) {
+        const conn = try listener.accept();
+        authorizer.authorizeStream(conn.stream) catch |err| {
+            conn.stream.close();
+            return err;
+        };
+        try serveCommandConnection(allocator, conn.stream, handler, null);
+        return;
+    }
+
+    const stop_signal = stopped.?;
+    while (!stop_signal.load(.seq_cst)) {
         const conn = listener.accept() catch |err| {
-            if (stopped.load(.seq_cst)) break;
+            if (stop_signal.load(.seq_cst)) break;
             return err;
         };
         authorizer.authorizeStream(conn.stream) catch {
             conn.stream.close();
             continue;
         };
-        serveCommandConnection(allocator, conn.stream, handler, state_provider) catch |err| switch (err) {
+        serveCommandConnection(allocator, conn.stream, handler, null) catch |err| switch (err) {
             error.EndOfStream, error.BrokenPipe, error.WriteFailed => {
-                if (stopped.load(.seq_cst)) break;
+                if (stop_signal.load(.seq_cst)) break;
             },
             else => return err,
         };
@@ -181,7 +215,7 @@ fn serveCommandConnection(
     }
 
     while (true) {
-        const request_line = try readLine(allocator, stream, max_request_line);
+        const request_line = try line_io.read(allocator, stream, max_request_line);
         defer allocator.free(request_line);
 
         var request = try protocol.parseCommandRequestLine(allocator, request_line);
@@ -413,7 +447,7 @@ const StateCommandServer = struct {
         try client.writeAll(initial_line);
 
         while (!self.stopped.load(.seq_cst)) {
-            const request_line = try readLine(self.allocator, client.stream, max_request_line);
+            const request_line = try line_io.read(self.allocator, client.stream, max_request_line);
             defer self.allocator.free(request_line);
 
             var request = try protocol.parseCommandRequestLine(self.allocator, request_line);
@@ -444,7 +478,9 @@ const StateCommandServer = struct {
         defer self.clients_mutex.unlock();
         for (self.clients.items) |client| {
             if (client.closed.load(.seq_cst)) continue;
-            client.writeAll(line) catch {};
+            client.writeAll(line) catch |err| {
+                log.debug("dropping state broadcast to disconnected client: {s}", .{@errorName(err)});
+            };
         }
     }
 
@@ -471,11 +507,15 @@ const StateCommandServer = struct {
 };
 
 fn runStateMonitor(server: *StateCommandServer) void {
-    server.monitorStateChanges() catch {};
+    server.monitorStateChanges() catch |err| {
+        log.debug("state monitor stopped: {s}", .{@errorName(err)});
+    };
 }
 
 fn handleStateClient(server: *StateCommandServer, client: *StateClient) void {
-    server.serveClient(client) catch {};
+    server.serveClient(client) catch |err| {
+        log.debug("state client handler stopped: {s}", .{@errorName(err)});
+    };
     client.close();
 }
 
@@ -536,22 +576,6 @@ fn peerUIDLinux(fd: std.posix.fd_t) !u32 {
         else => return err,
     };
     return @intCast(cred.uid);
-}
-
-fn readLine(allocator: std.mem.Allocator, stream: std.net.Stream, max_len: usize) ![]const u8 {
-    var out = std.array_list.Managed(u8).init(allocator);
-    errdefer out.deinit();
-
-    while (out.items.len < max_len) {
-        var byte: [1]u8 = undefined;
-        const n = try stream.read(&byte);
-        if (n == 0) return error.EndOfStream;
-
-        try out.append(byte[0]);
-        if (byte[0] == '\n') return out.toOwnedSlice();
-    }
-
-    return error.LineTooLong;
 }
 
 fn setSocketPermissions(socket_path: []const u8) !void {

@@ -5,6 +5,7 @@ pub const defaults = @import("defaults.zig");
 pub const load = @import("load.zig");
 pub const hash = @import("hash.zig");
 pub const template = @import("template.zig");
+pub const runtime = @import("runtime.zig");
 
 test {
     _ = schema;
@@ -12,6 +13,7 @@ test {
     _ = load;
     _ = hash;
     _ = template;
+    _ = runtime;
 }
 
 test "defaults match active Go defaults" {
@@ -211,6 +213,50 @@ test "load default in dir follows proctmux search order" {
 
     try std.testing.expect(std.mem.endsWith(u8, loaded.config.file_path, "procmux.yml"));
     try std.testing.expectEqualStrings("cat:", loaded.config.layout.category_search_prefix);
+}
+
+test "runtime config loads explicit file and applies Makefile discovery" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "proctmux.yaml", .data = 
+        \\general:
+        \\  procs_from_make_targets: true
+        \\procs:
+        \\  explicit:
+        \\    shell: "echo explicit"
+        \\
+    });
+    try tmp.dir.writeFile(.{
+        .sub_path = "Makefile",
+        .data = "build:\n",
+    });
+
+    var loaded = try runtime.loadInDir(std.testing.allocator, tmp.dir, "proctmux.yaml");
+    defer loaded.deinit();
+
+    try std.testing.expect(loaded.config.procs.contains("explicit"));
+    try std.testing.expect(loaded.config.procs.contains("make:build"));
+}
+
+test "runtime config loads default file and applies Makefile discovery" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "proctmux.yaml", .data = 
+        \\general:
+        \\  procs_from_make_targets: true
+        \\
+    });
+    try tmp.dir.writeFile(.{
+        .sub_path = "Makefile",
+        .data = "test:\n",
+    });
+
+    var loaded = try runtime.loadInDir(std.testing.allocator, tmp.dir, "");
+    defer loaded.deinit();
+
+    try std.testing.expect(loaded.config.procs.contains("make:test"));
 }
 
 test "dead and unknown fields warn and do not populate active config" {

@@ -45,14 +45,14 @@ test "process to view queries controller for live status and pid" {
     proc_cfg.shell = "npm run dev";
 
     const proc = process.Process{
-        .id = 5,
+        .id = process.ProcessId.fromInt(5),
         .label = "backend",
         .config = &proc_cfg,
     };
 
     var fake = FakeController{ .status = .running, .pid = 12345 };
     const running_view = process.toView(proc, fake.controller());
-    try std.testing.expectEqual(@as(u32, 5), running_view.id);
+    try std.testing.expectEqual(process.ProcessId.fromInt(5), running_view.id);
     try std.testing.expectEqualStrings("backend", running_view.label);
     try std.testing.expectEqual(process.ProcessStatus.running, running_view.status);
     try std.testing.expectEqual(@as(i32, 12345), running_view.pid);
@@ -72,9 +72,9 @@ test "app state sorts process labels before assigning ids" {
 
     try std.testing.expectEqual(@as(usize, 2), app.processes.items.len);
     try std.testing.expectEqualStrings("backend", app.processes.items[0].label);
-    try std.testing.expectEqual(@as(u32, 1), app.processes.items[0].id);
+    try std.testing.expectEqual(process.ProcessId.fromInt(1), app.processes.items[0].id);
     try std.testing.expectEqualStrings("worker", app.processes.items[1].label);
-    try std.testing.expectEqual(@as(u32, 2), app.processes.items[1].id);
+    try std.testing.expectEqual(process.ProcessId.fromInt(2), app.processes.items[1].id);
     try std.testing.expect(app.getProcessByLabel("Backend") == null);
     try std.testing.expect(app.getProcessByLabel("backend") != null);
 }
@@ -95,8 +95,8 @@ test "category filter uses AND matching and running-only toggle" {
     try config.defaults.apply(&cfg, std.testing.allocator);
 
     var views = [_]process.ProcessView{
-        .{ .id = 1, .label = "backend", .status = .running, .pid = 101, .config = &api_cfg },
-        .{ .id = 2, .label = "api-gateway", .status = .halted, .pid = -1, .config = &gateway_cfg },
+        .{ .id = process.ProcessId.fromInt(1), .label = "backend", .status = .running, .pid = 101, .config = &api_cfg },
+        .{ .id = process.ProcessId.fromInt(2), .label = "api-gateway", .status = .halted, .pid = -1, .config = &gateway_cfg },
     };
 
     const result = try filter.filterProcesses(std.testing.allocator, &cfg, views[0..], "cat:server,api", false);
@@ -121,10 +121,10 @@ test "sort running first then alpha" {
     defer empty_proc.deinit(std.testing.allocator);
 
     var views = [_]process.ProcessView{
-        .{ .id = 1, .label = "halted-zebra", .status = .halted, .config = &empty_proc },
-        .{ .id = 2, .label = "running-mango", .status = .running, .config = &empty_proc },
-        .{ .id = 3, .label = "halted-apple", .status = .halted, .config = &empty_proc },
-        .{ .id = 4, .label = "running-banana", .status = .running, .config = &empty_proc },
+        .{ .id = process.ProcessId.fromInt(1), .label = "halted-zebra", .status = .halted, .config = &empty_proc },
+        .{ .id = process.ProcessId.fromInt(2), .label = "running-mango", .status = .running, .config = &empty_proc },
+        .{ .id = process.ProcessId.fromInt(3), .label = "halted-apple", .status = .halted, .config = &empty_proc },
+        .{ .id = process.ProcessId.fromInt(4), .label = "running-banana", .status = .running, .config = &empty_proc },
     };
 
     const result = try filter.filterProcesses(std.testing.allocator, &cfg, views[0..], "", false);
@@ -147,9 +147,9 @@ test "fuzzy label search ignores configured sorting" {
     defer empty_proc.deinit(std.testing.allocator);
 
     var views = [_]process.ProcessView{
-        .{ .id = 1, .label = "zebra-api", .status = .halted, .config = &empty_proc },
-        .{ .id = 2, .label = "api-service", .status = .running, .config = &empty_proc },
-        .{ .id = 3, .label = "apple-api", .status = .halted, .config = &empty_proc },
+        .{ .id = process.ProcessId.fromInt(1), .label = "zebra-api", .status = .halted, .config = &empty_proc },
+        .{ .id = process.ProcessId.fromInt(2), .label = "api-service", .status = .running, .config = &empty_proc },
+        .{ .id = process.ProcessId.fromInt(3), .label = "apple-api", .status = .halted, .config = &empty_proc },
     };
 
     const result = try filter.filterProcesses(std.testing.allocator, &cfg, views[0..], "api", false);
@@ -169,12 +169,12 @@ const FakeController = struct {
         };
     }
 
-    fn getProcessStatus(context: *anyopaque, _: u32) process.ProcessStatus {
+    fn getProcessStatus(context: *anyopaque, _: process.ProcessId) process.ProcessStatus {
         const self: *FakeController = @ptrCast(@alignCast(context));
         return self.status;
     }
 
-    fn getPID(context: *anyopaque, _: u32) i32 {
+    fn getPID(context: *anyopaque, _: process.ProcessId) i32 {
         const self: *FakeController = @ptrCast(@alignCast(context));
         return self.pid;
     }

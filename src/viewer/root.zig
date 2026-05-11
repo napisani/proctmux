@@ -1,20 +1,21 @@
 const std = @import("std");
+const domain = @import("../domain/root.zig");
 const ring = @import("../ring/root.zig");
 
 const clear_sequence = "\x1b[2J\x1b[H";
 const default_placeholder = "Select a process to stream output.";
 
 pub const ProcessRef = struct {
-    id: u32,
+    id: domain.process.ProcessId,
     pid: i32,
     scrollback: *ring.RingBuffer,
 };
 
 pub const ProcessProvider = struct {
     context: *anyopaque,
-    get: *const fn (context: *anyopaque, id: u32) ?ProcessRef,
+    get: *const fn (context: *anyopaque, id: domain.process.ProcessId) ?ProcessRef,
 
-    pub fn getProcess(self: ProcessProvider, id: u32) ?ProcessRef {
+    pub fn getProcess(self: ProcessProvider, id: domain.process.ProcessId) ?ProcessRef {
         return self.get(self.context, id);
     }
 };
@@ -32,7 +33,7 @@ pub const Viewer = struct {
     allocator: std.mem.Allocator,
     provider: ProcessProvider,
     output: Output,
-    current_process_id: u32 = 0,
+    current_process_id: domain.process.ProcessId = .none,
     current_reader_id: ?usize = null,
     current_scrollback: ?*ring.RingBuffer = null,
     placeholder: []const u8 = "",
@@ -53,16 +54,16 @@ pub const Viewer = struct {
         self.placeholder = text;
     }
 
-    pub fn currentProcessID(self: Viewer) u32 {
+    pub fn currentProcessID(self: Viewer) domain.process.ProcessId {
         return self.current_process_id;
     }
 
-    pub fn switchToProcess(self: *Viewer, process_id: u32) !void {
+    pub fn switchToProcess(self: *Viewer, process_id: domain.process.ProcessId) !void {
         try self.switchToProcessInternal(process_id, false);
     }
 
     pub fn refreshCurrentProcess(self: *Viewer) !void {
-        if (self.current_process_id == 0) return;
+        if (self.current_process_id.isNone()) return;
         try self.switchToProcessInternal(self.current_process_id, true);
     }
 
@@ -76,13 +77,13 @@ pub const Viewer = struct {
         }
     }
 
-    fn switchToProcessInternal(self: *Viewer, process_id: u32, force: bool) !void {
+    fn switchToProcessInternal(self: *Viewer, process_id: domain.process.ProcessId, force: bool) !void {
         if (self.current_process_id == process_id and !force) return;
 
         self.removeCurrentReader();
         self.current_process_id = process_id;
 
-        if (process_id == 0) {
+        if (process_id.isNone()) {
             try self.output.writeAll(clear_sequence);
             try self.writePlaceholder();
             return;
@@ -131,9 +132,9 @@ test "viewer switch writes clear sequence and process scrollback" {
     var viewer = Viewer.init(std.testing.allocator, TestStore.provider(&store), TestOutput.writer(&out));
     defer viewer.deinit();
 
-    try viewer.switchToProcess(1);
+    try viewer.switchToProcess(domain.process.ProcessId.fromInt(1));
 
-    try std.testing.expectEqual(@as(u32, 1), viewer.currentProcessID());
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(1), viewer.currentProcessID());
     try std.testing.expectEqualStrings("\x1b[2J\x1b[Hexisting output\n", out.items);
 }
 
@@ -151,13 +152,13 @@ test "viewer live relay follows only the current process reader" {
     var viewer = Viewer.init(std.testing.allocator, TestStore.provider(&store), TestOutput.writer(&out));
     defer viewer.deinit();
 
-    try viewer.switchToProcess(1);
+    try viewer.switchToProcess(domain.process.ProcessId.fromInt(1));
     _ = first.write("first live\n");
     try viewer.relayPending();
     try std.testing.expect(std.mem.indexOf(u8, out.items, "first live\n") != null);
 
     out.clearRetainingCapacity();
-    try viewer.switchToProcess(2);
+    try viewer.switchToProcess(domain.process.ProcessId.fromInt(2));
     _ = first.write("old hidden\n");
     _ = second.write("second live\n");
     try viewer.relayPending();
@@ -178,9 +179,9 @@ test "viewer process zero renders placeholder" {
     defer viewer.deinit();
     viewer.setPlaceholder("No process selected");
 
-    try viewer.switchToProcess(1);
+    try viewer.switchToProcess(domain.process.ProcessId.fromInt(1));
     out.clearRetainingCapacity();
-    try viewer.switchToProcess(0);
+    try viewer.switchToProcess(.none);
 
     try std.testing.expectEqualStrings("\x1b[2J\x1b[HNo process selected\n", out.items);
 }
@@ -196,7 +197,7 @@ test "viewer refresh resends current process scrollback" {
     var viewer = Viewer.init(std.testing.allocator, TestStore.provider(&store), TestOutput.writer(&out));
     defer viewer.deinit();
 
-    try viewer.switchToProcess(1);
+    try viewer.switchToProcess(domain.process.ProcessId.fromInt(1));
     out.clearRetainingCapacity();
     _ = proc.write("after\n");
     try viewer.refreshCurrentProcess();
@@ -205,7 +206,7 @@ test "viewer refresh resends current process scrollback" {
 }
 
 const TestProcess = struct {
-    id: u32,
+    id: domain.process.ProcessId,
     pid: i32,
     scrollback: ring.RingBuffer,
 
@@ -236,7 +237,7 @@ const TestStore = struct {
         _ = rb.write(initial_output);
 
         try self.processes.append(.{
-            .id = id,
+            .id = domain.process.ProcessId.fromInt(id),
             .pid = pid,
             .scrollback = rb,
         });
@@ -244,8 +245,9 @@ const TestStore = struct {
     }
 
     fn scrollback(self: *TestStore, id: u32) ?*ring.RingBuffer {
+        const process_id = domain.process.ProcessId.fromInt(id);
         for (self.processes.items) |*proc| {
-            if (proc.id == id) return &proc.scrollback;
+            if (proc.id == process_id) return &proc.scrollback;
         }
         return null;
     }
@@ -257,7 +259,7 @@ const TestStore = struct {
         };
     }
 
-    fn getProcess(context: *anyopaque, id: u32) ?ProcessRef {
+    fn getProcess(context: *anyopaque, id: domain.process.ProcessId) ?ProcessRef {
         const self: *TestStore = @ptrCast(@alignCast(context));
         for (self.processes.items) |*proc| {
             if (proc.id == id) {

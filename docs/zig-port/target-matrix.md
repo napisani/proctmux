@@ -22,7 +22,7 @@ Release artifacts are built with:
 make build-release-artifact ZIG_TARGET=<zig-target> ARTIFACT_NAME=<artifact-name>
 ```
 
-## Phase 1 Checks
+## Local Verification
 
 Run these commands from a Nix development shell:
 
@@ -32,6 +32,18 @@ make test-zig
 make build-zig
 make build-go-reference
 ```
+
+If `zig` is not on `PATH`, pass the pinned compiler explicitly:
+
+```bash
+make fmt-zig ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
+make test-zig ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
+make build-zig ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
+```
+
+The Zig tests include Unix socket listener and process lifecycle coverage, so
+they must run in an environment that permits local socket binds and child
+process execution.
 
 The Go binary produced by `make build-go-reference` is used as the reference
 executable for parity tests.
