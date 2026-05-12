@@ -11,6 +11,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/creack/pty"
 )
@@ -121,13 +122,18 @@ func (t *terminalState) apply(data []byte) {
 			t.cursorCol = nextTab
 		default:
 			if b >= 0x20 {
-				t.writeByte(b)
+				r, size := utf8.DecodeRune(data[i:])
+				if r == utf8.RuneError && size == 1 {
+					r = rune(b)
+				}
+				t.writeRune(r)
+				i += size - 1
 			}
 		}
 	}
 }
 
-func (t *terminalState) writeByte(b byte) {
+func (t *terminalState) writeRune(r rune) {
 	if t.cursorRow < 0 {
 		t.cursorRow = 0
 	}
@@ -141,7 +147,7 @@ func (t *terminalState) writeByte(b byte) {
 		t.cursorCol = t.cols - 1
 	}
 
-	t.cells[t.cursorRow][t.cursorCol] = rune(b)
+	t.cells[t.cursorRow][t.cursorCol] = r
 	t.cursorCol++
 	if t.cursorCol >= t.cols {
 		t.cursorCol = 0

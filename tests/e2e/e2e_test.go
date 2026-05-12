@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -372,6 +373,61 @@ procs:
 	}
 }
 
+func TestUnified_SideBySidePanesStaySeparatedWithLongProcessLabels(t *testing.T) {
+	const outputToken = "SPLIT_OK"
+	const longLabel = "process-list-label-that-is-long-enough-to-cross-the-client-pane"
+
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+log_file: /tmp/proctmux-test-unified-split-boundary.log
+procs:
+  `+longLabel+`:
+    shell: "printf '`+outputToken+`\n'; sleep 60"
+    autostart: true
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, longLabel) && strings.Contains(snap, outputToken)
+	}); err != nil {
+		t.Fatalf("split panes never rendered expected content: %v\nSnapshot:\n%s\nRaw tail:\n%s",
+			err, sess.Snapshot(), truncateLast(sess.CleanOutput(), 2000))
+	}
+
+	rawBeforeResize := len(sess.RawOutput())
+	if err := sess.Resize(e2e.TerminalSize{Rows: 24, Cols: 80}); err != nil {
+		t.Fatalf("resize session: %v", err)
+	}
+	if err := waitForRawGrowth(sess, rawBeforeResize, 10*time.Second); err != nil {
+		t.Fatalf("no post-resize frame rendered: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	// At 80 columns the split model clamps the client pane to 48 columns
+	// (80 total columns minus the 32-column minimum server pane). A long
+	// client label must be clipped to that pane rather than pushing the
+	// process output farther right or wrapping it into the client area.
+	const expectedServerColumn = 48
+	var snap string
+	var col int
+	var line string
+	if err := sess.WaitForSnapshot(10*time.Second, func(candidate string) bool {
+		var ok bool
+		col, line, ok = columnOf(candidate, outputToken)
+		snap = candidate
+		return ok
+	}); err != nil {
+		t.Fatalf("output token missing after resize: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+	col, line, ok := columnOf(snap, outputToken)
+	if !ok {
+		t.Fatalf("output token missing from final snapshot:\n%s", snap)
+	}
+	if col != expectedServerColumn {
+		t.Fatalf("server output started at column %d, want fixed split boundary %d\nLine: %q\nSnapshot:\n%s",
+			col, expectedServerColumn, line, snap)
+	}
+}
+
 func TestUnified_Keypress_NoExcessiveFullClears(t *testing.T) {
 	cfgDir, cfgPath := e2e.WriteConfig(t, `
 log_file: /tmp/proctmux-test-unified-keypress-clears.log
@@ -570,6 +626,105 @@ procs:
 	}
 	if strings.Contains(snap, "IDLE BANNER") {
 		t.Fatalf("placeholder remained after selecting running process:\n%s", snap)
+	}
+}
+
+func TestUnified_SelectNeverRunProcessShowsNoProcessBanner(t *testing.T) {
+	const staleRunningTail = "NEVER_RUN_STALE_SUFFIX_abcdefghijklmnopqrstuvwxyz"
+	const runningToken = "RUNNING_BEFORE_NEVER_RUN_" + staleRunningTail
+
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+layout:
+  placeholder_banner: "NO PROCESS"
+log_file: /tmp/proctmux-test-unified-never-run-selection.log
+procs:
+  alpha-running:
+    shell: "printf '`+runningToken+`\n'; sleep 60"
+    autostart: true
+  beta-never-run:
+    shell: "sleep 60"
+    autostart: false
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "alpha-running") &&
+			strings.Contains(snap, "beta-never-run")
+	}); err != nil {
+		t.Fatalf("process list not shown: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, runningToken)
+	}); err != nil {
+		t.Fatalf("running process output never appeared: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.SendRunes('j'); err != nil {
+		t.Fatalf("select never-run process: %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "NO PROCESS")
+	}); err != nil {
+		t.Fatalf("NO PROCESS banner never appeared after selecting never-run process: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	snap := sess.Snapshot()
+	if strings.Contains(snap, staleRunningTail) {
+		t.Fatalf("previous running-process output remained after selecting never-run process:\n%s", snap)
+	}
+}
+
+func TestUnified_SelectExitedProcessShowsLastRunOutput(t *testing.T) {
+	const staleRunningTail = "EXITED_SELECTION_STALE_SUFFIX_abcdefghijklmnopqrstuvwxyz"
+	const runningToken = "RUNNING_BEFORE_EXITED_SELECTION_" + staleRunningTail
+	const exitedToken = "EXITED_PROCESS_LAST_RUN_OUTPUT"
+
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+layout:
+  placeholder_banner: "NO PROCESS"
+log_file: /tmp/proctmux-test-unified-exited-selection.log
+procs:
+  alpha-running:
+    shell: "printf '`+runningToken+`\n'; sleep 60"
+    autostart: true
+  beta-exited:
+    shell: "printf '`+exitedToken+`\n'"
+    autostart: true
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "alpha-running") &&
+			strings.Contains(snap, "beta-exited")
+	}); err != nil {
+		t.Fatalf("process list not shown: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, runningToken)
+	}); err != nil {
+		t.Fatalf("running process output never appeared: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	time.Sleep(250 * time.Millisecond)
+	if err := sess.SendRunes('j'); err != nil {
+		t.Fatalf("select exited process: %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, exitedToken)
+	}); err != nil {
+		t.Fatalf("exited process last output never appeared: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	snap := sess.Snapshot()
+	if strings.Contains(snap, staleRunningTail) {
+		t.Fatalf("previous running-process output remained after selecting exited process:\n%s", snap)
+	}
+	if strings.Contains(snap, "NO PROCESS") {
+		t.Fatalf("NO PROCESS banner remained after selecting exited process with scrollback:\n%s", snap)
 	}
 }
 
@@ -1021,4 +1176,32 @@ func clientPaneText(snap string) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func columnOf(snap, needle string) (int, string, bool) {
+	for _, line := range strings.Split(snap, "\n") {
+		idx := strings.Index(line, needle)
+		if idx < 0 {
+			continue
+		}
+		return len([]rune(line[:idx])), line, true
+	}
+	return -1, "", false
+}
+
+func waitForRawGrowth(sess *e2e.Session, previousLen int, timeout time.Duration) error {
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if len(sess.RawOutput()) > previousLen {
+				return nil
+			}
+		case <-deadline:
+			return fmt.Errorf("timeout waiting for raw output to grow beyond %d bytes", previousLen)
+		}
+	}
 }

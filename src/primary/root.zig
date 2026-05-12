@@ -158,9 +158,22 @@ pub const Server = struct {
     }
 
     fn stopRunningResponse(self: *Server, allocator: std.mem.Allocator, request_id: []const u8) !ipc.protocol.Response {
+        var stop_runs = std.array_list.Managed(StopProcessRun).init(allocator);
+        defer stop_runs.deinit();
+
         for (self.state.processes.items) |*process| {
-            if (self.controller.isRunning(process.id)) try self.controller.stopProcess(process.id);
+            if (self.controller.isRunning(process.id)) {
+                try stop_runs.append(.{
+                    .controller = &self.controller,
+                    .id = process.id,
+                    .label = process.label,
+                });
+            }
         }
+
+        stopProcessesConcurrently(allocator, stop_runs.items);
+        reportStopFailures(stop_runs.items);
+
         return successResponse(allocator, request_id);
     }
 
@@ -201,6 +214,74 @@ pub const Server = struct {
         };
     }
 };
+
+const StopProcessRun = struct {
+    controller: *proc_mod.controller.Controller,
+    id: domain.process.ProcessId,
+    label: []const u8,
+    result: ?anyerror = null,
+};
+
+fn stopProcessesConcurrently(
+    allocator: std.mem.Allocator,
+    stop_runs: []StopProcessRun,
+) void {
+    if (stop_runs.len == 0) return;
+
+    const threads = allocator.alloc(std.Thread, stop_runs.len) catch |err| {
+        log.warn("failed to allocate stop-running worker threads; stopping sequentially: {s}", .{@errorName(err)});
+        stopProcessesSequentially(stop_runs);
+        return;
+    };
+    defer allocator.free(threads);
+
+    var started: usize = 0;
+    while (started < stop_runs.len) : (started += 1) {
+        threads[started] = std.Thread.spawn(.{}, stopProcessWorker, .{&stop_runs[started]}) catch |err| {
+            log.warn("failed to spawn stop-running worker for {s}; stopping remaining processes sequentially: {s}", .{
+                stop_runs[started].label,
+                @errorName(err),
+            });
+            stopProcessWorker(&stop_runs[started]);
+            if (stop_runs[started].result == null) stop_runs[started].result = err;
+            break;
+        };
+    }
+
+    for (threads[0..started]) |thread| thread.join();
+
+    if (started < stop_runs.len) {
+        stopProcessesSequentially(stop_runs[started + 1 ..]);
+    }
+}
+
+fn stopProcessesSequentially(stop_runs: []StopProcessRun) void {
+    for (stop_runs) |*stop_run| stopProcessWorker(stop_run);
+}
+
+fn stopProcessWorker(stop_run: *StopProcessRun) void {
+    stop_run.controller.stopProcess(stop_run.id) catch |err| {
+        stop_run.result = err;
+    };
+}
+
+fn reportStopFailures(stop_runs: []const StopProcessRun) void {
+    var failure_count: usize = 0;
+    for (stop_runs) |stop_run| {
+        if (stop_run.result) |err| {
+            failure_count += 1;
+            log.warn("stop-running failed for {s} (id={}): {s}", .{
+                stop_run.label,
+                stop_run.id.toInt(),
+                @errorName(err),
+            });
+        }
+    }
+
+    if (failure_count > 0) {
+        log.warn("stop-running completed with {} process stop failure(s); exiting anyway", .{failure_count});
+    }
+}
 
 fn handleCommandAdapter(
     context: *anyopaque,
@@ -345,6 +426,93 @@ test "primary command handler stops all running processes" {
 
     var listed = try primary.handleRequest(std.testing.allocator, .{
         .request_id = "4",
+        .action = .list,
+        .label = "",
+    });
+    defer listed.deinit(std.testing.allocator);
+    try std.testing.expect(!listed.process_list[0].running);
+    try std.testing.expect(!listed.process_list[1].running);
+}
+
+test "primary command handler stops running processes in parallel" {
+    var cfg = config.schema.Config.empty(std.testing.allocator);
+    defer cfg.deinit();
+    try config.defaults.apply(&cfg, std.testing.allocator);
+    try test_config.putShellProcessWithStopTimeout(&cfg, "api", "trap \"\" TERM; read line", 600);
+    try test_config.putShellProcessWithStopTimeout(&cfg, "worker", "trap \"\" TERM; read line", 600);
+    try test_config.putShellProcessWithStopTimeout(&cfg, "jobs", "trap \"\" TERM; read line", 600);
+
+    var primary = try Server.init(std.testing.allocator, &cfg);
+    defer primary.deinit();
+
+    for ([_][]const u8{ "api", "worker", "jobs" }, 0..) |label, index| {
+        var started = try primary.handleRequest(std.testing.allocator, .{
+            .request_id = switch (index) {
+                0 => "start-0",
+                1 => "start-1",
+                else => "start-2",
+            },
+            .action = .start,
+            .label = label,
+        });
+        defer started.deinit(std.testing.allocator);
+        try std.testing.expect(started.success);
+    }
+
+    const started_at = std.time.milliTimestamp();
+    var stopped = try primary.handleRequest(std.testing.allocator, .{
+        .request_id = "stop-all",
+        .action = .stop_running,
+        .label = "",
+    });
+    defer stopped.deinit(std.testing.allocator);
+    const elapsed_ms = std.time.milliTimestamp() - started_at;
+
+    try std.testing.expect(stopped.success);
+    try std.testing.expect(elapsed_ms < 1200);
+
+    var listed = try primary.handleRequest(std.testing.allocator, .{
+        .request_id = "list",
+        .action = .list,
+        .label = "",
+    });
+    defer listed.deinit(std.testing.allocator);
+    for (listed.process_list) |item| try std.testing.expect(!item.running);
+}
+
+test "primary command handler stop running exits after per-process stop errors" {
+    var cfg = config.schema.Config.empty(std.testing.allocator);
+    defer cfg.deinit();
+    try config.defaults.apply(&cfg, std.testing.allocator);
+    try test_config.putShellProcessWithStopTimeout(&cfg, "aaa-failer", "sleep 5", 500);
+    try test_config.putShellProcessWithStopTimeout(&cfg, "zzz-survivor", "sleep 5", 500);
+    try config.schema.appendOwned(std.testing.allocator, &cfg.procs.getPtr("aaa-failer").?.on_kill, "sh");
+    try config.schema.appendOwned(std.testing.allocator, &cfg.procs.getPtr("aaa-failer").?.on_kill, "-c");
+    try config.schema.appendOwned(std.testing.allocator, &cfg.procs.getPtr("aaa-failer").?.on_kill, "exit 3");
+
+    var primary = try Server.init(std.testing.allocator, &cfg);
+    defer primary.deinit();
+
+    for ([_][]const u8{ "aaa-failer", "zzz-survivor" }, 0..) |label, index| {
+        var started = try primary.handleRequest(std.testing.allocator, .{
+            .request_id = if (index == 0) "start-0" else "start-1",
+            .action = .start,
+            .label = label,
+        });
+        defer started.deinit(std.testing.allocator);
+        try std.testing.expect(started.success);
+    }
+
+    var stopped = try primary.handleRequest(std.testing.allocator, .{
+        .request_id = "stop-all",
+        .action = .stop_running,
+        .label = "",
+    });
+    defer stopped.deinit(std.testing.allocator);
+    try std.testing.expect(stopped.success);
+
+    var listed = try primary.handleRequest(std.testing.allocator, .{
+        .request_id = "list",
         .action = .list,
         .label = "",
     });

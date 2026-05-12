@@ -5,6 +5,7 @@ const config = @import("../config/root.zig");
 const ipc = @import("../ipc/root.zig");
 const modes = @import("../modes/root.zig");
 const terminal = @import("../terminal/root.zig");
+const test_ansi = @import("../test_support/ansi.zig");
 const test_io = @import("../test_support/io.zig");
 const unified = @import("../unified/root.zig");
 const version = @import("../version.zig");
@@ -521,8 +522,8 @@ test "app client mode refreshes render after process command broadcast" {
     thread_joined = true;
     if (run_state.err) |err| return err;
 
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "■ api") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "● api") != null);
+    try test_ansi.expectContainsPlain(std.testing.allocator, out.items, "■ api");
+    try test_ansi.expectContainsPlain(std.testing.allocator, out.items, "● api");
 }
 
 test "app client mode keypress redraws avoid repeated full-screen clears" {
@@ -641,7 +642,7 @@ test "app client mode maps down arrow to process navigation" {
     thread_joined = true;
     if (run_state.err) |err| return err;
 
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "▶ ■ api") != null);
+    try test_ansi.expectContainsPlain(std.testing.allocator, out.items, "▶ ■ api");
 }
 
 test "app client mode maps up arrow to process navigation" {
@@ -700,7 +701,7 @@ test "app client mode maps up arrow to process navigation" {
     thread_joined = true;
     if (run_state.err) |err| return err;
 
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "▶ ■ worker") != null);
+    try test_ansi.expectContainsPlain(std.testing.allocator, out.items, "▶ ■ worker");
 }
 
 test "app client mode accepts printable filter input" {
@@ -760,7 +761,7 @@ test "app client mode accepts printable filter input" {
     if (run_state.err) |err| return err;
 
     try std.testing.expect(std.mem.indexOf(u8, out.items, "Filter: api") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "▶ ■ api") != null);
+    try test_ansi.expectContainsPlain(std.testing.allocator, out.items, "▶ ■ api");
 }
 
 test "app client mode renders command failure message and keeps running" {
@@ -1109,7 +1110,7 @@ test "app unified mode forwards server-focused input to selected process" {
 
     try runInDirWithInput(std.testing.allocator, dir, &.{"--unified"}, test_io.FileGateInput.reader(&input), test_io.TestOutput.writer(&out));
 
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "▶ ● api") != null);
+    try test_ansi.expectContainsPlain(std.testing.allocator, out.items, "▶ ● api");
     try std.testing.expect(std.mem.indexOf(u8, out.items, "client | Server") != null);
     try test_io.waitForFileContains(dir, "got.txt", "hello");
 }

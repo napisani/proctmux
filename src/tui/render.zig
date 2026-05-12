@@ -1,6 +1,7 @@
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
+const test_ansi = @import("../test_support/ansi.zig");
 const test_config = @import("../test_support/config.zig");
 const client_model = @import("client_model.zig");
 
@@ -30,7 +31,7 @@ pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_mode
             try out.appendSlice("  ");
         }
 
-        try out.appendSlice(statusMarker(view.status));
+        try appendStatusMarker(&out, &model.app_state.config.style, view.status);
         try out.append(' ');
         if (model.app_state.config.layout.enable_debug_process_info) {
             try out.appendSlice(view.label);
@@ -279,6 +280,85 @@ fn statusMarker(status: domain.process.ProcessStatus) []const u8 {
     };
 }
 
+fn appendStatusMarker(
+    out: *std.array_list.Managed(u8),
+    style: *const config.schema.StyleConfig,
+    status: domain.process.ProcessStatus,
+) !void {
+    const color = statusMarkerColor(style, status);
+    if (ansiForegroundCode(color)) |code| {
+        try out.writer().print("\x1b[{}m{s}\x1b[0m", .{ code, statusMarker(status) });
+    } else {
+        try out.appendSlice(statusMarker(status));
+    }
+}
+
+fn statusMarkerColor(style: *const config.schema.StyleConfig, status: domain.process.ProcessStatus) []const u8 {
+    return switch (status) {
+        .running => style.status_running_color,
+        .halting => style.status_halting_color,
+        .halted, .exited, .unknown => style.status_stopped_color,
+    };
+}
+
+fn ansiForegroundCode(color: []const u8) ?u8 {
+    const trimmed = std.mem.trim(u8, color, " \t\r\n");
+    if (trimmed.len == 0 or std.ascii.eqlIgnoreCase(trimmed, "none")) return null;
+
+    const named_colors = [_]struct {
+        name: []const u8,
+        code: u8,
+    }{
+        .{ .name = "black", .code = 30 },
+        .{ .name = "red", .code = 31 },
+        .{ .name = "green", .code = 32 },
+        .{ .name = "yellow", .code = 33 },
+        .{ .name = "blue", .code = 34 },
+        .{ .name = "magenta", .code = 35 },
+        .{ .name = "cyan", .code = 36 },
+        .{ .name = "white", .code = 37 },
+        .{ .name = "brightblack", .code = 90 },
+        .{ .name = "gray", .code = 90 },
+        .{ .name = "grey", .code = 90 },
+        .{ .name = "brightred", .code = 91 },
+        .{ .name = "lightred", .code = 91 },
+        .{ .name = "brightgreen", .code = 92 },
+        .{ .name = "lightgreen", .code = 92 },
+        .{ .name = "brightyellow", .code = 93 },
+        .{ .name = "brightblue", .code = 94 },
+        .{ .name = "brightmagenta", .code = 95 },
+        .{ .name = "brightcyan", .code = 96 },
+        .{ .name = "brightwhite", .code = 97 },
+        .{ .name = "ansiblack", .code = 30 },
+        .{ .name = "ansired", .code = 31 },
+        .{ .name = "ansigreen", .code = 32 },
+        .{ .name = "ansiyellow", .code = 33 },
+        .{ .name = "ansiblue", .code = 34 },
+        .{ .name = "ansimagenta", .code = 35 },
+        .{ .name = "ansicyan", .code = 36 },
+        .{ .name = "ansiwhite", .code = 37 },
+        .{ .name = "ansibrightblack", .code = 90 },
+        .{ .name = "ansigray", .code = 90 },
+        .{ .name = "ansigrey", .code = 90 },
+        .{ .name = "ansibrightred", .code = 91 },
+        .{ .name = "ansibrightgreen", .code = 92 },
+        .{ .name = "ansibrightyellow", .code = 93 },
+        .{ .name = "ansibrightblue", .code = 94 },
+        .{ .name = "ansibrightmagenta", .code = 95 },
+        .{ .name = "ansibrightcyan", .code = 96 },
+        .{ .name = "ansibrightwhite", .code = 97 },
+    };
+
+    for (named_colors) |entry| {
+        if (std.ascii.eqlIgnoreCase(trimmed, entry.name)) return entry.code;
+    }
+
+    const color_index = std.fmt.parseUnsigned(u8, trimmed, 10) catch return null;
+    if (color_index <= 7) return 30 + color_index;
+    if (color_index <= 15) return 90 + color_index - 8;
+    return null;
+}
+
 test "process list renderer writes pointer status marker and labels" {
     var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
@@ -295,10 +375,31 @@ test "process list renderer writes pointer status marker and labels" {
     const rendered = try renderProcessList(std.testing.allocator, &model);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expectEqualStrings(
+    try test_ansi.expectEqualPlain(
+        std.testing.allocator,
         "  ■ alpha-api\n> ● beta-worker\n  ■ gamma-db\n",
         rendered,
     );
+}
+
+test "process list renderer colors status markers from config" {
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
+    defer cfg.deinit();
+    cfg.style.pointer_char = ">";
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
+
+    var views = test_config.standardRenderViews(&cfg);
+    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    const rendered = try renderProcessList(std.testing.allocator, &model);
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[31m■\x1b[0m alpha-api") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "> \x1b[32m●\x1b[0m beta-worker") != null);
 }
 
 test "process list renderer selects first row when active id is zero like Go" {
@@ -317,7 +418,8 @@ test "process list renderer selects first row when active id is zero like Go" {
     const rendered = try renderProcessList(std.testing.allocator, &model);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expectEqualStrings(
+    try test_ansi.expectEqualPlain(
+        std.testing.allocator,
         "> ■ alpha-api\n  ● beta-worker\n  ■ gamma-db\n",
         rendered,
     );
@@ -342,11 +444,11 @@ test "process list renderer includes status pid and categories in debug mode" {
     const rendered = try renderProcessList(std.testing.allocator, &model);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(
-        u8,
+    try test_ansi.expectContainsPlain(
+        std.testing.allocator,
         rendered,
         "> ● beta-worker [Running] PID:1234 [worker,queue]\n",
-    ) != null);
+    );
 }
 
 test "process list renderer shows friendly empty message" {
@@ -389,7 +491,8 @@ test "process list renderer shows selected process description above list" {
     const rendered = try renderProcessList(std.testing.allocator, &model);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expectEqualStrings(
+    try test_ansi.expectEqualPlain(
+        std.testing.allocator,
         "Runs background jobs\n  ■ alpha-api\n> ● beta-worker\n  ■ gamma-db\n",
         rendered,
     );
@@ -413,7 +516,8 @@ test "process list renderer wraps selected process description to terminal width
     const rendered = try renderProcessList(std.testing.allocator, &model);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expectEqualStrings(
+    try test_ansi.expectEqualPlain(
+        std.testing.allocator,
         "alpha beta\ngamma delta\n  ■ alpha-api\n> ● beta-worker\n  ■ gamma-db\n",
         rendered,
     );
@@ -437,7 +541,8 @@ test "process list renderer hides selected process description when configured" 
     const rendered = try renderProcessList(std.testing.allocator, &model);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expectEqualStrings(
+    try test_ansi.expectEqualPlain(
+        std.testing.allocator,
         "  ■ alpha-api\n> ● beta-worker\n  ■ gamma-db\n",
         rendered,
     );
@@ -461,7 +566,8 @@ test "process list renderer shows help panel when toggled" {
     const rendered = try renderProcessList(std.testing.allocator, &model);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expectEqualStrings(
+    try test_ansi.expectEqualPlain(
+        std.testing.allocator,
         "k/↑ move up      s/⏎ start process      / filter processes       d          show docs\n" ++
             "j/↓ move down    x   stop process       ⏎ apply filter           ?          toggle help\n" ++
             "                 r   restart process    R toggle running only    ctrl+w     toggle focus\n" ++
@@ -567,7 +673,7 @@ test "process list renderer shows focused filter prompt" {
     const rendered = try renderProcessList(std.testing.allocator, &model);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("Filter: alpha\n> ■ alpha-api\n", rendered);
+    try test_ansi.expectEqualPlain(std.testing.allocator, "Filter: alpha\n> ■ alpha-api\n", rendered);
 }
 
 test "process list renderer shows submitted filter indicator" {
@@ -593,7 +699,7 @@ test "process list renderer shows submitted filter indicator" {
     const rendered = try renderProcessList(std.testing.allocator, &model);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("Filter: alpha (/ to edit, esc to clear)\n> ■ alpha-api\n", rendered);
+    try test_ansi.expectEqualPlain(std.testing.allocator, "Filter: alpha (/ to edit, esc to clear)\n> ■ alpha-api\n", rendered);
 }
 
 test "process list renderer keeps filter prompt when no processes match" {
