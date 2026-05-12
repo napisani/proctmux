@@ -525,6 +525,68 @@ test "app client mode refreshes render after process command broadcast" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "● api") != null);
 }
 
+test "app client mode keypress redraws avoid repeated full-screen clears" {
+    const tmp_path = "/tmp/proctmux-zig-app-client-repaint-test";
+    const config_path = tmp_path ++ "/proctmux.yaml";
+    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    defer std.fs.deleteFileAbsolute(config_path) catch {};
+    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+
+    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close();
+    try dir.writeFile(.{
+        .sub_path = "proctmux.yaml",
+        .data =
+        \\procs:
+        \\  api:
+        \\    shell: "sleep 5"
+        \\  worker:
+        \\    shell: "sleep 5"
+        \\
+        ,
+    });
+
+    var loaded = try config.load.loadFileInDir(std.testing.allocator, dir, "proctmux.yaml");
+    defer loaded.deinit();
+    const socket_path = try ipc.socket.pathForConfig(std.testing.allocator, &loaded.config);
+    defer std.testing.allocator.free(socket_path);
+
+    var stopped = std.atomic.Value(bool).init(false);
+    var run_state = AppPrimaryRun{
+        .dir_path = tmp_path,
+        .stopped = &stopped,
+    };
+    const thread = try std.Thread.spawn(.{}, runPrimaryApp, .{&run_state});
+    var thread_joined = false;
+    errdefer {
+        if (!thread_joined) {
+            stopped.store(true, .seq_cst);
+            unblockServer(socket_path);
+            thread.join();
+        }
+    }
+    try waitForSocketFile(socket_path);
+
+    var input = test_io.BytesInput{ .data = "jkjkq" };
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+    try runInDirWithInput(std.testing.allocator, dir, &.{"--client"}, test_io.BytesInput.reader(&input), test_io.TestOutput.writer(&out));
+
+    stopped.store(true, .seq_cst);
+    unblockServer(socket_path);
+    thread.join();
+    thread_joined = true;
+    if (run_state.err) |err| return err;
+
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "worker") != null);
+    try std.testing.expect(countOccurrences(out.items, "\x1b[?25l") >= 1);
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(out.items, "\x1b[?25h"));
+    try std.testing.expect(countOccurrences(out.items, "\x1b[2J") <= 1);
+}
+
 test "app client mode maps down arrow to process navigation" {
     const tmp_path = "/tmp/proctmux-zig-app-client-arrow-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
@@ -748,7 +810,8 @@ test "app client mode renders command failure message and keeps running" {
     if (run_state.err) |err| return err;
 
     try std.testing.expect(std.mem.indexOf(u8, out.items, "No matching processes") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "Messages:\n- no process selected") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "Messages:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "- no process selected") != null);
 }
 
 test "app client mode quit stops running primary processes" {
@@ -1051,6 +1114,59 @@ test "app unified mode forwards server-focused input to selected process" {
     try test_io.waitForFileContains(dir, "got.txt", "hello");
 }
 
+test "app unified mode process output redraws avoid repeated full-screen clears" {
+    const tmp_path = "/tmp/proctmux-zig-app-unified-repaint-test";
+    const config_path = tmp_path ++ "/proctmux.yaml";
+    const done_path = tmp_path ++ "/done.txt";
+    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    defer std.fs.deleteFileAbsolute(config_path) catch {};
+    defer std.fs.deleteFileAbsolute(done_path) catch {};
+    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+
+    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close();
+    try dir.writeFile(.{
+        .sub_path = "proctmux.yaml",
+        .data =
+        \\procs:
+        \\  api:
+        \\    cwd: "/tmp/proctmux-zig-app-unified-repaint-test"
+        \\    shell: |
+        \\      i=1
+        \\      while [ "$i" -le 5 ]; do
+        \\        printf 'LINE_%s\n' "$i"
+        \\        i=$((i + 1))
+        \\        sleep 0.1
+        \\      done
+        \\      printf done > done.txt
+        \\      sleep 5
+        \\    autostart: true
+        \\    stop_timeout_ms: 500
+        \\
+        ,
+    });
+
+    var input = test_io.FileGateInput{
+        .dir = &dir,
+        .path = "done.txt",
+        .needle = "done",
+        .first = "j",
+        .second = "q",
+    };
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try runInDirWithInput(std.testing.allocator, dir, &.{"--unified"}, test_io.FileGateInput.reader(&input), test_io.TestOutput.writer(&out));
+
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "LINE_") != null);
+    try std.testing.expect(countOccurrences(out.items, "\x1b[?25l") >= 1);
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(out.items, "\x1b[?25h"));
+    try std.testing.expect(countOccurrences(out.items, "\x1b[2J") <= 1);
+}
+
 const AppPrimaryRun = struct {
     dir_path: []const u8,
     stopped: *std.atomic.Value(bool),
@@ -1152,6 +1268,18 @@ fn handleMaybeSignalCommand(
 fn unblockServer(path: []const u8) void {
     var stream = std.net.connectUnixSocket(path) catch return;
     stream.close();
+}
+
+fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
+    if (needle.len == 0) return 0;
+
+    var count: usize = 0;
+    var rest = haystack;
+    while (std.mem.indexOf(u8, rest, needle)) |index| {
+        count += 1;
+        rest = rest[index + needle.len ..];
+    }
+    return count;
 }
 
 fn waitForSocketFile(path: []const u8) !void {

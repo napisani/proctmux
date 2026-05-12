@@ -275,15 +275,9 @@ procs:
 
 // TestUnified_RapidStdout_NoExcessiveRepaints verifies that when a process
 // emits output rapidly, the terminal does not flash by issuing excessive
-// full-screen repaints. This reproduces a bug where the unified-left mode
-// repaints the entire terminal on every poll tick when process output is
-// changing rapidly.
-//
-// Root cause: lipgloss.JoinHorizontal merges client and server pane content
-// into single composite lines. When the server pane updates (every 75ms poll),
-// every composite line differs from the previous render, causing Bubble Tea's
-// line-level diff to repaint ALL lines — including the unchanged client pane.
-// This manifests as visible flashing/flickering of the entire terminal.
+// full-screen clears or line rewrites. This catches both renderers that emit
+// ESC[2J on every frame and line-diff renderers that rewrite most terminal rows
+// when only process output changes.
 func TestUnified_RapidStdout_NoExcessiveRepaints(t *testing.T) {
 	// The shell command outputs 500 numbered lines as fast as possible,
 	// then sleeps to keep the process alive for the test assertions.
@@ -335,8 +329,8 @@ procs:
 	clearSeq := []byte("\033[2J")
 	clearCount := countOccurrences(newOutput, clearSeq)
 
-	// Count "erase line" sequences (ESC[2K) — Bubble Tea emits these when
-	// repainting a line. Each one means a line was cleared and rewritten.
+	// Count "erase line" sequences (ESC[2K). Some TUI renderers emit these
+	// when repainting a line. Each one means a line was cleared and rewritten.
 	// A high count relative to the number of render cycles means many lines
 	// are being repainted per frame.
 	eraseLineSeq := []byte("\033[2K")
@@ -353,44 +347,15 @@ procs:
 	t.Logf("Erase-line sequences (ESC[2K): %d", eraseLineCount)
 	t.Logf("Total cursor-up lines: %d", cursorUpCount)
 
-	// In 3 seconds at 75ms poll interval, we expect ~40 terminal frames.
-	// Bubble Tea renders at 60fps max, so up to ~180 frames.
-	//
-	// If the renderer is efficiently diffing, only server-pane lines should
-	// be repainted. For a 40-row terminal with a ~24-col client pane, only
-	// the server portion of each line should change. But because
-	// JoinHorizontal creates composite lines, ALL lines change.
-	//
-	// For a 40-row terminal with ~180 frames, inefficient repainting would
-	// produce: ~180 frames × ~39 erase-lines = ~7000 erase-line sequences.
-	// Efficient repainting (only server pane lines, or no unnecessary repaints)
-	// would produce significantly fewer.
-	//
-	// We set a threshold that catches the pathological case while allowing
-	// some overhead. In an efficient renderer, only the server-pane lines
-	// would change between frames. For a 40-row terminal where the server
-	// pane occupies ~39 rows (minus status bar), and ~40 frames in 3 seconds
-	// (75ms poll), an efficient renderer that only repaints changed server
-	// lines would produce ~40 × 39 = ~1560 erase-lines at most.
-	//
-	// However, if the CLIENT pane lines are also being repainted (because
-	// JoinHorizontal merges both panes into each line), the count will be
-	// similar but EVERY line in EVERY frame changes needlessly. We can
-	// detect this by checking if the erase-line count is proportional to
-	// total_rows × frames rather than just server_rows × frames.
-	//
-	// For now, we log the data for diagnostic purposes. The flashing is
-	// confirmed by the high per-frame repaint count relative to terminal
-	// rows. A future fix should bring this number down significantly.
+	// In 3 seconds at a 75ms poll interval, we expect roughly 40 terminal
+	// frames. The threshold allows normal repaint overhead while catching the
+	// pathological case where most rows are cleared and rewritten each frame.
 	maxAcceptableEraseLines := 2000
 	if eraseLineCount > maxAcceptableEraseLines {
 		t.Errorf("excessive line repaints detected: %d erase-line sequences in 3s "+
 			"(max acceptable: %d)\n"+
 			"This indicates the terminal is flashing/flickering during rapid output.\n"+
-			"Each render frame is repainting most/all lines instead of only changed ones.\n"+
-			"Likely cause: lipgloss.JoinHorizontal creates composite lines where both\n"+
-			"client and server content are on the same line, so Bubble Tea's line-level\n"+
-			"diff sees every line as changed when only the server pane updates.",
+			"Each render frame is repainting most/all lines instead of only changed ones.",
 			eraseLineCount, maxAcceptableEraseLines)
 	}
 
@@ -404,6 +369,301 @@ procs:
 	snap := sess.Snapshot()
 	if !strings.Contains(snap, "rapid-output") {
 		t.Errorf("client pane lost process label during rapid output:\n%s", snap)
+	}
+}
+
+func TestUnified_Keypress_NoExcessiveFullClears(t *testing.T) {
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+log_file: /tmp/proctmux-test-unified-keypress-clears.log
+procs:
+  alpha-service:
+    shell: "sleep 60"
+  beta-worker:
+    shell: "sleep 60"
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "alpha-service") &&
+			strings.Contains(snap, "beta-worker")
+	}); err != nil {
+		t.Fatalf("process list not shown: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	baselineRaw := sess.RawOutput()
+	for _, key := range []rune{'j', 'k', 'j', 'k'} {
+		if err := sess.SendRunes(key); err != nil {
+			t.Fatalf("send key %q: %v", key, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	time.Sleep(250 * time.Millisecond)
+
+	fullRaw := sess.RawOutput()
+	newOutput := fullRaw[len(baselineRaw):]
+	clearCount := countOccurrences(newOutput, []byte("\033[2J"))
+
+	t.Logf("Keypress measurement raw bytes: %d", len(newOutput))
+	t.Logf("Full-screen clears after keypresses (ESC[2J): %d", clearCount)
+
+	if clearCount > 1 {
+		t.Errorf("excessive full-screen clears after keypresses: %d (max acceptable: 1)", clearCount)
+	}
+}
+
+func TestUnified_CursorHiddenDuringNavigationAndOutput(t *testing.T) {
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+log_file: /tmp/proctmux-test-unified-cursor-hidden.log
+procs:
+  cursor-output:
+    shell: "for i in $(seq 1 60); do echo \"CURSOR_LINE_$i\"; sleep 0.03; done; sleep 60"
+    autostart: true
+  idle-worker:
+    shell: "sleep 60"
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "cursor-output") &&
+			strings.Contains(snap, "idle-worker")
+	}); err != nil {
+		t.Fatalf("process list not shown: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+	if sess.CursorVisible() {
+		t.Fatalf("cursor is visible after initial unified render")
+	}
+
+	if err := sess.SendRunes('j'); err != nil {
+		t.Fatalf("send selection key: %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "CURSOR_LINE_")
+	}); err != nil {
+		t.Fatalf("process output never appeared: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+	if sess.CursorVisible() {
+		t.Fatalf("cursor is visible while selected process is emitting output")
+	}
+
+	baselineRaw := sess.RawOutput()
+	for _, key := range []rune{'j', 'k', 'j', 'k'} {
+		if err := sess.SendRunes(key); err != nil {
+			t.Fatalf("send key %q: %v", key, err)
+		}
+		time.Sleep(75 * time.Millisecond)
+	}
+	time.Sleep(250 * time.Millisecond)
+
+	fullRaw := sess.RawOutput()
+	newOutput := fullRaw[len(baselineRaw):]
+	hideCount := countOccurrences(fullRaw, []byte("\033[?25l"))
+	showDuringNavigationCount := countOccurrences(newOutput, []byte("\033[?25h"))
+
+	t.Logf("Cursor hide sequences in full transcript (ESC[?25l): %d", hideCount)
+	t.Logf("Cursor show sequences during navigation/output window (ESC[?25h): %d", showDuringNavigationCount)
+
+	if hideCount == 0 {
+		t.Fatalf("cursor was never hidden during unified TUI session")
+	}
+	if showDuringNavigationCount > 0 {
+		t.Fatalf("cursor was shown during active navigation/output window: %d show sequences", showDuringNavigationCount)
+	}
+	if sess.CursorVisible() {
+		t.Fatalf("cursor is visible after navigation while output is active")
+	}
+}
+
+func TestUnified_ProcessSwitchToStoppedShowsOnlyPlaceholder(t *testing.T) {
+	const stoppedStaleTail = "STOPPED_STALE_SUFFIX_abcdefghijklmnopqrstuvwxyz"
+	const alphaToken = "ABCDEFGHIJK" + stoppedStaleTail
+
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+layout:
+  placeholder_banner: "IDLE BANNER"
+log_file: /tmp/proctmux-test-unified-switch-stopped.log
+procs:
+  alpha-running:
+    shell: "printf '`+alphaToken+`\n'; sleep 60"
+    autostart: true
+  beta-stopped:
+    shell: "sleep 60"
+    autostart: false
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "alpha-running") &&
+			strings.Contains(snap, "beta-stopped")
+	}); err != nil {
+		t.Fatalf("process list not shown: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, alphaToken)
+	}); err != nil {
+		t.Fatalf("initial running process output never appeared: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.SendRunes('j'); err != nil {
+		t.Fatalf("select stopped process: %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "IDLE BANNER")
+	}); err != nil {
+		t.Fatalf("placeholder never appeared after selecting stopped process: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	snap := sess.Snapshot()
+	if strings.Contains(snap, stoppedStaleTail) {
+		t.Fatalf("stale running-process output remained after selecting stopped process:\n%s", snap)
+	}
+}
+
+func TestUnified_ProcessSwitchRunningToRunningShowsOnlyActiveOutput(t *testing.T) {
+	const runningStaleTail = "RUNNING_STALE_SUFFIX_abcdefghijklmnopqrstuvwxyz"
+	const betaToken = "BETA_OUTPUT"
+	const alphaToken = "ABCDEFGHIJK" + runningStaleTail
+
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+layout:
+  placeholder_banner: "IDLE BANNER"
+log_file: /tmp/proctmux-test-unified-switch-running.log
+procs:
+  alpha-running:
+    shell: "printf '`+alphaToken+`\n'; sleep 60"
+    autostart: true
+  beta-running:
+    shell: "printf '`+betaToken+`\n'; sleep 60"
+    autostart: true
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "alpha-running") &&
+			strings.Contains(snap, "beta-running")
+	}); err != nil {
+		t.Fatalf("process list not shown: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, alphaToken)
+	}); err != nil {
+		t.Fatalf("initial running process output never appeared: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.SendRunes('j'); err != nil {
+		t.Fatalf("select second running process: %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, betaToken)
+	}); err != nil {
+		t.Fatalf("second running process output never appeared: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	snap := sess.Snapshot()
+	if strings.Contains(snap, runningStaleTail) {
+		t.Fatalf("stale first-process output remained after selecting second running process:\n%s", snap)
+	}
+	if strings.Contains(snap, "IDLE BANNER") {
+		t.Fatalf("placeholder remained after selecting running process:\n%s", snap)
+	}
+}
+
+func TestUnified_StartSelectedStoppedProcessShowsItsOutput(t *testing.T) {
+	const startedToken = "START_SELECTED_OUTPUT"
+
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+layout:
+  placeholder_banner: "IDLE BANNER"
+log_file: /tmp/proctmux-test-unified-start-selected.log
+procs:
+  start-target:
+    shell: "printf '`+startedToken+`\n'; sleep 60"
+    autostart: false
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "start-target")
+	}); err != nil {
+		t.Fatalf("process list not shown: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.SendRunes('j'); err != nil {
+		t.Fatalf("select stopped process: %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "IDLE BANNER")
+	}); err != nil {
+		t.Fatalf("placeholder never appeared after selecting stopped process: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.SendRunes('s'); err != nil {
+		t.Fatalf("start selected process: %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, startedToken)
+	}); err != nil {
+		t.Fatalf("started process output never appeared: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	snap := sess.Snapshot()
+	if strings.Contains(snap, "IDLE BANNER") {
+		t.Fatalf("placeholder remained after starting selected process:\n%s", snap)
+	}
+}
+
+func TestUnified_RestartSelectedProcessShowsRestartedOutput(t *testing.T) {
+	cfgDir, cfgPath := e2e.WriteConfig(t, `
+layout:
+  placeholder_banner: "IDLE BANNER"
+log_file: /tmp/proctmux-test-unified-restart-selected.log
+procs:
+  restart-target:
+    shell: |
+      n=0
+      if [ -f restart-count.txt ]; then n=$(cat restart-count.txt); fi
+      n=$((n + 1))
+      printf '%s' "$n" > restart-count.txt
+      printf 'RESTART_SELECTED_OUTPUT_%s\n' "$n"
+      sleep 60
+    autostart: true
+`)
+
+	sess := e2e.StartUnifiedSession(t, cfgDir, cfgPath)
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "restart-target")
+	}); err != nil {
+		t.Fatalf("process list not shown: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "RESTART_SELECTED_OUTPUT_1")
+	}); err != nil {
+		t.Fatalf("initial process output never appeared: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.SendRunes('r'); err != nil {
+		t.Fatalf("restart selected process: %v", err)
+	}
+	if err := sess.WaitForSnapshot(10*time.Second, func(snap string) bool {
+		return strings.Contains(snap, "RESTART_SELECTED_OUTPUT_2")
+	}); err != nil {
+		t.Fatalf("restarted process output never appeared: %v\nSnapshot:\n%s", err, sess.Snapshot())
+	}
+
+	snap := sess.Snapshot()
+	if strings.Contains(snap, "IDLE BANNER") {
+		t.Fatalf("placeholder remained after restarting selected process:\n%s", snap)
+	}
+	if strings.Contains(snap, "RESTART_SELECTED_OUTPUT_1") {
+		t.Fatalf("previous run output remained after restarting selected process:\n%s", snap)
 	}
 }
 

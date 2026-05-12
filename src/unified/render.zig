@@ -7,17 +7,16 @@ const tui = @import("../tui/root.zig");
 const client_mode = @import("../modes/client.zig");
 const child_primary = @import("child_primary.zig");
 
-const clear_frame_sequence = "\x1b[2J\x1b[H";
-
 pub fn child(
     session: *tui.client_session.ClientSession,
     split: *const tui.split_model.Model,
     child_primary_server: *child_primary.ChildPrimary,
     output: io.Output,
 ) !void {
-    try output.writeAll(clear_frame_sequence);
+    try output.writeAll(terminal.repaint.begin_frame);
     try childContent(session, split, child_primary_server, output);
     try writeStatusBar(session, split, output);
+    try output.writeAll(terminal.repaint.end_frame);
 }
 
 pub fn inProcess(
@@ -26,9 +25,10 @@ pub fn inProcess(
     primary_server: *primary.Server,
     output: io.Output,
 ) !void {
-    try output.writeAll(clear_frame_sequence);
+    try output.writeAll(terminal.repaint.begin_frame);
     try inProcessContent(session, split, primary_server, output);
     try writeStatusBar(session, split, output);
+    try output.writeAll(terminal.repaint.end_frame);
 }
 
 fn writeStatusBar(
@@ -39,7 +39,7 @@ fn writeStatusBar(
     const status = try split.statusBar(session.allocator);
     defer session.allocator.free(status);
     if (status.len > 0) {
-        try output.writeAll(status);
+        try io.writeTextClearingLineTails(output, status, terminal.repaint.clear_line_tail);
         try output.writeAll("\n");
     }
 }
@@ -131,7 +131,7 @@ fn writeSplitContent(
 
 fn writeTextBlock(output: io.Output, text: []const u8) !void {
     if (text.len == 0) return;
-    try output.writeAll(text);
+    try io.writeTextClearingLineTails(output, text, terminal.repaint.clear_line_tail);
     if (text[text.len - 1] != '\n') try output.writeAll("\n");
 }
 
@@ -155,6 +155,7 @@ fn writeSideBySide(output: io.Output, left: []const u8, right: []const u8, left_
             try writeSpaces(output, gap);
             try output.writeAll(right_line);
         }
+        try output.writeAll(terminal.repaint.clear_line_tail);
         try output.writeAll("\n");
     }
 }

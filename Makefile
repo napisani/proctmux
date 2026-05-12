@@ -10,6 +10,7 @@ ZIG ?= zig
 ZIG_OUT=zig-out
 ZIG_CACHE_DIR ?= .zig-cache/global
 ZIG_YAML_MODULE ?= third_party/zig-yaml/src/lib.zig
+ZIG_E2E_RUN ?= TestUnified_(RapidStdout_NoExcessiveRepaints|Keypress_NoExcessiveFullClears|CursorHiddenDuringNavigationAndOutput|ProcessSwitchToStoppedShowsOnlyPlaceholder|ProcessSwitchRunningToRunningShowsOnlyActiveOutput|StartSelectedStoppedProcessShowsItsOutput|RestartSelectedProcessShowsRestartedOutput)
 GO_REFERENCE_BINARY=$(BUILD_DIR)/$(BINARY_NAME)-go-reference
 zig_platform_flags = -target $(1) -lc $(if $(findstring macos,$(1)),--sysroot $(MACOS_SDK),)
 UNAME_S := $(shell uname -s)
@@ -211,6 +212,11 @@ test-e2e:
 	@echo "Running integration (e2e) tests..."
 	go test -tags=integration ./tests/e2e -v
 
+.PHONY: test-zig-e2e
+test-zig-e2e: build-zig
+	@echo "Running focused integration (e2e) tests against the Zig binary..."
+	PROCTMUX_E2E_BIN="$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME)" go test -tags=integration ./tests/e2e -run '$(ZIG_E2E_RUN)' -v
+
 .PHONY: test-race
 test-race:
 	@echo "Running race detector tests..."
@@ -351,6 +357,7 @@ help:
 	@echo "  make tidy       - Tidy up dependencies"
 	@echo "  make test       - Run tests"
 	@echo "  make test-zig   - Run Zig tests"
+	@echo "  make test-zig-e2e - Run focused TUI e2e tests against the Zig binary"
 	@echo "  make test-release-parity - Run all Zig port parity gates"
 	@echo "  make build-go-reference - Build Go reference binary for parity tests"
 	@echo "  make test-e2e   - Run integration (e2e) tests"

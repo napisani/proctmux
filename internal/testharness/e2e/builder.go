@@ -28,6 +28,10 @@ func init() {
 func Binary(t testing.TB) string {
 	t.Helper()
 
+	if bin := os.Getenv("PROCTMUX_E2E_BIN"); bin != "" {
+		return bin
+	}
+
 	buildOnce.Do(func() {
 		tmpDir, err := os.MkdirTemp("", "proctmux-e2e-bin-*")
 		if err != nil {

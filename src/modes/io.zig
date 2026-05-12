@@ -20,6 +20,23 @@ pub const Output = struct {
     }
 };
 
+pub fn writeTextClearingLineTails(output: Output, text: []const u8, clear_line_tail: []const u8) !void {
+    var start: usize = 0;
+    for (text, 0..) |byte, index| {
+        if (byte != '\n') continue;
+
+        if (index > start) try output.writeAll(text[start..index]);
+        try output.writeAll(clear_line_tail);
+        try output.writeAll("\n");
+        start = index + 1;
+    }
+
+    if (start < text.len) {
+        try output.writeAll(text[start..]);
+        try output.writeAll(clear_line_tail);
+    }
+}
+
 pub const FileInput = struct {
     pub fn reader(file: *std.fs.File) Input {
         return .{

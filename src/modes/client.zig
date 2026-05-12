@@ -1,10 +1,9 @@
 const std = @import("std");
 const config = @import("../config/root.zig");
 const ipc = @import("../ipc/root.zig");
+const terminal = @import("../terminal/root.zig");
 const tui = @import("../tui/root.zig");
 const io = @import("io.zig");
-
-const clear_frame_sequence = "\x1b[2J\x1b[H";
 
 pub fn run(
     allocator: std.mem.Allocator,
@@ -28,6 +27,9 @@ pub fn run(
         tui.client_session.IpcTransport.transport(&ipc_client),
     );
     defer session.deinit();
+
+    try output.writeAll(terminal.repaint.hide_cursor);
+    defer output.writeAll(terminal.repaint.show_cursor) catch {};
 
     try render(&session, output);
 
@@ -114,10 +116,11 @@ fn handleInput(
 }
 
 fn render(session: *tui.client_session.ClientSession, output: io.Output) !void {
-    try output.writeAll(clear_frame_sequence);
+    try output.writeAll(terminal.repaint.begin_frame);
     const rendered = try renderText(session);
     defer session.allocator.free(rendered);
-    try output.writeAll(rendered);
+    try io.writeTextClearingLineTails(output, rendered, terminal.repaint.clear_line_tail);
+    try output.writeAll(terminal.repaint.end_frame);
 }
 
 pub fn renderText(session: *tui.client_session.ClientSession) ![]const u8 {

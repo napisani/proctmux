@@ -77,18 +77,16 @@ const clear_sequence = "\x1b[2J\x1b[H";
 
 fn runOutputLoop(state: *PrimaryOutputRun) void {
     var last_process_id = domain.process.ProcessId.fromInt(std.math.maxInt(u32));
+    var last_process_running = false;
     var emitted_len: usize = 0;
 
     while (!state.stopped.load(.seq_cst)) {
         const process_id = state.primary_server.currentProcessID();
-        if (process_id != last_process_id) {
+        const process_running = !process_id.isNone() and state.primary_server.controller.isRunning(process_id);
+        if (process_id != last_process_id or process_running != last_process_running) {
             emitted_len = 0;
-            if (process_id.isNone()) {
-                state.output.writeAll(clear_sequence) catch |err| {
-                    state.result = .{ .failed = err };
-                    return;
-                };
-                writePlaceholder(state.output, state.placeholder) catch |err| {
+            if (process_id.isNone() or !process_running) {
+                writeStoppedPlaceholder(state.output, state.placeholder, &emitted_len, true) catch |err| {
                     state.result = .{ .failed = err };
                     return;
                 };
@@ -99,7 +97,8 @@ fn runOutputLoop(state: *PrimaryOutputRun) void {
                 };
             }
             last_process_id = process_id;
-        } else if (!process_id.isNone()) {
+            last_process_running = process_running;
+        } else if (process_running) {
             writeScrollbackDelta(state, process_id, &emitted_len) catch |err| {
                 state.result = .{ .failed = err };
                 return;
@@ -127,9 +126,14 @@ fn writeScrollbackSnapshot(
     emitted_len: *usize,
     clear: bool,
 ) !void {
+    if (!state.primary_server.controller.isRunning(process_id)) {
+        try writeStoppedPlaceholder(state.output, state.placeholder, emitted_len, clear);
+        return;
+    }
+
     const bytes = state.primary_server.controller.getScrollback(state.allocator, process_id) catch |err| switch (err) {
         error.ProcessNotFound => {
-            emitted_len.* = 0;
+            try writeStoppedPlaceholder(state.output, state.placeholder, emitted_len, clear);
             return;
         },
         else => return err,
@@ -146,6 +150,11 @@ fn writeScrollbackDelta(
     process_id: domain.process.ProcessId,
     emitted_len: *usize,
 ) !void {
+    if (!state.primary_server.controller.isRunning(process_id)) {
+        if (emitted_len.* != 0) try writeStoppedPlaceholder(state.output, state.placeholder, emitted_len, true);
+        return;
+    }
+
     const bytes = state.primary_server.controller.getScrollback(state.allocator, process_id) catch |err| switch (err) {
         error.ProcessNotFound => {
             emitted_len.* = 0;
@@ -162,6 +171,12 @@ fn writeScrollbackDelta(
         try state.output.writeAll(bytes[emitted_len.*..]);
     }
     emitted_len.* = bytes.len;
+}
+
+fn writeStoppedPlaceholder(output: io.Output, placeholder: []const u8, emitted_len: *usize, clear: bool) !void {
+    emitted_len.* = 0;
+    if (clear) try output.writeAll(clear_sequence);
+    try writePlaceholder(output, placeholder);
 }
 
 const PrimaryInputRun = struct {

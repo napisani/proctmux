@@ -179,6 +179,9 @@ const RenderTarget = union(enum) {
 };
 
 fn runInteractiveRuntime(runtime: RuntimeSession) !void {
+    try runtime.output.writeAll(terminal.repaint.hide_cursor);
+    defer runtime.output.writeAll(terminal.repaint.show_cursor) catch {};
+
     try resizeLayout(runtime.session, runtime.split, runtime.input, runtime.output);
 
     var render_mutex = std.Thread.Mutex{};

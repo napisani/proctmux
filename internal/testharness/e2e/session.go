@@ -25,17 +25,19 @@ var (
 )
 
 type terminalState struct {
-	rows, cols int
-	cursorRow  int
-	cursorCol  int
-	cells      [][]rune
+	rows, cols    int
+	cursorRow     int
+	cursorCol     int
+	cursorVisible bool
+	cells         [][]rune
 }
 
 func newTerminalState(rows, cols int) *terminalState {
 	t := &terminalState{
-		rows:  rows,
-		cols:  cols,
-		cells: make([][]rune, rows),
+		rows:          rows,
+		cols:          cols,
+		cursorVisible: true,
+		cells:         make([][]rune, rows),
 	}
 	for i := range t.cells {
 		t.cells[i] = make([]rune, cols)
@@ -55,6 +57,34 @@ func (t *terminalState) clear() {
 	}
 	t.cursorRow = 0
 	t.cursorCol = 0
+}
+
+func (t *terminalState) clearFromCursorToEnd() {
+	row := clamp(t.cursorRow, 0, t.rows-1)
+	col := clamp(t.cursorCol, 0, t.cols-1)
+	for r := row; r < t.rows; r++ {
+		startCol := 0
+		if r == row {
+			startCol = col
+		}
+		for c := startCol; c < t.cols; c++ {
+			t.cells[r][c] = ' '
+		}
+	}
+}
+
+func (t *terminalState) clearFromStartToCursor() {
+	row := clamp(t.cursorRow, 0, t.rows-1)
+	col := clamp(t.cursorCol, 0, t.cols-1)
+	for r := 0; r <= row; r++ {
+		endCol := t.cols - 1
+		if r == row {
+			endCol = col
+		}
+		for c := 0; c <= endCol; c++ {
+			t.cells[r][c] = ' '
+		}
+	}
 }
 
 func (t *terminalState) apply(data []byte) {
@@ -159,6 +189,7 @@ func (t *terminalState) handleCSI(data []byte, start int) int {
 
 func (t *terminalState) executeCSI(final byte, params []int, private bool) {
 	if private {
+		t.executePrivateCSI(final, params)
 		return
 	}
 
@@ -194,7 +225,12 @@ func (t *terminalState) executeCSI(final byte, params []int, private bool) {
 		t.cursorCol = clamp(col-1, 0, t.cols-1)
 	case 'J':
 		mode := getParam(params, 0, 0)
-		if mode == 2 || mode == 0 {
+		switch mode {
+		case 0:
+			t.clearFromCursorToEnd()
+		case 1:
+			t.clearFromStartToCursor()
+		case 2:
 			t.clear()
 		}
 	case 'K':
@@ -215,6 +251,20 @@ func (t *terminalState) executeCSI(final byte, params []int, private bool) {
 		}
 	case 'm':
 		// ignore style changes
+	}
+}
+
+func (t *terminalState) executePrivateCSI(final byte, params []int) {
+	for _, param := range params {
+		if param != 25 {
+			continue
+		}
+		switch final {
+		case 'h':
+			t.cursorVisible = true
+		case 'l':
+			t.cursorVisible = false
+		}
 	}
 }
 
@@ -498,6 +548,14 @@ func (s *Session) RawOutput() []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]byte(nil), s.raw...)
+}
+
+// CursorVisible returns whether the harness terminal currently considers the
+// cursor visible.
+func (s *Session) CursorVisible() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.screen.cursorVisible
 }
 
 // WaitFor waits until the sanitized transcript contains substring or times out.
