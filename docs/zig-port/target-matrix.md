@@ -1,7 +1,6 @@
 # Zig Port Target Matrix
 
-The Zig release path targets the same platform families supported by the
-previous Go release process.
+The Zig release path targets the supported Unix platform families.
 
 | Product platform | Zig target | Release build target |
 | --- | --- | --- |
@@ -29,8 +28,8 @@ Run these commands from a Nix development shell:
 ```bash
 make fmt-zig
 make test-zig
+make test-zig-e2e
 make build-zig
-make build-go-reference
 ```
 
 If `zig` is not on `PATH`, pass the pinned compiler explicitly:
@@ -44,6 +43,3 @@ make build-zig ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zi
 The Zig tests include Unix socket listener and process lifecycle coverage, so
 they must run in an environment that permits local socket binds and child
 process execution.
-
-The Go binary produced by `make build-go-reference` is used as the reference
-executable for parity tests.

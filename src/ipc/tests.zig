@@ -22,7 +22,7 @@ test {
     _ = server;
 }
 
-test "command names match Go protocol constants" {
+test "command names match wire protocol constants" {
     try std.testing.expectEqualStrings("start", protocol.commandName(.start));
     try std.testing.expectEqualStrings("stop", protocol.commandName(.stop));
     try std.testing.expectEqualStrings("restart", protocol.commandName(.restart));
@@ -32,7 +32,7 @@ test "command names match Go protocol constants" {
     try std.testing.expectEqualStrings("list", protocol.commandName(.list));
 }
 
-test "command request serializes as Go-compatible JSON line" {
+test "command request serializes as legacy-compatible JSON line" {
     const encoded = try protocol.commandRequestLine(std.testing.allocator, "42", .start, "web");
     defer std.testing.allocator.free(encoded);
 
@@ -42,7 +42,7 @@ test "command request serializes as Go-compatible JSON line" {
     );
 }
 
-test "command request omits empty label like Go omitempty" {
+test "command request omits empty label like omitempty" {
     const encoded = try protocol.commandRequestLine(std.testing.allocator, "7", .list, "");
     defer std.testing.allocator.free(encoded);
 
@@ -52,7 +52,7 @@ test "command request omits empty label like Go omitempty" {
     );
 }
 
-test "command request escapes JSON string fields like Go" {
+test "command request escapes JSON string fields like legacy behavior" {
     const encoded = try protocol.commandRequestLine(std.testing.allocator, "44", .start, "web \"quoted\" \\ worker");
     defer std.testing.allocator.free(encoded);
 
@@ -62,7 +62,7 @@ test "command request escapes JSON string fields like Go" {
     );
 }
 
-test "command request parser reads Go-compatible JSON line" {
+test "command request parser reads legacy-compatible JSON line" {
     var request = try protocol.parseCommandRequestLine(
         std.testing.allocator,
         "{\"type\":\"command\",\"request_id\":\"42\",\"label\":\"web\",\"action\":\"restart\"}\n",
@@ -74,7 +74,7 @@ test "command request parser reads Go-compatible JSON line" {
     try std.testing.expectEqualStrings("web", request.label);
 }
 
-test "response line serialization matches Go omitempty shape" {
+test "response line serialization matches omitempty shape" {
     var items = [_]protocol.ProcessListItem{
         .{ .name = "api", .running = true, .index = 1 },
         .{ .name = "worker", .running = false, .index = 2 },
@@ -245,7 +245,7 @@ test "state message parser round-trips redacted state and process views" {
     try std.testing.expectEqual(@as(usize, 0), update.process_views[0].config.env.count());
 }
 
-test "state message parser accepts Go null slice fields" {
+test "state message parser accepts legacy null slice fields" {
     var update = try protocol.parseStateLine(std.testing.allocator,
         \\{"type":"state","state":{"Config":{"FilePath":"/tmp/proctmux-go-state.yaml","Keybinding":{"Quit":["q"]},"Layout":{},"Style":{},"General":{},"ShellCmd":null,"Procs":{"api":{"Shell":"sleep 5","Cmd":null,"MetaTags":null,"Categories":null,"AddPath":null,"OnKill":null}}},"CurrentProcID":0,"Processes":[{"ID":1,"Label":"api"}],"Exiting":false},"process_views":[{"ID":1,"Label":"api","Status":3,"PID":-1}]}
         \\
@@ -277,7 +277,7 @@ test "socket path uses proctmux prefix and active config hash" {
     try std.testing.expectEqualStrings(expected, path);
 }
 
-test "create socket path removes stale file like Go CreateSocket" {
+test "create socket path removes stale file like legacy socket creation" {
     var cfg = config.schema.Config.empty(std.testing.allocator);
     defer cfg.deinit();
     try config.defaults.apply(&cfg, std.testing.allocator);
@@ -390,7 +390,7 @@ test "client skips state broadcasts while waiting for command response" {
     try std.testing.expectEqualStrings("52", response.request_id);
 }
 
-test "persistent client times out waiting for command response like Go" {
+test "persistent client times out waiting for command response like legacy behavior" {
     const path = "/tmp/proctmux-zig-ipc-client-response-timeout-test.socket";
     std.fs.deleteFileAbsolute(path) catch {};
     defer std.fs.deleteFileAbsolute(path) catch {};
@@ -417,7 +417,7 @@ test "persistent client times out waiting for command response like Go" {
     );
 }
 
-test "one-shot command client times out waiting for command response like Go" {
+test "one-shot command client times out waiting for command response like legacy behavior" {
     const path = "/tmp/proctmux-zig-ipc-one-shot-response-timeout-test.socket";
     std.fs.deleteFileAbsolute(path) catch {};
     defer std.fs.deleteFileAbsolute(path) catch {};
@@ -500,66 +500,6 @@ test "persistent client consumes state updates and command responses" {
     persistent.close();
     test_ipc.unblockServer(path);
     thread.join();
-}
-
-test "zig client lists processes from Go server" {
-    const allocator = std.testing.allocator;
-    const go_bin = try getGoInteropBinary(allocator);
-    defer allocator.free(go_bin);
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    try tmp.dir.writeFile(.{
-        .sub_path = "proctmux.yaml",
-        .data =
-        \\procs:
-        \\  api:
-        \\    shell: "sleep 5"
-        \\  worker:
-        \\    shell: "sleep 5"
-        \\
-        ,
-    });
-
-    const cwd = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(cwd);
-    const config_path = try std.fs.path.join(allocator, &.{ cwd, "proctmux.yaml" });
-    defer allocator.free(config_path);
-
-    var before = try snapshotProctmuxSockets(allocator);
-    defer deinitSocketSnapshot(allocator, &before);
-
-    var child = std.process.Child.init(&.{ go_bin, "-f", config_path }, allocator);
-    child.cwd = cwd;
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    try child.spawn();
-    defer stopInteropChild(&child);
-
-    const socket_path = try waitForNewResponsiveProctmuxSocket(allocator, &before, 5000);
-    defer allocator.free(socket_path);
-    defer std.fs.deleteFileAbsolute(socket_path) catch {};
-
-    var ipc_client = try client.Client.connect(allocator, socket_path);
-    defer ipc_client.deinit();
-
-    const request_id = try ipc_client.sendCommand(.list, "");
-    try std.testing.expectEqualStrings("1", request_id);
-
-    var response = try ipc_client.readResponse();
-    defer response.deinit(allocator);
-
-    try std.testing.expect(response.success);
-    try std.testing.expectEqualStrings("1", response.request_id);
-    try std.testing.expectEqual(@as(usize, 2), response.process_list.len);
-    try std.testing.expectEqualStrings("api", response.process_list[0].name);
-    try std.testing.expect(!response.process_list[0].running);
-    try std.testing.expectEqual(@as(i64, 1), response.process_list[0].index);
-    try std.testing.expectEqualStrings("worker", response.process_list[1].name);
-    try std.testing.expect(!response.process_list[1].running);
-    try std.testing.expectEqual(@as(i64, 2), response.process_list[1].index);
 }
 
 test "one-shot command server dispatches client request to handler" {
@@ -676,7 +616,7 @@ test "command server authorizes peer before serving request" {
     try std.testing.expect(response.success);
 }
 
-test "command server creates owner-only socket like Go" {
+test "command server creates owner-only socket like legacy behavior" {
     const path = "/tmp/proctmux-zig-ipc-server-mode-test.socket";
     std.fs.deleteFileAbsolute(path) catch {};
     defer std.fs.deleteFileAbsolute(path) catch {};
@@ -868,97 +808,6 @@ const OneShotCapture = struct {
 const DelayedSocketServer = struct {
     err: ?anyerror = null,
 };
-
-fn getGoInteropBinary(allocator: std.mem.Allocator) ![]const u8 {
-    return std.process.getEnvVarOwned(allocator, "PROCTMUX_GO_BIN") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => {
-            if (isEnvSet(allocator, "PROCTMUX_GO_INTEROP_REQUIRED")) return err;
-            return error.SkipZigTest;
-        },
-        else => return err,
-    };
-}
-
-fn isEnvSet(allocator: std.mem.Allocator, name: []const u8) bool {
-    const value = std.process.getEnvVarOwned(allocator, name) catch return false;
-    allocator.free(value);
-    return true;
-}
-
-fn snapshotProctmuxSockets(allocator: std.mem.Allocator) !std.StringHashMap(void) {
-    var sockets = std.StringHashMap(void).init(allocator);
-    errdefer deinitSocketSnapshot(allocator, &sockets);
-
-    var tmp_dir = try std.fs.openDirAbsolute("/tmp", .{ .iterate = true });
-    defer tmp_dir.close();
-
-    var entries = tmp_dir.iterate();
-    while (try entries.next()) |entry| {
-        if (!std.mem.startsWith(u8, entry.name, "proctmux-") or
-            !std.mem.endsWith(u8, entry.name, ".socket"))
-        {
-            continue;
-        }
-
-        const path = try std.fmt.allocPrint(allocator, "/tmp/{s}", .{entry.name});
-        errdefer allocator.free(path);
-        try sockets.put(path, {});
-    }
-
-    return sockets;
-}
-
-fn deinitSocketSnapshot(allocator: std.mem.Allocator, sockets: *std.StringHashMap(void)) void {
-    var keys = sockets.keyIterator();
-    while (keys.next()) |key| allocator.free(key.*);
-    sockets.deinit();
-}
-
-fn waitForNewResponsiveProctmuxSocket(
-    allocator: std.mem.Allocator,
-    before: *const std.StringHashMap(void),
-    timeout_ms: u64,
-) ![]const u8 {
-    const sleep_ms: u64 = 25;
-    var elapsed_ms: u64 = 0;
-    while (elapsed_ms < timeout_ms) : (elapsed_ms += sleep_ms) {
-        var tmp_dir = try std.fs.openDirAbsolute("/tmp", .{ .iterate = true });
-        defer tmp_dir.close();
-
-        var entries = tmp_dir.iterate();
-        while (try entries.next()) |entry| {
-            if (!std.mem.startsWith(u8, entry.name, "proctmux-") or
-                !std.mem.endsWith(u8, entry.name, ".socket"))
-            {
-                continue;
-            }
-
-            const path = try std.fmt.allocPrint(allocator, "/tmp/{s}", .{entry.name});
-            errdefer allocator.free(path);
-            if (before.contains(path)) {
-                allocator.free(path);
-                continue;
-            }
-
-            if (probeUnixSocket(path)) return path;
-            allocator.free(path);
-        }
-
-        std.Thread.sleep(sleep_ms * std.time.ns_per_ms);
-    }
-
-    return error.SocketWaitTimeout;
-}
-
-fn probeUnixSocket(path: []const u8) bool {
-    var stream = std.net.connectUnixSocket(path) catch return false;
-    stream.close();
-    return true;
-}
-
-fn stopInteropChild(child: *std.process.Child) void {
-    _ = child.kill() catch {};
-}
 
 fn runDelayedSocketServer(path: []const u8, state: *DelayedSocketServer) void {
     std.Thread.sleep(25 * std.time.ns_per_ms);

@@ -21,8 +21,8 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
-      - name: Run release parity tests
-        run: nix develop --command make test-release-parity
+      - name: Run release verification
+        run: nix develop --command make test-all
 
   # Build for multiple platforms
   build:

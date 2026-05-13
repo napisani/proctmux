@@ -2,8 +2,8 @@
 
 This document is the technical reference for `proctmux.yaml` configuration.
 All fields and defaults are derived from the source code in
-`internal/config/types.go`, `internal/config/defaults.go`, and
-`cmd/proctmux/config_init.go`.
+`src/config/schema.zig`, `src/config/defaults.zig`, and
+`src/config/template.zig`.
 
 ---
 
@@ -58,7 +58,7 @@ Controls the arrangement and behavior of UI elements.
 | `category_search_prefix` | string | `"cat:"` | Prefix for category-based filtering. Type this prefix followed by a category name in the filter bar to show only matching processes. |
 | `processes_list_width` | int | `30` | Width of the process list pane as a percentage of the terminal width. Clamped to the range 1--99. Values outside this range reset to 30. |
 | `sort_process_list_alpha` | bool | `false` | Sort the process list alphabetically by name. |
-| `sort_process_list_running_first` | bool | `false` | Sort running processes to the top of the list. Note: the Go zero value applies since no explicit default is set in code; the config-init template suggests `true`. |
+| `sort_process_list_running_first` | bool | `false` | Sort running processes to the top of the list. |
 | `placeholder_banner` | string | *(built-in ASCII art)* | ASCII art banner displayed in the output pane before any process is selected. Set to a custom string or leave empty. |
 | `enable_debug_process_info` | bool | `false` | Show extra debug information (categories, PID, status) next to each process in the list. |
 | `hide_process_list_when_unfocused` | bool | `false` | Only affects unified mode. When `true`, focusing the server pane (via `toggle_focus`, `focus_server`) hides the process list and lets the output fill the screen. Focusing the client pane (via `toggle_focus`, `focus_client`) restores the process list. The status bar shows "process list hidden" when the list is hidden. Primary and client modes ignore this setting. |
@@ -261,7 +261,7 @@ log_file: "/tmp/proctmux.log"
 
 procs:
   api-server:
-    shell: "go run ./cmd/server"
+    shell: "node ./server.js"
     cwd: "./backend"
     env:
       PORT: "8080"
@@ -271,7 +271,7 @@ procs:
     autofocus: true
     description: "Backend API server"
     docs: |
-      Runs the Go API server on port 8080.
+      Runs the API server on port 8080.
       Requires a running database (see 'postgres' process).
     categories: ["backend", "core"]
     stop: 2

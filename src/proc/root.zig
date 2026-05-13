@@ -86,7 +86,7 @@ test "command builder uses argv command and returns null for empty command" {
     try std.testing.expectEqualStrings("/tmp", spec.argv[2]);
 }
 
-test "environment builder appends add_path and custom env like Go" {
+test "environment builder appends add_path and custom env like legacy behavior" {
     var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
     defer proc_cfg.deinit(std.testing.allocator);
     try config.schema.appendOwned(std.testing.allocator, &proc_cfg.add_path, "/custom/bin");

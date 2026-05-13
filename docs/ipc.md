@@ -15,14 +15,14 @@ proctmux instances can run side by side without conflict.
 
 ## Socket Discovery
 
-The `internal/ipc/socket.go` module provides three functions for socket
+The `src/ipc/socket.zig` module provides three functions for socket
 lifecycle management:
 
 | Function | Behavior |
 |---|---|
-| `ipc.CreateSocket(cfg)` | Computes the socket path from the config hash, removes any existing socket file at that path, and returns the path for the server to listen on. |
-| `ipc.GetSocket(cfg)` | Computes the socket path, verifies the file exists, then probes it with a test TCP connection (500ms timeout) to confirm the server is alive. Returns an error if the socket is missing or unresponsive. |
-| `ipc.WaitForSocket(cfg)` | Polls every 100ms for up to 30 seconds, waiting for the socket file to appear and pass the probe check. An optional progress callback variant (`WaitForSocketWithProgress`) reports elapsed and total time. |
+| `ipc.socket.createPathForConfig()` | Computes the socket path from the config hash, removes any existing socket file at that path, and returns the path for the server to listen on. |
+| `ipc.socket.getPathForConfig()` | Computes the socket path, verifies the file exists, then probes it with a Unix socket connection to confirm the server is alive. Returns an error if the socket is missing or unresponsive. |
+| `ipc.socket.waitPathForConfig()` | Polls every 100ms for up to 30 seconds, waiting for the socket file to appear and pass the probe check. |
 
 ---
 
@@ -174,7 +174,7 @@ Connections from a different UID are rejected with an error.
 
 ### Config redaction
 
-The `internal/redact/` package strips environment variable values from
+The `src/redact/` module strips environment variable values from
 process configs before IPC transmission. Specifically, the `Env` field on
 every process config is set to `nil` in the redacted copy. This ensures
 secrets defined in `env:` blocks are never sent to IPC clients.
@@ -188,11 +188,10 @@ clients.
 
 ---
 
-## Client Channel Model
+## Client State Model
 
-Each IPC client maintains a buffered Go channel (capacity 10) for receiving
-state updates. When the server broadcasts a state change, it is sent to each
-client's channel. If the channel is full (the client is not consuming updates
-fast enough), the update is dropped and a warning is logged. This
-back-pressure mechanism ensures that a slow client cannot block the server or
-other clients.
+Each stateful IPC client connection is served by its own thread. The server
+broadcasts state lines directly to connected clients, guarded by a per-client
+write mutex and a 2-second socket write timeout. If a client disconnects or
+cannot consume a broadcast quickly enough, that write is dropped and the client
+is closed so one slow client cannot block the server or other clients.

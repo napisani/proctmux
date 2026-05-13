@@ -5,8 +5,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/d1c15b7d5806069da59e819999d70e1cec0760bf";
     flake-utils.url = "github:numtide/flake-utils";
-    goflake.url = "github:sagikazarmark/go-flake";
-    goflake.inputs.nixpkgs.follows = "nixpkgs";
+    agent-tui-src = {
+      url = "github:pproenca/agent-tui";
+      flake = false;
+    };
   };
 
   outputs =
@@ -14,58 +16,70 @@
       self,
       nixpkgs,
       flake-utils,
-      goflake,
+      agent-tui-src,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        lib = pkgs.lib;
 
-        # Use go_1_26 instead of the default go package
-        go = pkgs.go_1_26;
+        agent-tui = pkgs.rustPlatform.buildRustPackage {
+          pname = "agent-tui";
+          version = "1.0.2";
+          src = "${agent-tui-src}/cli";
+          cargoLock.lockFile = "${agent-tui-src}/cli/Cargo.lock";
+          cargoBuildFlags = [
+            "-p"
+            "agent-tui"
+            "--ignore-rust-version"
+          ];
+          doCheck = false;
+          AGENT_TUI_VERSION = "1.0.2";
+          AGENT_TUI_GIT_SHA = builtins.substring 0 12 agent-tui-src.rev;
+        };
         buildDeps = with pkgs; [
           git
-          go
           gnumake
-          zig
+          python3
+          zig_0_15
+          agent-tui
         ];
-        devDeps =
-          with pkgs;
-          buildDeps
-          ++ [
-            gotools
-            goreleaser
-          ];
 
         # Generate a user-friendly version number.
         version = builtins.substring 0 8 self.lastModifiedDate;
 
       in
       {
-        packages.default = (pkgs.buildGoModule.override { go = go; }) {
+        packages.agent-tui = agent-tui;
+        packages.default = pkgs.stdenv.mkDerivation {
           pname = "proctmux";
           inherit version;
-          # In 'nix develop', we don't need a copy of the source tree
-          # in the Nix store.
-          src = ./.;
+          src = lib.cleanSource ./.;
 
-          # This hash locks the dependencies of this package. It is
-          # necessary because of how Go requires network access to resolve
-          # VCS.  See https://www.tweag.io/blog/2021-03-04-gomod2nix/ for
-          # details. Normally one can build with a fake sha256 and rely on native Go
-          # mechanisms to tell you what the hash should be or determine what
-          # it should be "out-of-band" with other tooling (eg. gomod2nix).
-          # To begin with it is recommended to set this, but one must
-          # remeber to bump this hash when your dependencies change.
-          #vendorSha256 = pkgs.lib.fakeSha256;
-          vendorHash = "sha256-5wwPv+ynhD5issLptTpESpKd/Cm3QJyqBL2mHZlTfis=";
+          nativeBuildInputs = with pkgs; [
+            gnumake
+            zig_0_15
+          ];
+
+          dontConfigure = true;
+
+          buildPhase = ''
+            runHook preBuild
+            make build-zig ZIG_CACHE_DIR="$TMPDIR/zig-cache"
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            install -Dm755 bin/proctmux "$out/bin/proctmux"
+            runHook postInstall
+          '';
         };
 
         devShells.default = pkgs.mkShell {
-          # Use Go 1.26
-          inherit go;
-          buildInputs = devDeps;
+          buildInputs = buildDeps;
         };
       }
     );

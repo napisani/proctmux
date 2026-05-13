@@ -4,5 +4,5 @@ style:
 procs:
   docs-demo:
     shell: "sleep 1"
-    docs: "Not active in current Go input handling"
+    docs: "Not active in current input handling"
     meta_tags: ["legacy"]

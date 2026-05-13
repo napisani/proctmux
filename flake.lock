@@ -1,5 +1,21 @@
 {
   "nodes": {
+    "agent-tui-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1776234668,
+        "narHash": "sha256-GK61FwZKcXMsWeB2Pu4o19eg/gBwTVq+uyP20ZNBdR4=",
+        "owner": "pproenca",
+        "repo": "agent-tui",
+        "rev": "a6d490fda60de936f5a5366a9c6b83d933e38972",
+        "type": "github"
+      },
+      "original": {
+        "owner": "pproenca",
+        "repo": "agent-tui",
+        "type": "github"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -15,26 +31,6 @@
       "original": {
         "owner": "numtide",
         "repo": "flake-utils",
-        "type": "github"
-      }
-    },
-    "goflake": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1735843521,
-        "narHash": "sha256-MPYh1Y1vfZXlyy+bAgkfS/szVhXXa5/3UwP08BSfj2I=",
-        "owner": "sagikazarmark",
-        "repo": "go-flake",
-        "rev": "fbd90665126896c15b52f03cd44aad86cb5c4e18",
-        "type": "github"
-      },
-      "original": {
-        "owner": "sagikazarmark",
-        "repo": "go-flake",
         "type": "github"
       }
     },
@@ -56,8 +52,8 @@
     },
     "root": {
       "inputs": {
+        "agent-tui-src": "agent-tui-src",
         "flake-utils": "flake-utils",
-        "goflake": "goflake",
         "nixpkgs": "nixpkgs"
       }
     },

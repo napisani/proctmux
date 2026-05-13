@@ -13,7 +13,7 @@ test {
     _ = filter;
 }
 
-test "status names match Go" {
+test "status names match public status strings" {
     try std.testing.expectEqualStrings("Running", process.statusName(.running));
     try std.testing.expectEqualStrings("Halting", process.statusName(.halting));
     try std.testing.expectEqualStrings("Halted", process.statusName(.halted));
@@ -21,7 +21,7 @@ test "status names match Go" {
     try std.testing.expectEqualStrings("Unknown", process.statusName(.unknown));
 }
 
-test "process command prefers shell and quotes cmd args like Go" {
+test "process command prefers shell and quotes cmd args like legacy behavior" {
     var cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
     defer cfg.deinit(std.testing.allocator);
 

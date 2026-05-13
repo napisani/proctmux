@@ -16,7 +16,7 @@ test {
     _ = runtime;
 }
 
-test "defaults match active Go defaults" {
+test "defaults match current defaults" {
     var cfg = schema.Config.empty(std.testing.allocator);
     defer cfg.deinit();
 
@@ -81,7 +81,7 @@ test "load minimal config applies defaults" {
     try std.testing.expectEqualStrings("▶", loaded.config.style.pointer_char);
 }
 
-test "load process docs and meta tags like Go config" {
+test "load process docs and meta tags like legacy config" {
     var loaded = try load.loadFromSlice(
         std.testing.allocator,
         \\procs:
@@ -104,7 +104,7 @@ test "load process docs and meta tags like Go config" {
     try std.testing.expect(!loaded.hasWarning("procs.api.meta_tags"));
 }
 
-test "load process docs literal block like Go config init" {
+test "load process docs literal block like the config-init template" {
     var loaded = try load.loadFromSlice(
         std.testing.allocator,
         \\procs:
@@ -123,7 +123,7 @@ test "load process docs literal block like Go config init" {
     try std.testing.expectEqualStrings("API developer notes\nSecond line\n", proc.docs);
 }
 
-test "load quoted process labels with spaces like Go config" {
+test "load quoted process labels with spaces like legacy config" {
     var loaded = try load.loadFromSlice(
         std.testing.allocator,
         \\procs:
@@ -171,7 +171,7 @@ test "load double quoted shell string ending with escaped quote" {
     try std.testing.expectEqualStrings("echo \"Nice to meet you, $name!\"", proc.shell);
 }
 
-test "load plain scalar values with trailing spaces like Go config" {
+test "load plain scalar values with trailing spaces like legacy config" {
     var loaded = try load.loadFromSlice(
         std.testing.allocator,
         \\layout:
@@ -277,7 +277,7 @@ test "dead and unknown fields warn and do not populate active config" {
 
     const proc = loaded.config.procs.get("docs-demo").?;
     try std.testing.expectEqualStrings("sleep 1", proc.shell);
-    try std.testing.expectEqualStrings("Not active in current Go input handling", proc.docs);
+    try std.testing.expectEqualStrings("Not active in current input handling", proc.docs);
     try std.testing.expectEqualStrings("legacy", proc.meta_tags.items[0]);
     try std.testing.expectEqual(@as(usize, 0), proc.categories.items.len);
 }
@@ -350,7 +350,7 @@ test "starter template parses docs and meta tags fields" {
     try std.testing.expectEqual(@as(usize, 0), loaded.warnings.items.len);
 }
 
-test "process list width follows Go clamp behavior" {
+test "process list width follows clamp behavior" {
     const Case = struct { input: i32, expected: i32 };
     const cases = [_]Case{
         .{ .input = 0, .expected = 30 },

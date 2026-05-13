@@ -4,28 +4,32 @@ Technical documentation for the proctmux terminal user interface.
 
 ## Overview
 
-The shipped Zig TUI keeps the same process-list workflows, keybindings, filter
-semantics, and split-pane behavior described here, but it is implemented under
-`src/tui/` and orchestrated by `src/app/`. The Go Bubble Tea implementation
-under `internal/tui/` remains the reference oracle for parity tests during the
-port. The Go reference TUI is built with [Bubble Tea](https://github.com/charmbracelet/bubbletea); its main model is `ClientModel` in `internal/tui/client_model.go`.
+The TUI is implemented in Zig under `src/tui/` and orchestrated by
+`src/modes/client.zig`, `src/unified/`, and `src/app/`. The core state holder is
+`ClientModel` in `src/tui/client_model.zig`; rendering lives in
+`src/tui/render.zig`.
 
-Key dependencies:
+Key modules:
 
-- **Bubble Tea** (`charmbracelet/bubbletea`) -- application framework and event loop
-- **Bubbles** (`charmbracelet/bubbles`) -- the process list uses `bubbles/list` with a custom `procDelegate` for rendering; the filter input uses `bubbles/textinput`; help uses `bubbles/help`
-- **Lip Gloss** (`charmbracelet/lipgloss`) -- all styling, layout composition, and color handling
-- **sahilm/fuzzy** -- fuzzy matching for the filter feature
+- **`src/tui/client_session.zig`** -- IPC event loop integration and command handling.
+- **`src/tui/client_model.zig`** -- selection, filtering, messages, and key intent state.
+- **`src/tui/render.zig`** -- process-list text rendering and ANSI style output.
+- **`src/domain/filter.zig` / `src/domain/fuzzy.zig`** -- filter and fuzzy matching behavior.
 
-The TUI runs in alternate screen mode by default. Set `PROCTMUX_NO_ALTSCREEN=1` to disable this (the env var is checked in `cmd/proctmux/program_options.go`). Any truthy value enables the override; `""`, `"0"`, `"false"`, and `"no"` are treated as falsy.
+The TUI puts stdin into raw mode while it is active and restores the terminal on
+exit.
 
 ## UI Panels
 
-Panels are rendered top-to-bottom via `lipgloss.JoinVertical` in `ClientModel.View()` (`internal/tui/render.go:365`). Each panel is conditionally included -- if its content is empty, it is omitted entirely.
+Panels are rendered top-to-bottom by `renderProcessList()` in
+`src/tui/render.zig`. Each panel is conditionally included -- if its content is
+empty, it is omitted entirely.
 
 ### 1. Help Panel
 
-Toggled with `?`. When visible, renders the full keybinding help via Bubble Tea's `help.Model` with `ShowAll = true`. Keybindings are grouped into four columns: navigation, process control, filtering, and miscellaneous. A faint mode indicator (`[Client Mode - Connected to Primary]`) appears below the bindings.
+Toggled with `?`. When visible, renders the configured keybinding help in four
+groups: navigation, process control, filtering, and miscellaneous. A mode
+indicator (`[Client Mode - Connected to Primary]`) appears below the bindings.
 
 ### 2. Process Description Panel
 
@@ -37,15 +41,19 @@ Shows temporary messages (errors, confirmations) that auto-expire after 5 second
 
 ### 4. Filter Input
 
-Appears when filter mode is active (triggered by `/`). Uses `bubbles/textinput` with the prompt `"Filter: "`. When the filter is not focused, this panel renders as empty string and takes no vertical space. Note: `headerHeight()` always accounts for the filter line to prevent layout shifting.
+Appears when filter mode is active (triggered by `/`) with the prompt
+`"Filter: "`. When the filter has text but is not focused, the panel shows the
+current filter and a compact edit hint.
 
 ### 5. Process List
 
-The main panel. Uses `bubbles/list` with all built-in chrome disabled (no title, no status bar, no built-in help, no built-in filtering). The list height fills all remaining terminal space after the panels above are measured. Height is recalculated on every state update, window resize, and message change via `updateLayout()`.
+The main panel. It renders the filtered process view list directly as text.
+Terminal dimensions are refreshed through the client runtime and unified split
+runtime.
 
 ## Process List Rendering
 
-Each process row is rendered by `procDelegate.Render()` (`internal/tui/render.go:107`):
+Each process row is rendered by `renderProcessList()` (`src/tui/render.zig`):
 
 ```
 [pointer] [status marker] [label]
@@ -67,7 +75,7 @@ Each process row is rendered by `procDelegate.Render()` (`internal/tui/render.go
 
 ## Keybindings
 
-All keybindings are configurable via the `keybinding` section in the YAML config. Defaults are set in `internal/config/defaults.go`.
+All keybindings are configurable via the `keybinding` section in the YAML config. Defaults are set in `src/config/defaults.zig`.
 
 ### Navigation
 
@@ -100,7 +108,7 @@ While in filter mode, pressing `/` again exits filter mode but keeps the current
 |---|---|---|
 | Toggle running only | `R` | Show only running processes / show all |
 | Toggle help | `?` | Show/hide the help panel |
-| Show docs | `d` | Listed in help/config for compatibility; the active Go reference does not currently handle it |
+| Show docs | `d` | Listed in help/config for compatibility; currently not handled as a separate action |
 
 ### Focus (Split Pane Mode)
 
@@ -122,7 +130,11 @@ Two filter modes are supported, distinguished by prefix.
 
 ### Fuzzy Search (default)
 
-Press `/` and type any text. The input is matched against process labels using the `sahilm/fuzzy` library (`internal/domain/filter.go`). Results are ranked by match quality (best match first). When fuzzy search is active, the normal sorting rules (running-first, alphabetical) are bypassed entirely -- fuzzy ranking takes priority.
+Press `/` and type any text. The input is matched against process labels using
+the Zig fuzzy matcher in `src/domain/fuzzy.zig`. Results are ranked by match
+quality (best match first). When fuzzy search is active, the normal sorting
+rules (running-first, alphabetical) are bypassed entirely -- fuzzy ranking takes
+priority.
 
 ### Category Search
 
@@ -147,8 +159,7 @@ Both can be combined: running-first groups are sorted alphabetically within each
 
 When running in unified split mode, the TUI is wrapped in a split model that
 composes two panes and a status bar. The shipped Zig model is in
-`src/tui/split_model.zig`; the Go reference model is in
-`internal/tui/split_model.go`.
+`src/tui/split_model.zig`.
 
 ### Layout
 
@@ -171,8 +182,7 @@ For left/right splits, client pane width is auto-calculated based on the longest
 For top/bottom splits, the client pane gets approximately 55% of content height, constrained by minimums of 8 (client) and 10 (server) lines.
 
 Resize is handled automatically. The Zig runtime reads the PTY window size and
-reflows the split layout on the render loop; the Go reference handles
-`tea.WindowSizeMsg` and resizes both the client model and emulator.
+reflows the split layout on the render loop.
 
 ### Focus Behavior
 

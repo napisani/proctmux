@@ -63,28 +63,6 @@ graph TB
     PD --> AS
 ```
 
-## Go Reference Package Map
-
-The shipped runtime is the Zig implementation under `src/`. The Go packages
-below remain in-tree as the reference oracle for parity tests and historical
-architecture context.
-
-| Package | Purpose |
-|---------|---------|
-| `cmd/proctmux/` | Entry point, CLI parsing, mode routing (primary, client, unified) |
-| `internal/config/` | YAML config loading, type definitions, defaults |
-| `internal/domain/` | Core data types: `AppState`, `Process`, `ProcessView`, `StateUpdate`, filtering/sorting |
-| `internal/ipc/` | Unix socket server and client, JSON line protocol, peer UID authentication |
-| `internal/protocol/` | Command constants shared between IPC client and server |
-| `internal/proctmux/` | `PrimaryServer` — orchestrates process lifecycle, IPC, and state broadcasts |
-| `internal/process/` | `Controller` — PTY-backed process execution, start/stop/signal, scrollback buffers |
-| `internal/buffer/` | `RingBuffer` — bounded circular buffer with live reader subscriptions |
-| `internal/viewer/` | `Viewer` — relays process scrollback and live output to stdout |
-| `internal/tui/` | `ClientModel` — Bubble Tea TUI, process list rendering, key handling, split pane model |
-| `internal/redact/` | Strips sensitive config fields (env vars) before transmitting state over IPC |
-| `internal/procdiscover/` | Auto-discovers processes from Makefile targets and package.json scripts |
-| `internal/testharness/` | Test utilities for integration tests |
-
 ## Zig Module Map
 
 The Zig runtime keeps the CLI entrypoint thin and pushes runtime ownership into
@@ -129,7 +107,7 @@ discover.apply               -- src/discover/
 ProcTmuxConfig.Procs         -- map[string]ProcessConfig
     |
     v
-domain.NewAppState()         -- internal/domain/
+domain.AppState.init()       -- src/domain/state.zig
     |                           (creates Process list with sequential IDs)
     v
 Primary Server               -- src/primary/
@@ -145,7 +123,7 @@ Client Session / Model       -- src/tui/
     |                           (processes clientStateUpdateMsg)
     v
 TUI renderer                 -- src/tui/render.zig
-    |                           (renders process list via Bubble Tea)
+    |                           (renders process list text and ANSI styles)
     v
 Terminal output
 ```
@@ -231,7 +209,7 @@ Responsibilities are split across three layers:
 
 - **Socket file permissions**: The Unix socket is created with mode `0600` (owner-only read/write).
 - **Peer UID verification**: On platforms that support it (Linux, macOS), the IPC server verifies that connecting clients have the same UID as the server process using `SO_PEERCRED` / `LOCAL_PEERCRED`. On unsupported platforms, the server logs a warning and relies on file permissions alone.
-- **Config redaction**: Before transmitting state over IPC, `internal/redact/` strips environment variable values from process configs so that secrets defined in `env:` blocks are not sent to clients.
+- **Config redaction**: Before transmitting state over IPC, `src/redact/` strips environment variable values from process configs so that secrets defined in `env:` blocks are not sent to clients.
 
 ## Concurrency Model
 
@@ -248,7 +226,7 @@ Shared state is protected with `std.Thread.Mutex` and `std.atomic.Value`. Ring b
 
 ## Config Discovery Pipeline
 
-When `general.procs_from_make_targets` or `general.procs_from_package_json` is enabled, `internal/procdiscover/` runs before the primary server starts:
+When `general.procs_from_make_targets` or `general.procs_from_package_json` is enabled, `src/discover/` runs before the primary server starts:
 
 1. Scans the working directory for `Makefile` and/or `package.json`
 2. Extracts targets/scripts and creates `ProcessConfig` entries
@@ -258,11 +236,8 @@ See [discovery.md](discovery.md) for naming conventions and detection details.
 
 ## Build and Test Entry Points
 
-The shipped binary is now built from the Zig entry point `src/main.zig`.
-The Go entry point `cmd/proctmux/main.go` remains in-tree as a reference
-oracle for parity tests during the port.
-
-The Zig runtime:
+The shipped binary is built from the Zig entry point `src/main.zig`.
+The runtime:
 
 1. Parses flags and subcommands through `src/cli/`
 2. Loads YAML config through `src/config/`
@@ -270,22 +245,13 @@ The Zig runtime:
 4. Routes to primary, client, unified, or signal-command orchestration in
    `src/app/`
 
-The Go reference entry point:
-
-1. Calls `ParseCLI()` to parse flags and determine the mode
-2. Calls `config.LoadConfig()` to load YAML config
-3. Calls `procdiscover.Apply()` to merge discovered processes
-4. Routes to the appropriate mode function: `RunPrimary()`, `RunClient()`, or `RunUnified()`
-
 Build and test commands:
 
 ```bash
 make build                 # build the Zig implementation at bin/proctmux
-make test-release-parity   # run all Zig port parity gates
 make test-zig              # run Zig unit tests
-make build-go-reference    # build the Go reference binary for parity tests
-make test                  # run Go reference tests
-make tidy                  # go mod tidy for reference-side dependencies
+make test-zig-e2e          # run agent-tui e2e tests
+make test-all              # run unit + e2e release gates
 ```
 
 ## Technology Stack
@@ -296,6 +262,4 @@ make tidy                  # go mod tidy for reference-side dependencies
 | **Zig stdlib** | CLI/runtime orchestration, Unix sockets, process management |
 | **zig-yaml** | Vendored YAML parsing dependency |
 | **forkpty / POSIX APIs** | PTY allocation, terminal sizing, signal handling |
-| **Go 1.24+** | Reference implementation and parity harness |
-| **Bubble Tea / Bubbles / Lip Gloss** | Go reference TUI stack used as parity oracle |
-| **creack/pty / charmbracelet/x/vt** | Go reference PTY and unified terminal stack |
+| **agent-tui** | End-to-end terminal UI regression tests |

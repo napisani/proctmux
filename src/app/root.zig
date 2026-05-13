@@ -214,12 +214,12 @@ test "app prints deprecated unified toggle migration guidance" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "hide_process_list_when_unfocused: true") != null);
 }
 
-test "deprecated CLI flag exits like Go without generic error text" {
+test "deprecated CLI flag exits like legacy behavior without generic error text" {
     try std.testing.expectEqual(@as(u8, 2), exitCodeForError(error.DeprecatedFlag));
     try std.testing.expect(!shouldPrintGenericError(error.DeprecatedFlag));
 }
 
-test "app prints Go-compatible client unified conflict message" {
+test "app prints legacy-compatible client unified conflict message" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -232,7 +232,7 @@ test "app prints Go-compatible client unified conflict message" {
     try std.testing.expectEqualStrings("--client cannot be combined with unified mode options\n", out.items);
 }
 
-test "app prints Go-compatible multiple unified orientation message" {
+test "app prints legacy-compatible multiple unified orientation message" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -245,7 +245,7 @@ test "app prints Go-compatible multiple unified orientation message" {
     try std.testing.expectEqualStrings("multiple unified orientation flags specified\n", out.items);
 }
 
-test "app prints Go-compatible unknown flag diagnostic and usage" {
+test "app prints legacy-compatible unknown flag diagnostic and usage" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -258,7 +258,7 @@ test "app prints Go-compatible unknown flag diagnostic and usage" {
     try std.testing.expect(std.mem.startsWith(u8, out.items, "flag provided but not defined: -bad\nUsage: proctmux [options] [command]"));
 }
 
-test "app prints Go-compatible missing flag value diagnostic and usage" {
+test "app prints legacy-compatible missing flag value diagnostic and usage" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -271,7 +271,7 @@ test "app prints Go-compatible missing flag value diagnostic and usage" {
     try std.testing.expect(std.mem.startsWith(u8, out.items, "flag needs an argument: -f\nUsage: proctmux [options] [command]"));
 }
 
-test "app prints Go-compatible invalid bool diagnostic and usage" {
+test "app prints legacy-compatible invalid bool diagnostic and usage" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -284,7 +284,7 @@ test "app prints Go-compatible invalid bool diagnostic and usage" {
     try std.testing.expect(std.mem.startsWith(u8, out.items, "invalid boolean value \"nope\" for -client: parse error\nUsage: proctmux [options] [command]"));
 }
 
-test "app suppresses generic stderr for signal command failures like Go" {
+test "app suppresses generic stderr for signal command failures like legacy behavior" {
     try std.testing.expectEqual(@as(u8, 1), exitCodeForError(error.MissingName));
     try std.testing.expectEqual(@as(u8, 1), exitCodeForError(error.UnknownSignalCommand));
     try std.testing.expectEqual(@as(u8, 1), exitCodeForError(error.CommandFailed));
@@ -293,7 +293,7 @@ test "app suppresses generic stderr for signal command failures like Go" {
     try std.testing.expect(!shouldPrintGenericError(error.CommandFailed));
 }
 
-test "app prints Go-compatible CLI help for help flag" {
+test "app prints legacy-compatible CLI help for help flag" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 

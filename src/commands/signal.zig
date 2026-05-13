@@ -161,7 +161,7 @@ test "signal command parser maps running and list commands" {
     try std.testing.expect(list.renders_list);
 }
 
-test "signal command parser reports Go-compatible argument errors" {
+test "signal command parser reports legacy-compatible argument errors" {
     try std.testing.expectError(error.MissingName, parse("signal-start", &.{"signal-start"}));
     try std.testing.expectError(error.MissingName, parse("signal-stop", &.{"signal-stop"}));
     try std.testing.expectError(error.MissingName, parse("signal-restart", &.{"signal-restart"}));
@@ -169,7 +169,7 @@ test "signal command parser reports Go-compatible argument errors" {
     try std.testing.expectError(error.UnknownSignalCommand, parse("signal-nope", &.{"signal-nope"}));
 }
 
-test "signal list formatter matches Go tab-delimited output" {
+test "signal list formatter matches tab-delimited output" {
     var items = [_]ipc.protocol.ProcessListItem{
         .{ .name = "api", .running = true, .index = 1 },
         .{ .name = "worker", .running = false, .index = 2 },

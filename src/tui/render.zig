@@ -402,7 +402,7 @@ test "process list renderer colors status markers from config" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "> \x1b[32m●\x1b[0m beta-worker") != null);
 }
 
-test "process list renderer selects first row when active id is zero like Go" {
+test "process list renderer selects first row when active id is zero like legacy behavior" {
     var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.style.pointer_char = ">";

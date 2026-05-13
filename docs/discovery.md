@@ -102,16 +102,14 @@ Each manager produces a different command list:
 
 ## Plugin Architecture
 
-Discovery uses a registry pattern defined in the `procdiscover` package:
+Discovery is implemented under `src/discover/`:
 
-1. Each discoverer registers itself via an `init()` function that calls
-   `procdiscover.Register()`.
-2. Each registration includes an `enabled` function that checks the relevant
-   config flag (e.g. `procs_from_make_targets`).
-3. At startup, `procdiscover.Apply()` iterates all registered discoverers and
-   merges results into the process list.
-4. Adding a new discoverer requires implementing the `ProcDiscoverer` interface
-   and calling `Register()` -- no changes to existing code are needed.
+1. `src/discover/apply.zig` checks the relevant config flags.
+2. Enabled discoverers scan the working directory for supported files.
+3. Discovered processes are merged into the process list without overriding
+   explicitly configured processes.
+4. Adding a new discoverer means adding a focused module and wiring it into
+   `apply.zig`.
 
 ---
 
@@ -124,7 +122,7 @@ general:
 
 procs:
   "my-server":
-    shell: "go run ./cmd/server"
+    shell: "node ./server.js"
     # This won't be overridden even if a make:my-server target exists
 ```
 

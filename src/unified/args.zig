@@ -70,7 +70,7 @@ fn startsWithIgnoreCase(value: []const u8, prefix: []const u8) bool {
     return std.ascii.eqlIgnoreCase(value[0..prefix.len], prefix);
 }
 
-test "unified child args filter parent-only flags like Go" {
+test "unified child args filter parent-only flags like legacy behavior" {
     const child_args = try childArgs(std.testing.allocator, &.{
         "--unified",
         "--unified-right",
@@ -86,7 +86,7 @@ test "unified child args filter parent-only flags like Go" {
     try expectArgs(child_args, &.{ "-f", "config.yaml", "start", "--mode", "primary" });
 }
 
-test "unified child args filter equals-mode and single-dash unified flags like Go" {
+test "unified child args filter equals-mode and single-dash unified flags like legacy behavior" {
     const child_args = try childArgs(std.testing.allocator, &.{
         "-unified",
         "-unified-left",

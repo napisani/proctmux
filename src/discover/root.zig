@@ -11,7 +11,7 @@ test {
     _ = apply_mod;
 }
 
-test "makefile discovery matches active Go behavior" {
+test "makefile discovery matches active behavior" {
     var procs = try makefile.discover(std.testing.allocator, "testdata/phase2/discovery");
     defer makefile.deinitProcessMap(std.testing.allocator, &procs);
 
@@ -49,7 +49,7 @@ test "package json discovery detects pnpm and skips invalid script names" {
     try std.testing.expect(procs.get("pnpm:bad script") == null);
 }
 
-test "manager command construction matches Go" {
+test "manager command construction matches legacy behavior" {
     const pnpm = try package_json.commandPreview(std.testing.allocator, "pnpm", "dev");
     defer std.testing.allocator.free(pnpm);
     const yarn = try package_json.commandPreview(std.testing.allocator, "yarn", "dev");

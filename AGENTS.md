@@ -1,21 +1,20 @@
-# AGENTS: proctmux (Go)
+# AGENTS: proctmux (Zig)
 
-- Build: `make build` (or `go build -o bin/proctmux ./cmd/proctmux`).
-- Run: `make run` (inside tmux) or `./bin/proctmux`.
-- Test all: `make test` or `go test ./... -v`.
-- Test package: `go test ./internal/proctmux -v`.
-- Single test: `go test ./internal/proctmux -run '^TestName$' -v`.
-- Lint: `go vet ./...` (optional: `golangci-lint run` if installed).
-- Format: `go fmt ./...`; imports: `goimports -w .` (if installed) or `gofmt -s -w .`.
-- Modules: `make tidy` (`go mod tidy`) before commits.
-- Imports order: stdlib, blank line, external, blank line, module-local.
-- Naming: Exported `MixedCaps`; unexported `mixedCaps`; avoid underscores.
-- Types: Prefer small, focused structs; use `iota` for enums (see `ProcessStatus`).
-- Errors: return `error` last; wrap with `fmt.Errorf("%w", err)`; avoid panics; use `errors.Is/As`.
-- Context: pass `context.Context` for cancellation/timeouts in long operations.
-- Concurrency: use channels/`sync`; guard shared state; avoid data races.
-- Logging: prefer `log` over `fmt.Println` for errors.
-- TMUX: run inside a tmux session; proctmux shells out to `tmux`.
-- Makefile: shortcuts `build`, `run`, `test`, `watch`, `watch-test`, `dist`, `tidy`.
+- Build: `make build` (Zig binary at `bin/proctmux`).
+- Run: `make run` or `./bin/proctmux`.
+- Test unit: `make test` or `make test-zig`.
+- Test e2e: `make test-zig-e2e` (agent-tui runner).
+- Test all release gates: `make test-all`.
+- Format: `make fmt-zig` (`zig fmt build.zig src`).
+- Nix dev shell: `nix develop`.
+- Nix package: `nix build .#default`.
+- Zig version: use the pinned `zig_0_15` from the flake when possible.
+- Imports: keep `std` imports first, local imports after; avoid unused imports.
+- Errors: prefer explicit error unions and narrow error propagation; avoid panics except for impossible test failures.
+- Memory: pass allocators explicitly, pair every owned allocation with cleanup, and use `defer`/`errdefer`.
+- Concurrency: use `std.Thread`, atomics, and mutexes; keep shared mutable state behind clear ownership boundaries.
+- Terminal behavior: preserve raw-mode cleanup and cursor/alternate-screen restore paths.
+- IPC: keep JSON-line protocol compatibility for primary/client/signal modes.
+- Makefile: shortcuts `build`, `run`, `test`, `test-zig-e2e`, `test-all`, `dist`.
 - Cursor/Copilot: none found; if added in `.cursor/rules/`, `.cursorrules`, or `.github/copilot-instructions.md`, follow them.
-- CI: `.github/workflows/release.yml` exists (release-only); tests run locally with `go test`.
+- CI: `.github/workflows/release.yml` builds release artifacts; tests run locally with `make test-all`.

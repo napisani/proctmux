@@ -5,8 +5,7 @@ interact. Every mode uses the same [IPC protocol](ipc.md) and
 [configuration format](configuration.md); they differ in how the server runs,
 how the UI renders, and how stdin/stdout are routed.
 
-The shipped implementation is the Zig runtime under `src/`. The Go code remains
-in-tree only as a parity reference.
+The shipped implementation is the Zig runtime under `src/`.
 
 ```mermaid
 graph TD

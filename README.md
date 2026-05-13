@@ -13,7 +13,7 @@ Inspired by https://github.com/napisani/procmux.
 
 - **Unix-like operating system** (Linux, macOS, BSD) - Windows is not supported
 - **Terminal emulator** - Any modern terminal (iTerm2, Alacritty, Kitty, GNOME Terminal, etc.)
-- Go 1.24+ to build from source (if not using pre-built binaries)
+- **Zig 0.15.2** to build from source, or use `nix develop` for the pinned toolchain
 
 
 ## Installation
@@ -113,7 +113,7 @@ Both terminals will show the same TUI and stay synchronized. This is useful for 
 
 **Unified Mode (Embedded server + client)**
 
-Run everything in a single Bubble Tea program with a split view. By default the process list is on the left and the process output is on the right. Use `ctrl+left` / `ctrl+right` to switch focus or tap `ctrl+w` (configurable via `keybinding.toggle_focus`) to toggle between panes.
+Run everything in a single split-view terminal session. By default the process list is on the left and the process output is on the right. Use `ctrl+left` / `ctrl+right` to switch focus or tap `ctrl+w` (configurable via `keybinding.toggle_focus`) to toggle between panes.
 
 ```bash
 proctmux --unified            # same as --unified-left
@@ -386,25 +386,24 @@ Notes:
 ### Running Tests
 
 ```bash
-# Full Zig-port parity gate
-make test-release-parity
-
-# Go reference tests, retained for parity during the port
+# Zig unit tests
 make test
+
+# agent-tui end-to-end tests
+make test-zig-e2e
+
+# Unit + e2e release gate
+make test-all
 ```
 
-### Setting Up Development Environment
-
-Install git hooks to automate common tasks:
+### Setting Up a Development Environment
 
 ```bash
-make install-hooks
+nix develop
 ```
 
-This installs:
-- **pre-commit hook**: Automatically runs `make update-vendor-hash` when you commit changes to `go.mod` or `go.sum`
-
-See [.githooks/README.md](.githooks/README.md) for more details.
+The development shell provides the pinned Zig compiler, Make, Python, and
+agent-tui for end-to-end tests.
 
 ### Building from Source
 
@@ -418,51 +417,30 @@ make build-all
 # Binary will be in ./bin/proctmux
 ```
 
-### Updating Nix Flake Dependencies
-
-Go remains in the repository as a reference implementation for parity tests.
-If you update Go dependencies (via `go get` or `go mod tidy`), you must update
-the `vendorHash` in `flake.nix`:
-
-```bash
-# After updating go.mod/go.sum
-make update-vendor-hash
-```
-
-This command:
-- Automatically calculates the correct vendorHash for your dependencies
-- Updates `flake.nix` with the new hash
-- Verifies the Nix build works
-
-**Important**: Run this before creating a release if dependencies have changed, otherwise Nix users will get build errors.
-
 ### Creating a Release
 
 Releases are automated via GitHub Actions. When you push a git tag, the workflow builds
 binaries for all platforms and creates a GitHub Release.
 
 ```bash
-# 1. If you've updated dependencies, update the Nix vendorHash
-make update-vendor-hash
-
-# 2. Commit any changes
+# 1. Commit any changes
 git add .
 git commit -m "Prepare release vX.Y.Z"
 
-# 3. Create the release (runs tests, creates + pushes the tag)
+# 2. Create the release (runs tests, creates + pushes the tag)
 make release-create VERSION=v0.2.0
 
-# 4. Wait for GitHub Actions to finish building
+# 3. Wait for GitHub Actions to finish building
 #    Check: https://github.com/napisani/proctmux/actions
 
-# 5. Update the Homebrew formula with new checksums
+# 4. Update the Homebrew formula with new checksums
 make release-publish VERSION=v0.2.0
 
-# 6. Push the formula update to main
+# 5. Push the formula update to main
 git push origin main
 ```
 
-Or use `make release VERSION=v0.2.0` to run steps 3-5 interactively (it pauses
+Or use `make release VERSION=v0.2.0` to run steps 2-4 interactively (it pauses
 and waits for you to confirm that the GitHub Actions workflow has completed).
 
 The release will include:

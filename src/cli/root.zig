@@ -292,7 +292,7 @@ fn flagRequiresBool(kind: FlagKind) bool {
     };
 }
 
-test "default CLI config matches Go parser" {
+test "default CLI config matches legacy parser" {
     const cfg = try parse(&.{});
 
     try std.testing.expectEqualStrings("", cfg.config_file);
@@ -303,7 +303,7 @@ test "default CLI config matches Go parser" {
     try std.testing.expectEqual(UnifiedSplit.none, cfg.unified_orientation);
 }
 
-test "config file client mode and subcommand parse like Go" {
+test "config file client mode and subcommand parse like legacy behavior" {
     const cfg = try parse(&.{ "-f", "proctmux.yaml", "--client", "signal-list" });
 
     try std.testing.expectEqualStrings("proctmux.yaml", cfg.config_file);
@@ -313,7 +313,7 @@ test "config file client mode and subcommand parse like Go" {
     try std.testing.expectEqualStrings("signal-list", cfg.args[0]);
 }
 
-test "unified flags choose Go-compatible orientation" {
+test "unified flags choose legacy-compatible orientation" {
     const unified = try parse(&.{"--unified"});
     try std.testing.expect(unified.unified);
     try std.testing.expectEqual(UnifiedSplit.left, unified.unified_orientation);
@@ -330,12 +330,12 @@ test "unified flags choose Go-compatible orientation" {
     try std.testing.expectEqual(UnifiedSplit.bottom, bottom.unified_orientation);
 }
 
-test "client conflicts with unified like Go" {
+test "client conflicts with unified like legacy behavior" {
     try std.testing.expectError(error.ClientUnifiedConflict, parse(&.{ "--client", "--unified" }));
     try std.testing.expectError(error.ClientUnifiedConflict, parse(&.{ "--mode=client", "--unified-left" }));
 }
 
-test "boolean flag values accept Go flag package forms" {
+test "boolean flag values accept legacy flag forms" {
     const client_one = try parse(&.{"--client=1"});
     try std.testing.expectEqual(Mode.client, client_one.mode);
 
@@ -351,11 +351,11 @@ test "boolean flag values accept Go flag package forms" {
     try std.testing.expectEqual(UnifiedSplit.none, unified_false.unified_orientation);
 }
 
-test "multiple unified orientation flags fail like Go" {
+test "multiple unified orientation flags fail like legacy behavior" {
     try std.testing.expectError(error.MultipleUnifiedOrientations, parse(&.{ "--unified-left", "--unified-right" }));
 }
 
-test "flags after first positional argument remain command args like Go flag package" {
+test "flags after first positional argument remain command args like legacy flag parser" {
     const cfg = try parse(&.{ "start", "--client" });
 
     try std.testing.expectEqual(Mode.primary, cfg.mode);
@@ -364,7 +364,7 @@ test "flags after first positional argument remain command args like Go flag pac
     try std.testing.expectEqualStrings("--client", cfg.args[1]);
 }
 
-test "lone dash remains a positional argument like Go flag package" {
+test "lone dash remains a positional argument like legacy flag parser" {
     const cfg = try parse(&.{"-"});
 
     try std.testing.expectEqual(Mode.primary, cfg.mode);
@@ -373,7 +373,7 @@ test "lone dash remains a positional argument like Go flag package" {
     try std.testing.expectEqualStrings("-", cfg.args[0]);
 }
 
-test "deprecated unified toggle message matches Go migration guidance" {
+test "deprecated unified toggle message matches deprecated flag migration guidance" {
     const msg = deprecatedFlagMessage(&.{"-UNIFIED-TOGGLE"}) orelse return error.TestExpectedDeprecatedMessage;
 
     try std.testing.expect(std.mem.indexOf(u8, msg, "--unified") != null);

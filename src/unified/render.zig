@@ -40,7 +40,6 @@ fn writeStatusBar(
     defer session.allocator.free(status);
     if (status.len > 0) {
         try io.writeTextClearingLineTails(output, status, terminal.repaint.clear_line_tail);
-        try output.writeAll("\n");
     }
 }
 
@@ -122,6 +121,9 @@ fn writeSplitContent(
             server_text,
             positiveWidth(split.clientSize().width),
             positiveWidth(split.serverSize().width),
+            positiveHeight(split.serverSize().height),
+            .head,
+            .tail,
         ),
         .right => try writeSideBySide(
             output,
@@ -129,6 +131,9 @@ fn writeSplitContent(
             client_text,
             positiveWidth(split.serverSize().width),
             positiveWidth(split.clientSize().width),
+            positiveHeight(split.serverSize().height),
+            .tail,
+            .head,
         ),
         .top => {
             try writeTextBlock(output, client_text);
@@ -140,6 +145,11 @@ fn writeSplitContent(
         },
     }
 }
+
+const LineWindow = enum {
+    head,
+    tail,
+};
 
 fn writeTextBlock(output: io.Output, text: []const u8) !void {
     if (text.len == 0) return;
@@ -153,11 +163,17 @@ fn writeSideBySide(
     right: []const u8,
     left_width: usize,
     right_width: usize,
+    height: usize,
+    left_window: LineWindow,
+    right_window: LineWindow,
 ) !void {
     var left_lines = std.mem.splitScalar(u8, left, '\n');
     var right_lines = std.mem.splitScalar(u8, right, '\n');
+    skipWindowedLines(&left_lines, left, height, left_window);
+    skipWindowedLines(&right_lines, right, height, right_window);
 
-    while (true) {
+    var row: usize = 0;
+    while (row < height) : (row += 1) {
         const left_line_opt = left_lines.next();
         const right_line_opt = right_lines.next();
         if (left_line_opt == null and right_line_opt == null) break;
@@ -176,12 +192,35 @@ fn writeSideBySide(
     }
 }
 
+fn skipWindowedLines(lines: anytype, text: []const u8, height: usize, window: LineWindow) void {
+    if (window == .head or height == 0) return;
+    const count = visibleLineCount(text);
+    if (count <= height) return;
+    const skip_count = count - height;
+    var skipped: usize = 0;
+    while (skipped < skip_count) : (skipped += 1) _ = lines.next();
+}
+
+fn visibleLineCount(text: []const u8) usize {
+    if (text.len == 0) return 0;
+    var count: usize = 1;
+    for (text) |byte| {
+        if (byte == '\n') count += 1;
+    }
+    if (text[text.len - 1] == '\n') count -= 1;
+    return count;
+}
+
 fn trimLineRight(line: []const u8) []const u8 {
     return std.mem.trimRight(u8, line, " \t\r");
 }
 
 fn positiveWidth(width: i32) usize {
     return if (width > 0) @intCast(width) else 1;
+}
+
+fn positiveHeight(height: i32) usize {
+    return if (height > 0) @intCast(height) else 1;
 }
 
 fn displayWidth(value: []const u8) usize {
@@ -259,4 +298,49 @@ fn writeSpaces(output: io.Output, count: usize) !void {
 test "unified split display width ignores ANSI escapes" {
     try std.testing.expectEqual(@as(usize, 1), displayWidth("\x1b[32m●\x1b[0m"));
     try std.testing.expectEqual(@as(usize, 7), displayWidth("\x1b[31m■\x1b[0m label"));
+}
+
+test "side-by-side renderer clips long left pane before right pane" {
+    const test_io = @import("../test_support/io.zig");
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try writeSideBySide(
+        test_io.TestOutput.writer(&out),
+        "client-label-that-is-too-long",
+        "RIGHT",
+        10,
+        10,
+        3,
+        .head,
+        .tail,
+    );
+
+    const line_end = std.mem.indexOfScalar(u8, out.items, '\n') orelse out.items.len;
+    const line = out.items[0..line_end];
+    try std.testing.expect(std.mem.indexOf(u8, line, "RIGHT") != null);
+    try std.testing.expectEqual(@as(usize, 10), std.mem.indexOf(u8, line, "RIGHT").?);
+}
+
+test "side-by-side renderer tails server output without scrolling client away" {
+    const test_io = @import("../test_support/io.zig");
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try writeSideBySide(
+        test_io.TestOutput.writer(&out),
+        "client",
+        "one\ntwo\nthree\nfour\nfive\n",
+        10,
+        10,
+        3,
+        .head,
+        .tail,
+    );
+
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "client") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "one") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "two") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "three") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "five") != null);
 }
