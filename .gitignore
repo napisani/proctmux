@@ -4,6 +4,8 @@ target/
 zig-out/
 *.swp
 .swn
+.swl
+.swm
 .swo
 bin/
 ./result
