@@ -711,6 +711,47 @@ procs:
         expect_not_contains(snap, "RESTART_SELECTED_OUTPUT_1", "previous run output remained after restarting selected process")
 
 
+def test_unified_output_handles_carriage_return_progress(runner: Runner) -> None:
+    with runner.start_unified(
+        "carriage-return-progress",
+        """
+log_file: proctmux.log
+procs:
+  progress-output:
+    shell: |
+      printf 'progress 10%%'
+      sleep 0.1
+      printf '\\rprogress done\\r\\n'
+      sleep 60
+    autostart: true
+""",
+    ) as sess:
+        snap = sess.wait_contains("progress done")
+        expect_not_contains(snap, "progress 10%", "carriage-return progress update left stale text visible")
+
+
+def test_unified_output_restores_main_screen_after_alternate_screen(runner: Runner) -> None:
+    with runner.start_unified(
+        "alternate-screen-restore",
+        """
+log_file: proctmux.log
+procs:
+  alternate-output:
+    shell: |
+      printf 'main-screen\\r\\n'
+      sleep 0.1
+      printf '\\033[?1049h\\033[Halt-screen'
+      sleep 0.1
+      printf '\\033[?1049lafter-alt\\r\\n'
+      sleep 60
+    autostart: true
+""",
+    ) as sess:
+        snap = sess.wait_contains("after-alt")
+        expect_contains(snap, "main-screen")
+        expect_not_contains(snap, "alt-screen", "alternate-screen contents remained visible after returning to main screen")
+
+
 def test_hide_on_unfocus_rapid_toggle_no_cross_leakage(runner: Runner) -> None:
     proc_label = "sentinel-rapid-UNIQUELABEL"
     proc_output = "PROCESS_OUTPUT_RAPID_TOKEN"
@@ -866,6 +907,8 @@ TESTS: list[tuple[str, Callable[[Runner], None]]] = [
     ("TestUnified_SelectExitedProcessShowsLastRunOutput", test_select_exited_process_shows_last_run_output),
     ("TestUnified_StartSelectedStoppedProcessShowsItsOutput", test_start_selected_stopped_process_shows_its_output),
     ("TestUnified_RestartSelectedProcessShowsRestartedOutput", test_restart_selected_process_shows_restarted_output),
+    ("TestUnified_OutputHandlesCarriageReturnProgress", test_unified_output_handles_carriage_return_progress),
+    ("TestUnified_OutputRestoresMainScreenAfterAlternateScreen", test_unified_output_restores_main_screen_after_alternate_screen),
     ("TestUnified_HideOnUnfocus_RapidToggleNoCrossLeakage", test_hide_on_unfocus_rapid_toggle_no_cross_leakage),
     ("TestUnified_Filter_TypeMatchSubmitEscape", test_filter_type_match_submit_escape),
     ("TestUnified_Filter_NoMatchState", test_filter_no_match_state),

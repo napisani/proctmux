@@ -14,6 +14,8 @@ Key modules:
 - **`src/tui/client_session.zig`** -- IPC event loop integration and command handling.
 - **`src/tui/client_model.zig`** -- selection, filtering, messages, and key intent state.
 - **`src/tui/render.zig`** -- process-list text rendering and ANSI style output.
+- **`src/unified/server_output.zig`** -- unified-mode server-pane output state and per-process terminal instances.
+- **`src/terminal/ghostty_vt.zig`** -- narrow wrapper around vendored `libghostty-vt` for VT/ANSI interpretation.
 - **`src/domain/filter.zig` / `src/domain/fuzzy.zig`** -- filter and fuzzy matching behavior.
 
 The TUI puts stdin into raw mode while it is active and restores the terminal on
@@ -164,7 +166,7 @@ composes two panes and a status bar. The shipped Zig model is in
 ### Layout
 
 - **Client pane:** The normal `ClientModel` process list TUI
-- **Server pane:** Terminal-rendered primary server output with ANSI cursor, alternate-screen, and SGR style handling, polled every 75ms
+- **Server pane:** Process output rendered through a stateful Ghostty VT terminal, polled every 75ms
 - **Status bar:** One line at the bottom showing which pane is focused (bold = focused, faint = unfocused) and keybinding hints for switching focus
 
 ### Orientation
@@ -183,6 +185,19 @@ For top/bottom splits, the client pane gets approximately 55% of content height,
 
 Resize is handled automatically. The Zig runtime reads the PTY window size and
 reflows the split layout on the render loop.
+
+### Server Output Rendering
+
+Unified mode keeps one terminal state per process in
+`src/unified/server_output.zig`. Newly captured process bytes are appended to
+the selected process's `terminal.ghostty_vt.Terminal`, and the split renderer
+receives already-rendered text for the server pane.
+
+This boundary is intentional: proctmux owns process lifecycle, split sizing,
+focus, repaint framing, and process-list rendering. Vendored `libghostty-vt`
+owns VT/ANSI interpretation for process output, including cursor movement,
+line erasure, alternate screen state, and carriage-return updates. Ghostty is
+imported only through `src/terminal/ghostty_vt.zig`.
 
 ### Focus Behavior
 

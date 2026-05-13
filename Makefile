@@ -8,10 +8,9 @@ ZIG ?= zig
 AGENT_TUI ?= agent-tui
 ZIG_OUT=zig-out
 ZIG_CACHE_DIR ?= .zig-cache/global
-ZIG_YAML_MODULE ?= third_party/zig-yaml/src/lib.zig
 ZIG_E2E_RUN ?=
 AGENT_TUI_E2E_RUN ?= $(ZIG_E2E_RUN)
-zig_platform_flags = -target $(1) -lc $(if $(findstring macos,$(1)),--sysroot $(MACOS_SDK),)
+zig_platform_flags = -Dtarget=$(1) $(if $(findstring macos,$(1)),--sysroot $(MACOS_SDK),)
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_S),Darwin)
@@ -22,10 +21,9 @@ else ifeq ($(UNAME_S),Linux)
 ZIG_NATIVE_TARGET ?= $(if $(filter arm64 aarch64,$(UNAME_M)),aarch64-linux-gnu,x86_64-linux-gnu)
 ZIG_PLATFORM_FLAGS ?= -target $(ZIG_NATIVE_TARGET) -lc
 endif
-ZIG_MODULE_ARGS=--dep yaml -Mroot=src/main.zig -Myaml=$(ZIG_YAML_MODULE)
-ZIG_TEST_MODULE_ARGS=--dep yaml -Mroot=src/root.zig -Myaml=$(ZIG_YAML_MODULE)
-ZIG_TEST_CMD=$(ZIG) test --global-cache-dir $(ZIG_CACHE_DIR) $(ZIG_PLATFORM_FLAGS) $(ZIG_TEST_MODULE_ARGS)
-ZIG_BUILD_CMD=$(ZIG) build-exe --global-cache-dir $(ZIG_CACHE_DIR) $(ZIG_PLATFORM_FLAGS) $(ZIG_MODULE_ARGS)
+ZIG_BUILD_FLAGS ?= --global-cache-dir $(ZIG_CACHE_DIR) $(call zig_platform_flags,$(ZIG_NATIVE_TARGET))
+ZIG_TEST_CMD=$(ZIG) build test $(ZIG_BUILD_FLAGS)
+ZIG_BUILD_CMD=$(ZIG) build $(ZIG_BUILD_FLAGS)
 # Run the app
 .PHONY: run
 run:
@@ -40,7 +38,8 @@ build:
 build-zig:
 	@echo "Building the Zig implementation..."
 	@mkdir -p $(BUILD_DIR)
-	$(ZIG_BUILD_CMD) -femit-bin=$(BUILD_DIR)/$(BINARY_NAME)
+	$(ZIG_BUILD_CMD)
+	@cp $(ZIG_OUT)/bin/$(BINARY_NAME) $(BUILD_DIR)/$(BINARY_NAME)
 
 .PHONY: run-zig
 run-zig: build-zig
@@ -76,7 +75,8 @@ build-release-artifact:
 	fi
 	@echo "Building Zig release artifact $(ARTIFACT_NAME) for $(ZIG_TARGET)..."
 	@mkdir -p $(BUILD_DIR)
-	$(ZIG) build-exe --global-cache-dir $(ZIG_CACHE_DIR) $(call zig_platform_flags,$(ZIG_TARGET)) $(ZIG_MODULE_ARGS) -femit-bin=$(BUILD_DIR)/$(ARTIFACT_NAME)
+	$(ZIG) build --global-cache-dir $(ZIG_CACHE_DIR) $(call zig_platform_flags,$(ZIG_TARGET)) -Doptimize=ReleaseFast
+	@cp $(ZIG_OUT)/bin/$(BINARY_NAME) $(BUILD_DIR)/$(ARTIFACT_NAME)
 
 
 # Clean build artifacts

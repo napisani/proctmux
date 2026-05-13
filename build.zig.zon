@@ -7,11 +7,16 @@
         .yaml = .{
             .path = "third_party/zig-yaml",
         },
+        .uucode = .{
+            .path = "third_party/uucode",
+        },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+        "third_party/libghostty-vt",
+        "third_party/uucode",
         "third_party/zig-yaml",
     },
 }

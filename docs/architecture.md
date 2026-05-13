@@ -73,8 +73,8 @@ domain modules:
 | `src/app/` | App entrypoints, CLI parsing/routing, exit-code behavior, raw terminal entry/restore |
 | `src/modes/` | Primary, client, and signal runtime modes plus shared production input/output adapters |
 | `src/config/runtime.zig` | Loads Project Config and applies discovery in one place |
-| `src/terminal/` | Terminal text rendering, raw terminal mode management, and terminal size probing |
-| `src/unified/` | Unified runtime loop, child-primary PTY adapter, in-process test adapter, and split rendering |
+| `src/terminal/` | Raw terminal mode management, terminal size probing, and the narrow `ghostty_vt` wrapper |
+| `src/unified/` | Unified runtime loop, child-primary PTY adapter, in-process test adapter, split rendering, and server-pane output state |
 | `src/ipc/line.zig` | JSON-line reading, timeout reads, and message-kind detection |
 | `src/ipc/command_codec.zig` | Command request and response wire encoding/parsing |
 | `src/ipc/state_codec.zig` | State broadcast wire encoding/parsing |
@@ -90,7 +90,7 @@ proctmux supports three runtime modes, each composing the same core components d
 |------|------------|-------------------|
 | **Primary** (`proctmux`) | Standalone server with viewer | `modes.primary` + Primary Server + IPC Server |
 | **Client** (`proctmux --client`) | TUI connects to running primary | `modes.client` + Client Session + IPC Client |
-| **Unified** (`proctmux --unified`) | Embedded server process + client TUI in one split model | `unified.runtime` + split model + terminal renderer |
+| **Unified** (`proctmux --unified`) | Embedded server process + client TUI in one split model | `unified.runtime` + split model + `server_output` + `terminal.ghostty_vt` |
 
 ## Data Flow: Config to Screen
 
@@ -130,7 +130,7 @@ Terminal output
 
 ## Data Flow: Process Output
 
-Each managed process runs inside a PTY. Output flows through a ring buffer to either the viewer (primary mode) or through the IPC state broadcast (client modes).
+Each managed process runs inside a PTY. Output flows through a ring buffer to the viewer (primary mode) or to unified-mode server-pane state. IPC state broadcasts carry process status and scrollback snapshots for clients; raw VT interpretation for the unified server pane is delegated to vendored `libghostty-vt` through `src/terminal/ghostty_vt.zig`.
 
 ```
 Process stdout/stderr
@@ -151,10 +151,17 @@ output capture to RingBuffer -- src/proc/output.zig + src/ring/
     |         |                   v
     |         |               os.Stdout (user's terminal)
     |
+    +---> Unified server_output.State
+    |         |
+    |         +---> terminal.ghostty_vt.Terminal
+    |                   |
+    |                   v
+    |               rendered server-pane text
+    |
     +---> BroadcastState()
               |
               v
-          IPC clients (status updates, not raw output)
+          IPC clients (status + bounded scrollback snapshots)
 ```
 
 ## Data Flow: User Input
@@ -254,6 +261,10 @@ make test-zig-e2e          # run agent-tui e2e tests
 make test-all              # run unit + e2e release gates
 ```
 
+The Makefile drives the Zig build graph with `zig build`, including the
+vendored YAML parser, vendored `libghostty-vt`, and Ghostty's required Unicode
+table generation step.
+
 ## Technology Stack
 
 | Technology | Usage |
@@ -261,5 +272,10 @@ make test-all              # run unit + e2e release gates
 | **Zig 0.15.2** | Shipped implementation language |
 | **Zig stdlib** | CLI/runtime orchestration, Unix sockets, process management |
 | **zig-yaml** | Vendored YAML parsing dependency |
+| **libghostty-vt** | Vendored VT/ANSI terminal state for unified-mode process output |
+| **uucode** | Vendored Ghostty Unicode table dependency |
 | **forkpty / POSIX APIs** | PTY allocation, terminal sizing, signal handling |
 | **agent-tui** | End-to-end terminal UI regression tests |
+
+Vendored Ghostty provenance and local patches are recorded in
+`third_party/libghostty-vt/PROCTMUX_VENDOR.md`.

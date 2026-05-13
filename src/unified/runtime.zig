@@ -11,6 +11,7 @@ const args_mod = @import("args.zig");
 const child_primary = @import("child_primary.zig");
 const in_process_primary = @import("in_process_primary.zig");
 const render = @import("render.zig");
+const server_output = @import("server_output.zig");
 
 const log = std.log.scoped(.unified_runtime);
 
@@ -165,17 +166,12 @@ fn runInProcess(
 const RuntimeSession = struct {
     session: *tui.client_session.ClientSession,
     split: *tui.split_model.Model,
-    target: RenderTarget,
+    target: server_output.Target,
     ipc_client: *ipc.client.Client,
     input: io.Input,
     output: io.Output,
     stopped: *std.atomic.Value(bool),
     sync_selection_after_command: bool = false,
-};
-
-const RenderTarget = union(enum) {
-    child: *child_primary.ChildPrimary,
-    in_process: *primary.Server,
 };
 
 fn runInteractiveRuntime(runtime: RuntimeSession) !void {
@@ -184,12 +180,15 @@ fn runInteractiveRuntime(runtime: RuntimeSession) !void {
 
     try resizeLayout(runtime.session, runtime.split, runtime.input, runtime.output);
 
+    var output_state = try server_output.State.init(runtime.session.allocator, runtime.target);
+    defer output_state.deinit();
+
     var render_mutex = std.Thread.Mutex{};
-    try renderFrame(runtime.session, runtime.split, runtime.target, runtime.output);
+    try renderFrame(runtime.session, runtime.split, &output_state, runtime.output);
     var render_run = RenderLoop{
         .session = runtime.session,
         .split = runtime.split,
-        .target = runtime.target,
+        .output_state = &output_state,
         .ipc_client = runtime.ipc_client,
         .input = runtime.input,
         .output = runtime.output,
@@ -206,7 +205,7 @@ fn runInteractiveRuntime(runtime: RuntimeSession) !void {
     try runInputLoop(.{
         .session = runtime.session,
         .split = runtime.split,
-        .target = runtime.target,
+        .output_state = &output_state,
         .input = runtime.input,
         .output = runtime.output,
         .mutex = &render_mutex,
@@ -235,7 +234,7 @@ const ThreadResult = union(enum) {
 const InputLoop = struct {
     session: *tui.client_session.ClientSession,
     split: *tui.split_model.Model,
-    target: RenderTarget,
+    output_state: *server_output.State,
     input: io.Input,
     output: io.Output,
     mutex: *std.Thread.Mutex,
@@ -273,14 +272,14 @@ fn handleKey(state: InputLoop, key: []const u8) !bool {
             try state.split.handleKey(key);
         }
         try resizeLayout(state.session, state.split, state.input, state.output);
-        try renderFrame(state.session, state.split, state.target, state.output);
+        try renderFrame(state.session, state.split, state.output_state, state.output);
         if (action) |value| return value == .stop_running;
         return false;
     }
 
     try state.split.handleKey(key);
     try resizeLayout(state.session, state.split, state.input, state.output);
-    try renderFrame(state.session, state.split, state.target, state.output);
+    try renderFrame(state.session, state.split, state.output_state, state.output);
     return false;
 }
 
@@ -297,13 +296,13 @@ fn syncSelectionAfterAction(
 fn renderFrame(
     session: *tui.client_session.ClientSession,
     split: *const tui.split_model.Model,
-    target: RenderTarget,
+    output_state: *server_output.State,
     output: io.Output,
 ) !void {
-    switch (target) {
-        .child => |child| try render.child(session, split, child, output),
-        .in_process => |primary_server| try render.inProcess(session, split, primary_server, output),
-    }
+    const placeholder = std.mem.trim(u8, split.app_config.layout.placeholder_banner, " \t\r\n");
+    const server_text = try output_state.renderText(split, session.model.active_proc_id, placeholder);
+    defer session.allocator.free(server_text);
+    try render.frame(session, split, server_text, output);
 }
 
 fn resizeLayout(
@@ -339,7 +338,7 @@ fn processLabels(
 const RenderLoop = struct {
     session: *tui.client_session.ClientSession,
     split: *tui.split_model.Model,
-    target: RenderTarget,
+    output_state: *server_output.State,
     ipc_client: *ipc.client.Client,
     input: io.Input,
     output: io.Output,
@@ -362,7 +361,7 @@ fn runRenderLoop(state: *RenderLoop) void {
             state.result = .{ .failed = err };
             return;
         };
-        renderFrame(state.session, state.split, state.target, state.output) catch |err| {
+        renderFrame(state.session, state.split, state.output_state, state.output) catch |err| {
             state.result = .{ .failed = err };
             return;
         };
