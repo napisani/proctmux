@@ -5,6 +5,8 @@ const terminal = @import("../terminal/root.zig");
 const tui = @import("../tui/root.zig");
 const child_primary = @import("child_primary.zig");
 
+const child_snapshot_reset = "\x1b[2J\x1b[H";
+
 pub const Target = union(enum) {
     child: *child_primary.ChildPrimary,
     in_process: *primary.Server,
@@ -20,11 +22,31 @@ pub const State = struct {
 
     const ChildState = struct {
         terminal: terminal.ghostty_vt.Terminal,
+        selected_process_id: domain.process.ProcessId,
+        pending_snapshot: std.array_list.Managed(u8),
         cursor: child_primary.OutputCursor = .{},
         has_output: bool = false,
+        awaiting_snapshot: bool = false,
 
         fn deinit(self: *ChildState) void {
+            self.pending_snapshot.deinit();
             self.terminal.deinit();
+        }
+
+        fn resetForProcess(
+            self: *ChildState,
+            allocator: std.mem.Allocator,
+            selected_process_id: domain.process.ProcessId,
+            cols: u16,
+            rows: u16,
+        ) !void {
+            const new_terminal = try terminal.ghostty_vt.Terminal.init(allocator, cols, rows);
+            self.terminal.deinit();
+            self.terminal = new_terminal;
+            self.selected_process_id = selected_process_id;
+            self.pending_snapshot.clearRetainingCapacity();
+            self.has_output = false;
+            self.awaiting_snapshot = true;
         }
     };
 
@@ -64,7 +86,7 @@ pub const State = struct {
         const rows = dimension(size.height);
 
         return switch (self.target) {
-            .child => |child| self.renderChild(child, cols, rows, placeholder),
+            .child => |child| self.renderChild(child, active_proc_id, cols, rows, placeholder),
             .in_process => |server| self.renderProcess(server, active_proc_id, cols, rows, placeholder),
         };
     }
@@ -72,6 +94,7 @@ pub const State = struct {
     fn renderChild(
         self: *State,
         child: *child_primary.ChildPrimary,
+        active_proc_id: domain.process.ProcessId,
         cols: u16,
         rows: u16,
         placeholder: []const u8,
@@ -79,17 +102,23 @@ pub const State = struct {
         if (self.child == null) {
             self.child = .{
                 .terminal = try terminal.ghostty_vt.Terminal.init(self.allocator, cols, rows),
+                .selected_process_id = active_proc_id,
+                .pending_snapshot = std.array_list.Managed(u8).init(self.allocator),
             };
         }
 
         var state = &self.child.?;
+        if (state.selected_process_id != active_proc_id) {
+            try state.resetForProcess(self.allocator, active_proc_id, cols, rows);
+        }
         try state.terminal.resize(cols, rows);
 
         const bytes = try child.readSince(self.allocator, &state.cursor);
         defer self.allocator.free(bytes);
-        if (bytes.len > 0) {
+        const bytes_to_write = try bytesForSelectedProcess(state, bytes);
+        if (bytes_to_write.len > 0) {
             state.has_output = true;
-            try state.terminal.write(bytes);
+            try state.terminal.write(bytes_to_write);
         }
 
         if (!state.has_output) return self.allocator.dupe(u8, placeholder);
@@ -139,7 +168,90 @@ pub const State = struct {
     }
 };
 
+fn bytesForSelectedProcess(state: *State.ChildState, bytes: []const u8) ![]const u8 {
+    if (!state.awaiting_snapshot) return bytes;
+
+    if (bytes.len > 0) try state.pending_snapshot.appendSlice(bytes);
+    const pending = state.pending_snapshot.items;
+    const reset_index = std.mem.indexOf(u8, pending, child_snapshot_reset) orelse return "";
+
+    state.awaiting_snapshot = false;
+    return pending[reset_index..];
+}
+
 fn dimension(value: i32) u16 {
     if (value <= 0) return 1;
     return @intCast(@min(value, std.math.maxInt(u16)));
+}
+
+test "child target shows placeholder immediately when active process changes before child emits output" {
+    const test_config = @import("../test_support/config.zig");
+
+    var cfg = try test_config.basicConfig(std.testing.allocator);
+    defer cfg.deinit();
+    cfg.layout.placeholder_banner = "NO PROCESS";
+
+    var split = tui.split_model.Model.init(.left, &cfg);
+    try split.resize(120, 40);
+
+    var child = child_primary.ChildPrimary{
+        .allocator = std.testing.allocator,
+        .pid = 0,
+        .pty_file = null,
+        .output_file = null,
+        .output = std.array_list.Managed(u8).init(std.testing.allocator),
+    };
+    defer child.output.deinit();
+
+    try child.output.appendSlice("OLD_RUNNING_OUTPUT\n");
+
+    var output = try State.init(std.testing.allocator, .{ .child = &child });
+    defer output.deinit();
+
+    const first = try output.renderText(&split, domain.process.ProcessId.fromInt(1), "NO PROCESS");
+    defer std.testing.allocator.free(first);
+    try std.testing.expect(std.mem.indexOf(u8, first, "OLD_RUNNING_OUTPUT") != null);
+
+    const second = try output.renderText(&split, domain.process.ProcessId.fromInt(2), "NO PROCESS");
+    defer std.testing.allocator.free(second);
+    try std.testing.expectEqualStrings("NO PROCESS", second);
+}
+
+test "child target ignores stale bytes queued before new process snapshot" {
+    const test_config = @import("../test_support/config.zig");
+
+    var cfg = try test_config.basicConfig(std.testing.allocator);
+    defer cfg.deinit();
+    cfg.layout.placeholder_banner = "NO PROCESS";
+
+    var split = tui.split_model.Model.init(.left, &cfg);
+    try split.resize(120, 40);
+
+    var child = child_primary.ChildPrimary{
+        .allocator = std.testing.allocator,
+        .pid = 0,
+        .pty_file = null,
+        .output_file = null,
+        .output = std.array_list.Managed(u8).init(std.testing.allocator),
+    };
+    defer child.output.deinit();
+
+    try child.output.appendSlice("OLD_RUNNING_OUTPUT\n");
+
+    var output = try State.init(std.testing.allocator, .{ .child = &child });
+    defer output.deinit();
+
+    const first = try output.renderText(&split, domain.process.ProcessId.fromInt(1), "NO PROCESS");
+    defer std.testing.allocator.free(first);
+    try std.testing.expect(std.mem.indexOf(u8, first, "OLD_RUNNING_OUTPUT") != null);
+
+    try child.output.appendSlice("LATE_OLD_OUTPUT\n");
+    const second = try output.renderText(&split, domain.process.ProcessId.fromInt(2), "NO PROCESS");
+    defer std.testing.allocator.free(second);
+    try std.testing.expectEqualStrings("NO PROCESS", second);
+
+    try child.output.appendSlice("\x1b[2J\x1b[HNEW_PROCESS_OUTPUT\n");
+    const third = try output.renderText(&split, domain.process.ProcessId.fromInt(2), "NO PROCESS");
+    defer std.testing.allocator.free(third);
+    try std.testing.expectEqualStrings("NEW_PROCESS_OUTPUT", third);
 }

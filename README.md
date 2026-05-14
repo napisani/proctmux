@@ -2,7 +2,7 @@
 
 A terminal-based process manager with an interactive TUI for managing long-running processes and scripts. proctmux provides a searchable list of defined processes, manages their lifecycle, and exposes an optional HTTP signal server and CLI for remote control.
 
-**Note**: proctmux is intentionally not a terminal emulator. It relies on your existing terminal emulator (iTerm2, Alacritty, Kitty, GNOME Terminal, etc.) to display process output and provide terminal features.
+**Note**: proctmux is intentionally a process manager, not a general-purpose terminal emulator. It runs inside your existing terminal emulator (iTerm2, Alacritty, Kitty, GNOME Terminal, etc.) and uses a small embedded VT layer for unified-mode process panes.
 
 Inspired by https://github.com/napisani/procmux.
 
@@ -13,7 +13,7 @@ Inspired by https://github.com/napisani/procmux.
 
 - **Unix-like operating system** (Linux, macOS, BSD) - Windows is not supported
 - **Terminal emulator** - Any modern terminal (iTerm2, Alacritty, Kitty, GNOME Terminal, etc.)
-- **Zig 0.15.2** to build from source, or use `nix develop` for the pinned toolchain
+- **Zig 0.15.2** only when building from source, or use `nix develop` for the pinned toolchain
 
 
 ## Installation
@@ -27,7 +27,7 @@ brew tap napisani/proctmux https://github.com/napisani/proctmux
 # Install proctmux
 brew install proctmux
 
-# Run in your terminal (inside a tmux session)
+# Run in your terminal
 proctmux
 ```
 
@@ -68,8 +68,11 @@ nix profile install github:napisani/proctmux
 nix profile upgrade '.*proctmux.*'
 
 # Run a specific version
-nix shell github:napisani/proctmux/v0.1.0
+nix shell github:napisani/proctmux/v1.0.0
 ```
+
+`v1.0.0` is the first release backed by the Zig implementation. Install paths,
+binary names, Homebrew formula names, and Nix flake package names are unchanged.
 
 
 ## Getting Started
@@ -87,7 +90,7 @@ See the [Configuration Reference](#configuration-reference) below for all availa
 
 ### 2. Start proctmux
 
-proctmux can run in two modes:
+proctmux can run in three modes:
 
 **Single Terminal Mode (Simple)**
 ```bash
@@ -97,7 +100,7 @@ proctmux
 
 **Split Terminal Mode (Advanced)**
 
-For a split-screen setup with separate client/server:
+For a split-screen setup with separate client/server terminals:
 
 Terminal 1 (Primary/Server):
 ```bash
@@ -392,6 +395,9 @@ make test
 # agent-tui end-to-end tests
 make test-zig-e2e
 
+# Focus one e2e scenario by pytest name or legacy TestUnified name
+AGENT_TUI_E2E_RUN=TestUnified_Filter_NavigationWhileFiltered make test-zig-e2e
+
 # Unit + e2e release gate
 make test-all
 ```
@@ -402,8 +408,8 @@ make test-all
 nix develop
 ```
 
-The development shell provides the pinned Zig compiler, Make, Python, and
-agent-tui for end-to-end tests.
+The development shell provides the pinned Zig compiler, Make, Python, pytest,
+and agent-tui for end-to-end tests.
 
 ### Building from Source
 
@@ -428,19 +434,19 @@ git add .
 git commit -m "Prepare release vX.Y.Z"
 
 # 2. Create the release (runs tests, creates + pushes the tag)
-make release-create VERSION=v0.2.0
+make release-create VERSION=v1.0.0
 
 # 3. Wait for GitHub Actions to finish building
 #    Check: https://github.com/napisani/proctmux/actions
 
 # 4. Update the Homebrew formula with new checksums
-make release-publish VERSION=v0.2.0
+make release-publish VERSION=v1.0.0
 
 # 5. Push the formula update to main
 git push origin main
 ```
 
-Or use `make release VERSION=v0.2.0` to run steps 2-4 interactively (it pauses
+Or use `make release VERSION=v1.0.0` to run steps 2-4 interactively (it pauses
 and waits for you to confirm that the GitHub Actions workflow has completed).
 
 The release will include:
@@ -449,7 +455,7 @@ The release will include:
 - `proctmux-darwin-amd64.tar.gz` - macOS (Intel)
 - `proctmux-darwin-arm64.tar.gz` - macOS (Apple Silicon)
 
-**Note:** Windows is not supported as proctmux requires Unix-specific terminal and tmux features.
+**Note:** Windows is not supported as proctmux requires Unix-specific terminal and process features.
 
 Tags with hyphens (e.g., `v1.0.0-beta`, `v2.0.0-rc1`) are automatically marked as prereleases.
 

@@ -43,12 +43,12 @@
           git
           gnumake
           python3
+          python3Packages.pytest
           zig_0_15
           agent-tui
         ];
 
-        # Generate a user-friendly version number.
-        version = builtins.substring 0 8 self.lastModifiedDate;
+        version = "1.0.0";
 
       in
       {
@@ -67,7 +67,7 @@
 
           buildPhase = ''
             runHook preBuild
-            make build-zig ZIG_CACHE_DIR="$TMPDIR/zig-cache"
+            make build-zig ZIG_CACHE_DIR="$TMPDIR/zig-cache" VERSION=v${version}
             runHook postBuild
           '';
 

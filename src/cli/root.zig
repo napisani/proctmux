@@ -20,6 +20,7 @@ pub const Config = struct {
     args: []const []const u8 = &.{},
     unified: bool = false,
     unified_orientation: UnifiedSplit = .none,
+    version_requested: bool = false,
 };
 
 pub const deprecated_unified_toggle_message =
@@ -48,6 +49,10 @@ pub const usage_text =
     \\        run in unified mode with process list on the right
     \\  -unified-top
     \\        run in unified mode with process list above the output
+    \\  -version
+    \\        print version and exit
+    \\  --version
+    \\        print version and exit
     \\
     \\Modes:
     \\  (default)                Run primary server (manages processes)
@@ -177,6 +182,7 @@ pub fn parse(args: []const []const u8) !Config {
             .unified_right => try applyOrientation(&cfg, &orientation_count, .right, try parseBool(value)),
             .unified_top => try applyOrientation(&cfg, &orientation_count, .top, try parseBool(value)),
             .unified_bottom => try applyOrientation(&cfg, &orientation_count, .bottom, try parseBool(value)),
+            .version => cfg.version_requested = true,
             .help => return error.HelpRequested,
         }
         i += 1;
@@ -200,6 +206,7 @@ const FlagKind = enum {
     unified_right,
     unified_top,
     unified_bottom,
+    version,
     help,
 };
 
@@ -228,6 +235,7 @@ fn parseFlagToken(arg: []const u8) !ParsedFlag {
     if (std.mem.eql(u8, name, "unified-right")) return .{ .kind = .unified_right, .value = value };
     if (std.mem.eql(u8, name, "unified-top")) return .{ .kind = .unified_top, .value = value };
     if (std.mem.eql(u8, name, "unified-bottom")) return .{ .kind = .unified_bottom, .value = value };
+    if (std.mem.eql(u8, name, "version")) return .{ .kind = .version, .value = value };
     if (std.mem.eql(u8, name, "h") or std.mem.eql(u8, name, "help")) return .{ .kind = .help, .value = value };
     return error.UnknownFlag;
 }
@@ -301,6 +309,15 @@ test "default CLI config matches legacy parser" {
     try std.testing.expectEqual(@as(usize, 0), cfg.args.len);
     try std.testing.expect(!cfg.unified);
     try std.testing.expectEqual(UnifiedSplit.none, cfg.unified_orientation);
+    try std.testing.expect(!cfg.version_requested);
+}
+
+test "version flag parses as a non-TUI request" {
+    const cfg = try parse(&.{"--version"});
+
+    try std.testing.expect(cfg.version_requested);
+    try std.testing.expectEqual(Mode.primary, cfg.mode);
+    try std.testing.expectEqualStrings("start", cfg.subcommand);
 }
 
 test "config file client mode and subcommand parse like legacy behavior" {

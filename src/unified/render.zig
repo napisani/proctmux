@@ -4,6 +4,9 @@ const terminal = @import("../terminal/root.zig");
 const tui = @import("../tui/root.zig");
 const client_mode = @import("../modes/client.zig");
 
+const side_by_side_separator = " | ";
+const side_by_side_separator_width = 3;
+
 pub fn frame(
     session: *tui.client_session.ClientSession,
     split: *const tui.split_model.Model,
@@ -48,7 +51,7 @@ fn writeSplitContent(
             client_text,
             server_text,
             positiveWidth(split.clientSize().width),
-            positiveWidth(split.serverSize().width),
+            widthWithoutSeparator(positiveWidth(split.serverSize().width)),
             positiveHeight(split.serverSize().height),
             .head,
             .tail,
@@ -57,7 +60,7 @@ fn writeSplitContent(
             output,
             server_text,
             client_text,
-            positiveWidth(split.serverSize().width),
+            widthWithoutSeparator(positiveWidth(split.serverSize().width)),
             positiveWidth(split.clientSize().width),
             positiveHeight(split.serverSize().height),
             .tail,
@@ -111,8 +114,9 @@ fn writeSideBySide(
         if (left_line.len == 0 and right_line.len == 0) continue;
 
         const left_display_width = try writeFittedLine(output, left_line, left_width);
+        if (left_display_width < left_width) try writeSpaces(output, left_width - left_display_width);
+        try output.writeAll(side_by_side_separator);
         if (right_line.len > 0) {
-            if (left_display_width < left_width) try writeSpaces(output, left_width - left_display_width);
             _ = try writeFittedLine(output, right_line, right_width);
         }
         try output.writeAll(terminal.repaint.clear_line_tail);
@@ -145,6 +149,11 @@ fn trimLineRight(line: []const u8) []const u8 {
 
 fn positiveWidth(width: i32) usize {
     return if (width > 0) @intCast(width) else 1;
+}
+
+fn widthWithoutSeparator(width: usize) usize {
+    if (width <= side_by_side_separator_width) return 1;
+    return width - side_by_side_separator_width;
 }
 
 fn positiveHeight(height: i32) usize {
@@ -247,7 +256,28 @@ test "side-by-side renderer clips long left pane before right pane" {
     const line_end = std.mem.indexOfScalar(u8, out.items, '\n') orelse out.items.len;
     const line = out.items[0..line_end];
     try std.testing.expect(std.mem.indexOf(u8, line, "RIGHT") != null);
-    try std.testing.expectEqual(@as(usize, 10), std.mem.indexOf(u8, line, "RIGHT").?);
+    try std.testing.expectEqual(@as(usize, 13), std.mem.indexOf(u8, line, "RIGHT").?);
+}
+
+test "side-by-side renderer marks the pane boundary before server output" {
+    const test_io = @import("../test_support/io.zig");
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try writeSideBySide(
+        test_io.TestOutput.writer(&out),
+        "client",
+        "RIGHT",
+        10,
+        10,
+        3,
+        .head,
+        .tail,
+    );
+
+    const line_end = std.mem.indexOfScalar(u8, out.items, '\n') orelse out.items.len;
+    const line = out.items[0..line_end];
+    try std.testing.expect(std.mem.indexOf(u8, line, " | RIGHT") != null);
 }
 
 test "side-by-side renderer tails server output without scrolling client away" {

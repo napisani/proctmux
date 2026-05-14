@@ -136,6 +136,11 @@ pub fn runInDirUntilStoppedWithInput(
         },
         else => return err,
     };
+    if (parsed.version_requested) {
+        try output.writeAll(version.banner());
+        try output.writeAll("\n");
+        return;
+    }
     if (std.mem.eql(u8, parsed.subcommand, "config-init")) {
         const path = try commands.config_init.runInDir(dir, parsed.args);
         try output.writeAll("Created starter configuration at ");
@@ -184,6 +189,7 @@ fn isSignalCommand(subcommand: []const u8) bool {
 
 fn argsNeedRawTerminal(args: []const []const u8) bool {
     const parsed = cli.parse(args) catch return false;
+    if (parsed.version_requested) return false;
     if (isSignalCommand(parsed.subcommand)) return false;
     if (std.mem.eql(u8, parsed.subcommand, "config-init")) return false;
     return parsed.unified or parsed.mode == .client or std.mem.eql(u8, parsed.subcommand, "start");
@@ -310,6 +316,20 @@ test "app prints legacy-compatible CLI help for help flag" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "--unified-bottom") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "Commands:") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "signal-stop-running") != null);
+}
+
+test "app prints version for version flag without starting TUI" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try runInDir(std.testing.allocator, tmp.dir, &.{"--version"}, test_io.TestOutput.writer(&out));
+
+    try std.testing.expect(out.items.len > 0);
+    try std.testing.expectEqual(@as(u8, '\n'), out.items[out.items.len - 1]);
+    try std.testing.expectEqualStrings(version.banner(), out.items[0 .. out.items.len - 1]);
 }
 
 test "app routes signal-list through config-derived socket" {

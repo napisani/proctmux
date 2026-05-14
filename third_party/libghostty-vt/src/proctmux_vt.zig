@@ -7,3 +7,4 @@
 pub const Terminal = @import("terminal/Terminal.zig");
 pub const TerminalStream = @import("terminal/stream_terminal.zig").Stream;
 pub const RenderState = @import("terminal/render.zig").RenderState;
+pub const Style = @import("terminal/style.zig").Style;

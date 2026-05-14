@@ -1,5 +1,5 @@
 class Proctmux < Formula
-  desc "tmux-based process manager with interactive TUI"
+  desc "Terminal process manager with interactive TUI"
   homepage "https://github.com/napisani/proctmux"
   version "0.1.9"
   license "MIT"
@@ -24,8 +24,6 @@ class Proctmux < Formula
     end
   end
 
-  depends_on "tmux"
-
   def install
     if OS.mac?
       bin.install "proctmux-darwin-arm64" => "proctmux" if Hardware::CPU.arm?
@@ -38,17 +36,15 @@ class Proctmux < Formula
 
   def caveats
     <<~EOS
-      proctmux requires tmux to be running.
-
       To use proctmux:
-        1. Start a tmux session: tmux
-        2. Run proctmux inside the tmux session
+        1. Create a proctmux.yaml file with: proctmux config-init
+        2. Run proctmux in your terminal
 
       See https://github.com/napisani/proctmux for configuration and usage.
     EOS
   end
 
   test do
-    assert_match version.to_s, shell_output("#{bin}/proctmux --version 2>&1", 1)
+    assert_match "proctmux #{version}", shell_output("#{bin}/proctmux --version")
   end
 end

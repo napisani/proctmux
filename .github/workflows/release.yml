@@ -34,13 +34,13 @@ jobs:
           - os: ubuntu-latest
             zig_target: x86_64-linux-gnu
             artifact_name: proctmux-linux-amd64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             zig_target: aarch64-linux-gnu
             artifact_name: proctmux-linux-arm64
-          - os: macos-latest
+          - os: macos-15-intel
             zig_target: x86_64-macos
             artifact_name: proctmux-darwin-amd64
-          - os: macos-latest
+          - os: macos-15
             zig_target: aarch64-macos
             artifact_name: proctmux-darwin-arm64
 
@@ -54,7 +54,18 @@ jobs:
 
       - name: Build binary
         run: |
-          nix develop --command make build-release-artifact ZIG_TARGET=${{ matrix.zig_target }} ARTIFACT_NAME=${{ matrix.artifact_name }}
+          nix develop --command make build-release-artifact ZIG_TARGET=${{ matrix.zig_target }} ARTIFACT_NAME=${{ matrix.artifact_name }} VERSION=${{ github.ref_name }}
+
+      - name: Smoke test binary
+        shell: bash
+        run: |
+          expected="proctmux ${GITHUB_REF_NAME#v}"
+          actual="$(bin/${{ matrix.artifact_name }} --version)"
+          if [ "$actual" != "$expected" ]; then
+            echo "expected: $expected" >&2
+            echo "actual:   $actual" >&2
+            exit 1
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -94,6 +105,9 @@ jobs:
 
           Release ${{ github.ref_name }}
 
+          This is the first release backed by the Zig implementation. Install
+          paths, binary names, and package names are unchanged.
+
           ### Installation
 
           Download the appropriate binary for your platform below:
@@ -103,7 +117,7 @@ jobs:
           - **macOS (Intel)**: `proctmux-darwin-amd64.tar.gz`
           - **macOS (Apple Silicon)**: `proctmux-darwin-arm64.tar.gz`
 
-          **Note:** proctmux requires tmux and is designed for Unix-like systems (Linux, macOS, BSD). Windows is not currently supported.
+          **Note:** proctmux is designed for Unix-like systems (Linux, macOS, BSD). Windows is not currently supported.
 
           ### Quick Start
 
@@ -114,7 +128,7 @@ jobs:
           # Make executable
           chmod +x proctmux-*
 
-          # Run (must be inside a tmux session)
+          # Run
           ./proctmux-*
           ```
 

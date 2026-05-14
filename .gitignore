@@ -9,3 +9,4 @@ zig-out/
 .swo
 bin/
 ./result
+__pycache__/
