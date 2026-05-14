@@ -99,9 +99,9 @@ pub const Controller = struct {
 
         if (instance.isRunning()) {
             const stop_signal = resolveStopSignal(instance.config);
-            std.posix.kill(instance.pid(), stop_signal) catch {};
+            signalProcessTree(instance.pid(), stop_signal);
             if (!waitUntilStopped(instance, resolveStopTimeoutMs(instance.config))) {
-                std.posix.kill(instance.pid(), std.posix.SIG.KILL) catch {};
+                signalProcessTree(instance.pid(), std.posix.SIG.KILL);
                 _ = waitUntilStopped(instance, 2000);
             }
         }
@@ -214,6 +214,14 @@ fn adapterGetPID(context: *anyopaque, id: domain.process.ProcessId) i32 {
 fn resolveStopSignal(proc_cfg: *const config.schema.ProcessConfig) u8 {
     if (proc_cfg.stop > 0) return @intCast(proc_cfg.stop);
     return std.posix.SIG.TERM;
+}
+
+fn signalProcessTree(pid: std.posix.pid_t, sig: u8) void {
+    if (pid <= 0) return;
+    const process_group: std.posix.pid_t = -pid;
+    std.posix.kill(process_group, sig) catch {
+        std.posix.kill(pid, sig) catch {};
+    };
 }
 
 fn resolveStopTimeoutMs(proc_cfg: *const config.schema.ProcessConfig) u64 {

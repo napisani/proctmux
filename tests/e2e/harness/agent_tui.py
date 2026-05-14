@@ -115,7 +115,7 @@ class AgentTuiRunner:
         result = self.agent_json(args, timeout=20)
         session_id = str(result["session_id"])
         self.sessions.append(session_id)
-        return Session(self, session_id)
+        return Session(self, session_id, cfg_dir, cfg_path)
 
     def write_config(self, name: str, body: str) -> tuple[Path, Path]:
         cfg_dir = self.tmp_root / slug(name)
@@ -188,9 +188,11 @@ class AgentTuiRunner:
 
 
 class Session:
-    def __init__(self, runner: AgentTuiRunner, session_id: str) -> None:
+    def __init__(self, runner: AgentTuiRunner, session_id: str, config_dir: Path, config_path: Path) -> None:
         self.runner = runner
         self.session_id = session_id
+        self.config_dir = config_dir
+        self.config_path = config_path
         self.client = Pane(self, "client")
         self.server = Pane(self, "server")
 
@@ -290,6 +292,26 @@ class Session:
             samples.append(self.snapshot())
             time.sleep(interval)
         return samples
+
+    def signal(self, subcommand: str, *args: str, timeout: float = 10.0) -> subprocess.CompletedProcess[str]:
+        proc = subprocess.run(
+            [str(PROCTMUX_BIN), "-f", str(self.config_path), subcommand, *args],
+            cwd=self.config_dir,
+            env=self.runner.env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+        if proc.returncode != 0:
+            raise AgentTuiError(
+                "proctmux signal command failed\n"
+                f"command: {PROCTMUX_BIN} -f {self.config_path} {subcommand} {' '.join(args)}\n"
+                f"exit: {proc.returncode}\n"
+                f"stdout:\n{proc.stdout}\n"
+                f"stderr:\n{proc.stderr}"
+            )
+        return proc
 
 
 class Pane:

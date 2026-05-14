@@ -78,6 +78,7 @@ fn startPipe(
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
+    child.pgid = 0;
     if (proc_cfg.cwd.len > 0) child.cwd = proc_cfg.cwd;
     child.env_map = env_map;
     try child.spawn();
