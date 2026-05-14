@@ -15,6 +15,7 @@ pub fn frame(
 ) !void {
     try output.writeAll(terminal.repaint.begin_frame);
     try writeSplitContent(session, split, server_text, output);
+    try output.writeAll(terminal.repaint.end_frame);
     try writeStatusBar(session, split, output);
     try output.writeAll(terminal.repaint.end_frame);
 }
@@ -27,8 +28,21 @@ fn writeStatusBar(
     const status = try split.statusBar(session.allocator);
     defer session.allocator.free(status);
     if (status.len > 0) {
-        try io.writeTextClearingLineTails(output, status, terminal.repaint.clear_line_tail);
+        try writeCursorPosition(output, statusRow(split), 1);
+        _ = try writeFittedLine(output, status, positiveWidth(split.content_width));
+        try output.writeAll(terminal.repaint.clear_line_tail);
     }
+}
+
+fn statusRow(split: *const tui.split_model.Model) usize {
+    if (split.content_height <= 0) return 1;
+    return @as(usize, @intCast(split.content_height)) + 1;
+}
+
+fn writeCursorPosition(output: io.Output, row: usize, column: usize) !void {
+    var buffer: [32]u8 = undefined;
+    const sequence = try std.fmt.bufPrint(&buffer, "\x1b[{};{}H", .{ row, column });
+    try output.writeAll(sequence);
 }
 
 fn writeSplitContent(
@@ -301,4 +315,84 @@ test "side-by-side renderer tails server output without scrolling client away" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "two") == null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "three") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "five") != null);
+}
+
+test "status bar moves to bottom row before rendering" {
+    const test_config = @import("../test_support/config.zig");
+    const test_io = @import("../test_support/io.zig");
+
+    var cfg = try test_config.basicConfig(std.testing.allocator);
+    defer cfg.deinit();
+
+    var split = tui.split_model.Model.init(.left, &cfg);
+    try split.resize(90, 12);
+
+    var session: tui.client_session.ClientSession = undefined;
+    session.allocator = std.testing.allocator;
+
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try writeStatusBar(&session, &split, test_io.TestOutput.writer(&out));
+
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        out.items,
+        "\x1b[12;1HClient | server",
+    ));
+}
+
+test "status bar clips to terminal width before clearing line tail" {
+    const test_config = @import("../test_support/config.zig");
+    const test_io = @import("../test_support/io.zig");
+
+    var cfg = try test_config.basicConfig(std.testing.allocator);
+    defer cfg.deinit();
+
+    var split = tui.split_model.Model.init(.left, &cfg);
+    try split.resize(40, 12);
+
+    var session: tui.client_session.ClientSession = undefined;
+    session.allocator = std.testing.allocator;
+
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try writeStatusBar(&session, &split, test_io.TestOutput.writer(&out));
+
+    const cursor = "\x1b[12;1H";
+    try std.testing.expect(std.mem.startsWith(u8, out.items, cursor));
+
+    const after_cursor = out.items[cursor.len..];
+    const clear_index = std.mem.indexOf(u8, after_cursor, terminal.repaint.clear_line_tail) orelse
+        return error.MissingClearLineTail;
+    try std.testing.expectEqual(@as(usize, 40), clear_index);
+    try std.testing.expect(std.mem.indexOfScalar(u8, after_cursor[0..clear_index], '\n') == null);
+}
+
+test "frame clears stale content before pinned status bar" {
+    const test_config = @import("../test_support/config.zig");
+    const test_io = @import("../test_support/io.zig");
+
+    var cfg = try test_config.basicConfig(std.testing.allocator);
+    defer cfg.deinit();
+    cfg.layout.hide_process_list_when_unfocused = true;
+
+    var split = tui.split_model.Model.init(.left, &cfg);
+    try split.resize(90, 12);
+    try split.handleKey("ctrl+right");
+
+    var session: tui.client_session.ClientSession = undefined;
+    session.allocator = std.testing.allocator;
+
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try frame(&session, &split, "NO PROCESS", test_io.TestOutput.writer(&out));
+
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        out.items,
+        "NO PROCESS\x1b[K\n\x1b[J\x1b[12;1H",
+    ) != null);
 }

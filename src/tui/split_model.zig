@@ -128,14 +128,14 @@ pub const Model = struct {
         const toggle_label = firstBinding(self.app_config.keybinding.toggle_focus);
         return std.fmt.allocPrint(
             allocator,
-            "{s} | {s}    {s} focus client; {s} focus server; {s} toggle focus{s}",
+            "{s} | {s}{s}    {s} focus client; {s} focus server; {s} toggle focus",
             .{
                 client_label,
                 server_label,
+                hidden_label,
                 firstBinding(self.app_config.keybinding.focus_client),
                 firstBinding(self.app_config.keybinding.focus_server),
                 toggle_label,
-                hidden_label,
             },
         );
     }

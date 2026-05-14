@@ -172,3 +172,23 @@ def test_hide_on_unfocus_rapid_toggle_no_cross_leakage(app: ProctmuxApp) -> None
             time.sleep(0.05)
         snap = tui.wait_for_text(proc_label)
         expect_not_contains(snap.client_text, proc_output, "process output leaked into client pane after rapid toggle")
+
+
+@pytest.mark.go_name("TestUnified_StatusBarPinnedToBottom")
+def test_status_bar_pinned_to_bottom(app: ProctmuxApp) -> None:
+    with app.unified(
+        "status-bottom",
+        """
+        log_file: proctmux.log
+        procs:
+          tiny-output:
+            shell: "printf 'SHORT\\n'; sleep 60"
+            autostart: true
+        """,
+        cols=90,
+        rows=12,
+    ) as tui:
+        snap = tui.wait_for_text("SHORT")
+        lines = snap.text.splitlines()
+        expect(len(lines) == 12, f"expected a 12-row terminal snapshot, got {len(lines)} rows", snap)
+        expect(lines[-1].startswith("Client | server"), "unified status bar was not on the bottom rendered row", snap)
