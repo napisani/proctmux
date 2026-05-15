@@ -116,6 +116,70 @@ def lifecycle_paths(app: ProctmuxApp, name: str) -> tuple[Path, Path, Path]:
     return base / "events.txt", base / "run-count.txt", base / "child.pid"
 
 
+@pytest.mark.go_name("TestUnified_ProcessExitUpdatesStatusWithoutInput")
+def test_process_exit_updates_status_without_input(app: ProctmuxApp) -> None:
+    done_path = app.runner.tmp_root / "exit-status-refresh-done.txt"
+    with app.unified(
+        "lifecycle-exit-status-refresh",
+        f"""
+        layout:
+          placeholder_banner: "NO PROCESS"
+        log_file: proctmux.log
+        procs:
+          short-lived:
+            shell: |
+              printf 'SHORT_LIVED_STARTED\\n'
+              sleep 1
+              printf 'DONE\\n' > "{done_path}"
+            autostart: true
+        """,
+    ) as tui:
+        tui.wait_until(
+            "process list shows short-lived process running",
+            lambda snap: "● short-lived" in snap.text,
+        )
+
+        wait_for_path_text(done_path, "DONE")
+
+        tui.wait_until(
+            "process list status updates after exit without input",
+            lambda snap: "■ short-lived" in snap.text,
+            timeout=5.0,
+        )
+
+
+@pytest.mark.go_name("TestClient_ProcessExitUpdatesStatusWithoutInput")
+def test_client_process_exit_updates_status_without_input(app: ProctmuxApp) -> None:
+    done_path = app.runner.tmp_root / "client-exit-status-refresh-done.txt"
+    with app.primary_client(
+        "lifecycle-client-exit-status-refresh",
+        f"""
+        layout:
+          placeholder_banner: "NO PROCESS"
+        log_file: proctmux.log
+        procs:
+          short-lived:
+            shell: |
+              printf 'SHORT_LIVED_STARTED\\n'
+              sleep 1
+              printf 'DONE\\n' > "{done_path}"
+            autostart: true
+        """,
+    ) as tui:
+        tui.wait_until(
+            "client process list shows short-lived process running",
+            lambda snap: "● short-lived" in snap.text,
+        )
+
+        wait_for_path_text(done_path, "DONE")
+
+        tui.wait_until(
+            "client process list status updates after exit without input",
+            lambda snap: "■ short-lived" in snap.text,
+            timeout=5.0,
+        )
+
+
 @pytest.mark.go_name("TestUnified_StopSelectedWithOnKillTerminatesProcessGroup")
 def test_stop_selected_with_on_kill_terminates_process_group(app: ProctmuxApp) -> None:
     events_path, run_count_path, child_pid_path = lifecycle_paths(app, "stop-default")

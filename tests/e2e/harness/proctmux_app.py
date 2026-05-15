@@ -35,3 +35,14 @@ class ProctmuxApp:
             unified_flag="--unified-left",
             no_color=no_color,
         )
+
+    def primary_client(
+        self,
+        name: str,
+        config: str,
+        *,
+        cols: int = 120,
+        rows: int = 40,
+        no_color: bool = True,
+    ) -> Session:
+        return self.runner.start_primary_client(name, config, cols=cols, rows=rows, no_color=no_color)

@@ -29,6 +29,9 @@ pub const ClientModel = struct {
     mode: domain.state.Mode = .normal,
     active_proc_id: domain.process.ProcessId = .none,
     term_width: usize = 80,
+    term_height: usize = 0,
+    no_color: bool = false,
+    show_panel_headers: bool = false,
 
     pub fn init(
         allocator: std.mem.Allocator,

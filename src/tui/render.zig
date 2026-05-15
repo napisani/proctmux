@@ -9,6 +9,7 @@ pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_mode
     var out = std.array_list.Managed(u8).init(allocator);
     errdefer out.deinit();
 
+    try appendProcessHeader(&out, model);
     try appendHelpPanel(&out, model);
     try appendSelectedDescription(&out, model);
     try appendMessagesPanel(&out, model);
@@ -19,7 +20,14 @@ pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_mode
         return out.toOwnedSlice();
     }
 
-    for (model.filtered_views, 0..) |view, index| {
+    const process_start = selectedProcessWindowStart(
+        model,
+        renderedLineCount(out.items),
+        model.filtered_views.len,
+    );
+    const process_end = selectedProcessWindowEnd(model, renderedLineCount(out.items), process_start);
+
+    for (model.filtered_views[process_start..process_end], process_start..) |view, index| {
         const selected = if (model.active_proc_id.isNone())
             index == 0
         else
@@ -31,7 +39,7 @@ pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_mode
             try out.appendSlice("  ");
         }
 
-        try appendStatusMarker(&out, &model.app_state.config.style, view.status);
+        try appendStatusMarker(&out, &model.app_state.config.style, view.status, !model.no_color);
         try out.append(' ');
         if (model.app_state.config.layout.enable_debug_process_info) {
             try out.appendSlice(view.label);
@@ -53,6 +61,62 @@ pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_mode
     }
 
     return out.toOwnedSlice();
+}
+
+fn appendProcessHeader(out: *std.array_list.Managed(u8), model: *const client_model.ClientModel) !void {
+    if (!model.show_panel_headers) return;
+
+    try out.writer().print("Processes {}/{}", .{ model.filtered_views.len, model.process_views.len });
+    if (model.show_only_running) try out.appendSlice("  running only");
+    if (model.filterText().len > 0) try out.writer().print("  filter: {s}", .{model.filterText()});
+    try out.append('\n');
+}
+
+fn selectedProcessWindowStart(
+    model: *const client_model.ClientModel,
+    reserved_lines: usize,
+    process_count: usize,
+) usize {
+    if (model.term_height == 0 or process_count == 0) return 0;
+    if (reserved_lines >= model.term_height) return 0;
+
+    const available_rows = model.term_height - reserved_lines;
+    if (available_rows >= process_count) return 0;
+
+    const selected_index = selectedProcessIndex(model);
+    if (selected_index < available_rows) return 0;
+    return selected_index + 1 - available_rows;
+}
+
+fn selectedProcessWindowEnd(
+    model: *const client_model.ClientModel,
+    reserved_lines: usize,
+    start: usize,
+) usize {
+    if (model.term_height == 0) return model.filtered_views.len;
+    if (reserved_lines >= model.term_height) return start;
+
+    const available_rows = model.term_height - reserved_lines;
+    return @min(start + available_rows, model.filtered_views.len);
+}
+
+fn selectedProcessIndex(model: *const client_model.ClientModel) usize {
+    if (model.active_proc_id.isNone()) return 0;
+    for (model.filtered_views, 0..) |view, index| {
+        if (view.id == model.active_proc_id) return index;
+    }
+    return 0;
+}
+
+fn renderedLineCount(text: []const u8) usize {
+    if (text.len == 0) return 0;
+
+    var count: usize = 0;
+    for (text) |byte| {
+        if (byte == '\n') count += 1;
+    }
+    if (text[text.len - 1] != '\n') count += 1;
+    return count;
 }
 
 fn appendMessagesPanel(out: *std.array_list.Managed(u8), model: *const client_model.ClientModel) !void {
@@ -284,13 +348,104 @@ fn appendStatusMarker(
     out: *std.array_list.Managed(u8),
     style: *const config.schema.StyleConfig,
     status: domain.process.ProcessStatus,
+    colors_enabled: bool,
 ) !void {
     const color = statusMarkerColor(style, status);
-    if (ansiForegroundCode(color)) |code| {
-        try out.writer().print("\x1b[{}m{s}\x1b[0m", .{ code, statusMarker(status) });
-    } else {
-        try out.appendSlice(statusMarker(status));
+    if (colors_enabled) {
+        if (ansiForegroundCode(color)) |code| {
+            try out.writer().print("\x1b[{}m{s}\x1b[0m", .{ code, statusMarker(status) });
+            return;
+        }
     }
+
+    try out.appendSlice(statusMarker(status));
+}
+
+pub fn renderHelpOverlay(
+    allocator: std.mem.Allocator,
+    model: *const client_model.ClientModel,
+    width: usize,
+    height: usize,
+) ![]const u8 {
+    _ = width;
+
+    var out = std.array_list.Managed(u8).init(allocator);
+    errdefer out.deinit();
+
+    var lines: usize = 0;
+    const keys = model.app_state.config.keybinding;
+
+    try appendHelpOverlayLine(&out, &lines, height, "Help");
+    try appendHelpOverlayLine(&out, &lines, height, "");
+    try appendHelpOverlayLine(&out, &lines, height, "Navigation");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.up, "move up");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.down, "move down");
+    try appendHelpOverlayLine(&out, &lines, height, "");
+    try appendHelpOverlayLine(&out, &lines, height, "Process");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.start, "start process");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.stop, "stop process");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.restart, "restart process");
+    try appendHelpOverlayLine(&out, &lines, height, "");
+    try appendHelpOverlayLine(&out, &lines, height, "Filter");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.filter, "filter processes");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.submit_filter, "apply filter");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.toggle_running, "toggle running only");
+    try appendHelpOverlayLine(&out, &lines, height, "");
+    try appendHelpOverlayLine(&out, &lines, height, "Focus");
+    try appendHelpOverlayLiteralLine(&out, &lines, height, "Tab", "focus next pane");
+    try appendHelpOverlayLiteralLine(&out, &lines, height, "Shift+Tab", "focus previous pane");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.toggle_focus, "toggle focus");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.focus_client, "focus client");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.focus_server, "focus server");
+    try appendHelpOverlayLine(&out, &lines, height, "");
+    try appendHelpOverlayLine(&out, &lines, height, "Other");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.toggle_help, "close help");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.docs, "show docs");
+    try appendHelpOverlayBindingLine(&out, &lines, height, keys.quit, "quit");
+
+    return out.toOwnedSlice();
+}
+
+fn appendHelpOverlayLine(
+    out: *std.array_list.Managed(u8),
+    lines: *usize,
+    height: usize,
+    text: []const u8,
+) !void {
+    if (height != 0 and lines.* >= height) return;
+    try out.appendSlice(text);
+    try out.append('\n');
+    lines.* += 1;
+}
+
+fn appendHelpOverlayBindingLine(
+    out: *std.array_list.Managed(u8),
+    lines: *usize,
+    height: usize,
+    keys: config.schema.StringList,
+    label: []const u8,
+) !void {
+    if (height != 0 and lines.* >= height) return;
+    try appendBindingText(out, keys);
+    try out.append(' ');
+    try out.appendSlice(label);
+    try out.append('\n');
+    lines.* += 1;
+}
+
+fn appendHelpOverlayLiteralLine(
+    out: *std.array_list.Managed(u8),
+    lines: *usize,
+    height: usize,
+    key: []const u8,
+    label: []const u8,
+) !void {
+    if (height != 0 and lines.* >= height) return;
+    try out.appendSlice(key);
+    try out.append(' ');
+    try out.appendSlice(label);
+    try out.append('\n');
+    lines.* += 1;
 }
 
 fn statusMarkerColor(style: *const config.schema.StyleConfig, status: domain.process.ProcessStatus) []const u8 {
@@ -400,6 +555,95 @@ test "process list renderer colors status markers from config" {
 
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[31m■\x1b[0m alpha-api") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "> \x1b[32m●\x1b[0m beta-worker") != null);
+}
+
+test "process list renderer omits status colors when disabled" {
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
+    defer cfg.deinit();
+    cfg.style.pointer_char = ">";
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
+
+    var views = test_config.standardRenderViews(&cfg);
+    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+    model.no_color = true;
+
+    const rendered = try renderProcessList(std.testing.allocator, &model);
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "> ● beta-worker") != null);
+}
+
+test "process list renderer adds compact header when enabled" {
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
+    defer cfg.deinit();
+    cfg.style.pointer_char = ">";
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
+
+    var views = test_config.standardRenderViews(&cfg);
+    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+    model.show_panel_headers = true;
+
+    const rendered = try renderProcessList(std.testing.allocator, &model);
+    defer std.testing.allocator.free(rendered);
+
+    try test_ansi.expectContainsPlain(std.testing.allocator, rendered, "Processes 3/3\n");
+}
+
+test "process list renderer reports active filter in header" {
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
+    defer cfg.deinit();
+    cfg.style.pointer_char = ">";
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
+
+    var views = test_config.standardRenderViews(&cfg);
+    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+    model.show_panel_headers = true;
+
+    _ = try model.handleKey("/");
+    for ("alpha") |ch| {
+        const key = [_]u8{ch};
+        _ = try model.handleKey(key[0..]);
+    }
+    _ = try model.handleKey("enter");
+
+    const rendered = try renderProcessList(std.testing.allocator, &model);
+    defer std.testing.allocator.free(rendered);
+
+    try test_ansi.expectContainsPlain(std.testing.allocator, rendered, "Processes 1/3  filter: alpha\n");
+}
+
+test "process list renderer keeps selected process visible inside terminal height" {
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
+    defer cfg.deinit();
+    cfg.style.pointer_char = ">";
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(3);
+
+    var views = test_config.standardRenderViews(&cfg);
+    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+    model.show_panel_headers = true;
+    model.term_height = 2;
+
+    const rendered = try renderProcessList(std.testing.allocator, &model);
+    defer std.testing.allocator.free(rendered);
+
+    try test_ansi.expectEqualPlain(std.testing.allocator, "Processes 3/3\n> ■ gamma-db\n", rendered);
 }
 
 test "process list renderer selects first row when active id is zero like legacy behavior" {
@@ -578,6 +822,25 @@ test "process list renderer shows help panel when toggled" {
             "  ■ alpha-api\n> ● beta-worker\n  ■ gamma-db\n",
         rendered,
     );
+}
+
+test "help overlay renders full-width help content" {
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+
+    var views = test_config.standardRenderViews(&cfg);
+    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    const rendered = try renderHelpOverlay(std.testing.allocator, &model, 100, 30);
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Help") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Focus") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ctrl+left focus client") != null);
 }
 
 test "process list renderer shows only the five most recent messages" {

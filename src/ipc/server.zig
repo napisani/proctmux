@@ -329,6 +329,42 @@ test "state client closes peer that disconnects before initial state write" {
     try std.testing.expect(client.closed.load(.seq_cst));
 }
 
+test "state monitor broadcasts its first sampled state" {
+    const state_line = "{\"type\":\"state\",\"status\":\"halted\"}\n";
+    var provider = StaticStateProvider{ .line = state_line };
+    var stopped = std.atomic.Value(bool).init(false);
+    var server = StateCommandServer.init(
+        std.testing.allocator,
+        unusedCommandHandler(),
+        provider.provider(),
+        &stopped,
+        defaultPeerAuthorizer(),
+    );
+    defer {
+        stopped.store(true, .seq_cst);
+        server.closeAllClients();
+        server.deinit();
+    }
+
+    var streams = try testSocketPair();
+    defer streams[1].close();
+
+    const client = try std.testing.allocator.create(StateClient);
+    errdefer std.testing.allocator.destroy(client);
+    errdefer client.close();
+    client.* = .{
+        .stream = streams[0],
+        .write_timeout_ms = 200,
+    };
+    try server.clients.append(client);
+
+    server.state_monitor_thread = try std.Thread.spawn(.{}, runStateMonitor, .{&server});
+
+    const line = try line_io.readTimeout(std.testing.allocator, streams[1], 1024, 500);
+    defer std.testing.allocator.free(line);
+    try std.testing.expectEqualStrings(state_line, line);
+}
+
 fn testSocketPair() ![2]std.net.Stream {
     var fds: [2]std.c.fd_t = undefined;
     const rc = std.c.socketpair(
@@ -343,6 +379,37 @@ fn testSocketPair() ![2]std.net.Stream {
         .{ .handle = fds[0] },
         .{ .handle = fds[1] },
     };
+}
+
+const StaticStateProvider = struct {
+    line: []const u8,
+
+    fn provider(self: *StaticStateProvider) StateProvider {
+        return .{
+            .context = self,
+            .state_line = stateLine,
+        };
+    }
+
+    fn stateLine(context: *anyopaque, allocator: std.mem.Allocator) anyerror![]const u8 {
+        const self: *StaticStateProvider = @ptrCast(@alignCast(context));
+        return allocator.dupe(u8, self.line);
+    }
+};
+
+fn unusedCommandHandler() CommandHandler {
+    return .{
+        .context = undefined,
+        .handle = unusedHandleCommand,
+    };
+}
+
+fn unusedHandleCommand(
+    _: *anyopaque,
+    _: std.mem.Allocator,
+    _: protocol.CommandRequest,
+) anyerror!protocol.Response {
+    unreachable;
 }
 
 const StateCommandServer = struct {
@@ -497,11 +564,9 @@ const StateCommandServer = struct {
             if (last_line) |previous| {
                 if (std.mem.eql(u8, previous, line)) continue;
                 self.allocator.free(previous);
-                last_line = try self.allocator.dupe(u8, line);
-                try self.broadcastStateLine(line);
-            } else {
-                last_line = try self.allocator.dupe(u8, line);
             }
+            last_line = try self.allocator.dupe(u8, line);
+            try self.broadcastStateLine(line);
         }
     }
 };

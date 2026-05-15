@@ -27,31 +27,39 @@ Panels are rendered top-to-bottom by `renderProcessList()` in
 `src/tui/render.zig`. Each panel is conditionally included -- if its content is
 empty, it is omitted entirely.
 
-### 1. Help Panel
+### 1. Header
 
-Toggled with `?`. When visible, renders the configured keybinding help in four
-groups: navigation, process control, filtering, and miscellaneous. A mode
-indicator (`[Client Mode - Connected to Primary]`) appears below the bindings.
+Unified mode shows a compact pane header above the process list:
+`Processes <visible>/<total>`. Active filters and the running-only toggle are
+summarized on the same line.
 
-### 2. Process Description Panel
+### 2. Help Overlay
+
+Toggled with `?`. In unified mode, help replaces the split view with a full-width
+overlay so the keybinding list is not clipped by the process-list pane. The
+overlay groups bindings by navigation, process control, filtering, focus, and
+other actions.
+
+### 3. Process Description Panel
 
 Displays the `description` field from the currently selected process's config. Rendered in italic white/light gray text with word wrapping to terminal width. Hidden when `layout.hide_process_description_panel: true` is set, or when the selected process has no description.
 
-### 3. Messages Panel
+### 4. Messages Panel
 
 Shows temporary messages (errors, confirmations) that auto-expire after 5 seconds. Messages are stored as `timedMessage` structs with an `ExpiresAt` timestamp. At most 5 messages are displayed; if more exist, only the most recent 5 are shown. The panel also displays an optional info string (rendered in yellow). A `pruneMessagesMsg` tick fires after each message timeout to clean up expired entries.
 
-### 4. Filter Input
+### 5. Filter Input
 
 Appears when filter mode is active (triggered by `/`) with the prompt
 `"Filter: "`. When the filter has text but is not focused, the panel shows the
 current filter and a compact edit hint.
 
-### 5. Process List
+### 6. Process List
 
 The main panel. It renders the filtered process view list directly as text.
 Terminal dimensions are refreshed through the client runtime and unified split
-runtime.
+runtime. In unified mode, the rendered window is clipped to the available pane
+height while keeping the selected process visible.
 
 ## Process List Rendering
 
@@ -67,6 +75,9 @@ Each process row is rendered by `renderProcessList()` (`src/tui/render.zig`):
 - Running: `●` (colored with `style.status_running_color`, default green)
 - Halting: `◐` (colored with `style.status_halting_color`, default yellow)
 - Stopped/Exited/Unknown: `■` (colored with `style.status_stopped_color`, default red)
+
+When `NO_COLOR` is set in the environment, status markers render without ANSI
+color escape sequences.
 
 **Label:** The process name. Selected items use `style.selected_process_color` (default white) foreground and `style.selected_process_bg_color` (default magenta) background. Unselected items use `style.unselected_process_color` (no default -- inherits terminal default).
 
@@ -119,6 +130,7 @@ While in filter mode, pressing `/` again exits filter mode but keeps the current
 | Toggle focus | `ctrl+w` | Toggle focus between client and server panes |
 | Focus client | `ctrl+left` | Focus the client (process list) pane |
 | Focus server | `ctrl+right` | Focus the server (terminal output) pane |
+| Cycle focus | `Tab`, `Shift+Tab` | Move focus between client and server panes |
 
 ### Quit
 
@@ -167,7 +179,11 @@ composes two panes and a status bar. The shipped Zig model is in
 
 - **Client pane:** The normal `ClientModel` process list TUI
 - **Server pane:** Process output rendered through a stateful Ghostty VT terminal, polled every 75ms
-- **Status bar:** One line at the bottom showing which pane is focused (bold = focused, faint = unfocused) and keybinding hints for switching focus
+- **Pane separator:** A box-drawing vertical rule (`│`) between side-by-side panes
+- **Status bar:** One compact line pinned to the bottom with contextual actions, for example `Client  [Tab] server  [/] filter  [?] help  [q] quit`
+
+When the server pane is visible, a header is rendered above output in the form
+`Output: <process>  <status>`.
 
 ### Orientation
 
@@ -185,6 +201,10 @@ For top/bottom splits, the client pane gets approximately 55% of content height,
 
 Resize is handled automatically. The Zig runtime reads the PTY window size and
 reflows the split layout on the render loop.
+
+Unified mode requires at least an 80x24 terminal. Below that breakpoint,
+proctmux renders a resize message instead of squeezing both panes into an
+unreadable layout.
 
 ### Server Output Rendering
 

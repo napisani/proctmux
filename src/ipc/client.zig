@@ -32,6 +32,10 @@ pub const Client = struct {
         self.stream.close();
     }
 
+    pub fn hasPendingState(self: *const Client) bool {
+        return self.pending_state != null;
+    }
+
     pub fn sendCommand(self: *Client, action: protocol.Command, label: []const u8) ![]const u8 {
         const request_id = try std.fmt.bufPrint(&self.request_id_buf, "{}", .{self.next_request_id});
         self.next_request_id += 1;

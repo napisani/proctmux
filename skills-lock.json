@@ -7,6 +7,12 @@
       "skillPath": "skills/agent-tui/SKILL.md",
       "computedHash": "51918c47355b93c0aa51e90e2e5eb2d15a6f2578d4890229c5832e883705802e"
     },
+    "tui-design": {
+      "source": "hyperb1iss/hyperskills",
+      "sourceType": "github",
+      "skillPath": "skills/tui-design/SKILL.md",
+      "computedHash": "92b969f3473842ee731e0c7a5c571e3b89e5dac7da81be5e635e1715b0084e6e"
+    },
     "zig-best-practices": {
       "source": "0xbigboss/claude-code",
       "sourceType": "github",

@@ -106,12 +106,12 @@ test: test-zig
 .PHONY: test-e2e
 test-e2e: build-zig
 	@echo "Running agent-tui end-to-end tests against the Zig binary..."
-	AGENT_TUI="$(AGENT_TUI)" PROCTMUX_E2E_BIN="$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME)" AGENT_TUI_E2E_RUN="$(AGENT_TUI_E2E_RUN)" $(PYTHON) -m pytest -q -s tests/e2e $(PYTEST_ARGS)
+	AGENT_TUI="$(AGENT_TUI)" PROCTMUX_E2E_BIN="$(CURDIR)/$(ZIG_OUT)/bin/$(BINARY_NAME)" AGENT_TUI_E2E_RUN="$(AGENT_TUI_E2E_RUN)" $(PYTHON) -m pytest -q -s tests/e2e $(PYTEST_ARGS)
 
 .PHONY: test-zig-e2e
 test-zig-e2e: build-zig
 	@echo "Running agent-tui end-to-end tests against the Zig binary..."
-	AGENT_TUI="$(AGENT_TUI)" PROCTMUX_E2E_BIN="$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME)" AGENT_TUI_E2E_RUN="$(AGENT_TUI_E2E_RUN)" $(PYTHON) -m pytest -q -s tests/e2e $(PYTEST_ARGS)
+	AGENT_TUI="$(AGENT_TUI)" PROCTMUX_E2E_BIN="$(CURDIR)/$(ZIG_OUT)/bin/$(BINARY_NAME)" AGENT_TUI_E2E_RUN="$(AGENT_TUI_E2E_RUN)" $(PYTHON) -m pytest -q -s tests/e2e $(PYTEST_ARGS)
 
 .PHONY: test-all
 test-all: test-zig test-zig-e2e

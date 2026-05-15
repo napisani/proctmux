@@ -64,7 +64,7 @@ def test_hide_on_unfocus_ctrlw(app: ProctmuxApp) -> None:
         tui.press("Ctrl+W")
         tui.wait_until(
             "process list hidden after ctrl+w",
-            lambda snap: "hide-test" not in snap.text and "process list hidden" in snap.text,
+            lambda snap: "process list hidden" in snap.text and " │ " not in snap.text,
         )
         tui.press("Ctrl+W")
         tui.wait_for_text("hide-test")
@@ -88,7 +88,7 @@ def test_hide_on_unfocus_focus_keys(app: ProctmuxApp) -> None:
         tui.type("\x1b[1;5C")
         tui.wait_until(
             "process list hidden after ctrl+right",
-            lambda snap: "focus-key-test" not in snap.text and "process list hidden" in snap.text,
+            lambda snap: "process list hidden" in snap.text and " │ " not in snap.text,
         )
         tui.type("\x1b[1;5D")
         tui.wait_for_text("focus-key-test")
@@ -142,7 +142,7 @@ def test_side_by_side_panes_stay_separated_with_long_process_labels(app: Proctmu
         found = snap.column_of(output_token)
         expect(found is not None, "output token missing after resize", snap)
         col, line = found or (-1, "")
-        expect(" | " in line, f"split boundary missing from rendered line\nLine: {line!r}", snap)
+        expect(" │ " in line, f"split boundary missing from rendered line\nLine: {line!r}", snap)
         expect(
             col == 51,
             f"server output started at column {col}, want split boundary plus server output at column 51\nLine: {line!r}",
@@ -186,9 +186,65 @@ def test_status_bar_pinned_to_bottom(app: ProctmuxApp) -> None:
             autostart: true
         """,
         cols=90,
-        rows=12,
+        rows=24,
     ) as tui:
         snap = tui.wait_for_text("SHORT")
         lines = snap.text.splitlines()
-        expect(len(lines) == 12, f"expected a 12-row terminal snapshot, got {len(lines)} rows", snap)
-        expect(lines[-1].startswith("Client | server"), "unified status bar was not on the bottom rendered row", snap)
+        expect(len(lines) == 24, f"expected a 24-row terminal snapshot, got {len(lines)} rows", snap)
+        expect(lines[-1].startswith("Client  [Tab] server"), "unified status bar was not on the bottom rendered row", snap)
+
+
+@pytest.mark.go_name("TestUnified_HelpUsesFullWidthOverlay")
+def test_help_uses_full_width_overlay(app: ProctmuxApp) -> None:
+    with app.unified(
+        "help-overlay",
+        """
+        log_file: proctmux.log
+        procs:
+          help-output:
+            shell: "printf 'HELP_READY\\n'; sleep 60"
+            autostart: true
+        """,
+    ) as tui:
+        tui.wait_for_text("help-output")
+        tui.press("?")
+        snap = tui.wait_for_text("Help")
+        expect_contains(snap, "Focus")
+        expect_contains(snap, "ctrl+left focus client")
+        expect(" │ " not in snap.text, "help overlay should not be clipped into the split pane", snap)
+
+
+@pytest.mark.go_name("TestUnified_NoColorRemovesProcessMarkerAnsi")
+def test_no_color_removes_process_marker_ansi(app: ProctmuxApp) -> None:
+    with app.unified(
+        "no-color",
+        """
+        log_file: proctmux.log
+        procs:
+          color-check:
+            shell: "printf 'COLOR_READY\\n'; sleep 60"
+            autostart: true
+        """,
+        no_color=True,
+    ) as tui:
+        tui.wait_for_text("color-check")
+        snap = tui.snapshot(retain_ansi=True)
+        expect("\x1b[38;5;" not in snap.text, "NO_COLOR should suppress status marker ANSI color", snap)
+
+
+@pytest.mark.go_name("TestUnified_SmallTerminalShowsResizeMessage")
+def test_small_terminal_shows_resize_message(app: ProctmuxApp) -> None:
+    with app.unified(
+        "small-terminal",
+        """
+        log_file: proctmux.log
+        procs:
+          tiny:
+            shell: "printf 'TINY_READY\\n'; sleep 60"
+            autostart: true
+        """,
+        cols=70,
+        rows=18,
+    ) as tui:
+        snap = tui.wait_for_text("Terminal too small")
+        expect_contains(snap, "80x24")

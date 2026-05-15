@@ -1051,7 +1051,7 @@ test "app unified mode renders process list and exits on quit" {
     try runInDirWithInput(std.testing.allocator, dir, &.{"--unified"}, test_io.BytesInput.reader(&input), test_io.TestOutput.writer(&out));
 
     try std.testing.expect(std.mem.indexOf(u8, out.items, "api") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "Client | server") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "Client  [Tab] server") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, version.banner()) == null);
 }
 
@@ -1087,7 +1087,7 @@ test "app unified mode hides process list when server focused and configured" {
     try runInDirWithInput(std.testing.allocator, dir, &.{"--unified"}, test_io.BytesInput.reader(&input), test_io.TestOutput.writer(&out));
 
     try std.testing.expect(std.mem.indexOf(u8, out.items, "process list hidden") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "Client | server") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "Client  [Tab] server") != null);
 }
 
 test "app unified mode forwards server-focused input to selected process" {
@@ -1131,7 +1131,7 @@ test "app unified mode forwards server-focused input to selected process" {
     try runInDirWithInput(std.testing.allocator, dir, &.{"--unified"}, test_io.FileGateInput.reader(&input), test_io.TestOutput.writer(&out));
 
     try test_ansi.expectContainsPlain(std.testing.allocator, out.items, "▶ ● api");
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "client | Server") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "Server  [Tab] client") != null);
     try test_io.waitForFileContains(dir, "got.txt", "hello");
 }
 

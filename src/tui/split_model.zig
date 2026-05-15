@@ -78,6 +78,11 @@ pub const Model = struct {
     }
 
     pub fn handleKey(self: *Model, key: []const u8) !void {
+        if (std.mem.eql(u8, key, "tab") or std.mem.eql(u8, key, "shift+tab")) {
+            self.focus = if (self.focus == .client) .server else .client;
+            self.relayoutAfterFocusChange();
+            return;
+        }
         if (matches(self.app_config.keybinding.focus_client, key) or std.mem.eql(u8, key, "ctrl+left")) {
             self.focus = .client;
             self.relayoutAfterFocusChange();
@@ -122,21 +127,30 @@ pub const Model = struct {
     pub fn statusBar(self: *const Model, allocator: std.mem.Allocator) ![]const u8 {
         if (self.status_height == 0) return allocator.dupe(u8, "");
 
-        const client_label = if (self.focus == .client) "Client" else "client";
-        const server_label = if (self.focus == .server) "Server" else "server";
-        const hidden_label = if (!self.clientVisible()) "    process list hidden" else "";
-        const toggle_label = firstBinding(self.app_config.keybinding.toggle_focus);
+        if (self.focus == .client) {
+            return std.fmt.allocPrint(
+                allocator,
+                "Client  [Tab] server  [{s}] filter  [{s}] help  [{s}] quit",
+                .{
+                    firstBinding(self.app_config.keybinding.filter),
+                    firstBinding(self.app_config.keybinding.toggle_help),
+                    firstBinding(self.app_config.keybinding.quit),
+                },
+            );
+        }
+
+        if (!self.clientVisible()) {
+            return std.fmt.allocPrint(
+                allocator,
+                "Server  process list hidden  [Tab] client  [{s}] quit",
+                .{firstBinding(self.app_config.keybinding.quit)},
+            );
+        }
+
         return std.fmt.allocPrint(
             allocator,
-            "{s} | {s}{s}    {s} focus client; {s} focus server; {s} toggle focus",
-            .{
-                client_label,
-                server_label,
-                hidden_label,
-                firstBinding(self.app_config.keybinding.focus_client),
-                firstBinding(self.app_config.keybinding.focus_server),
-                toggle_label,
-            },
+            "Server  [Tab] client  [{s}] quit",
+            .{firstBinding(self.app_config.keybinding.quit)},
         );
     }
 
@@ -359,10 +373,10 @@ test "split model status bar reports hidden process list" {
     const status = try model.statusBar(std.testing.allocator);
     defer std.testing.allocator.free(status);
 
-    try std.testing.expect(std.mem.indexOf(u8, status, "process list hidden") != null);
+    try std.testing.expectEqualStrings("Server  process list hidden  [Tab] client  [q] quit", status);
 }
 
-test "split model status bar reports configured toggle focus binding" {
+test "split model status bar is compact and contextual" {
     var cfg = try testConfig(false);
     defer cfg.deinit();
 
@@ -372,7 +386,36 @@ test "split model status bar reports configured toggle focus binding" {
     const status = try model.statusBar(std.testing.allocator);
     defer std.testing.allocator.free(status);
 
-    try std.testing.expect(std.mem.indexOf(u8, status, "ctrl+w toggle focus") != null);
+    try std.testing.expectEqualStrings("Client  [Tab] server  [/] filter  [?] help  [q] quit", status);
+}
+
+test "split model cycles focus with tab and shift tab" {
+    var cfg = try testConfig(false);
+    defer cfg.deinit();
+
+    var model = Model.init(.left, &cfg);
+    try model.resize(120, 40);
+
+    try model.handleKey("tab");
+    try std.testing.expectEqual(Pane.server, model.focusedPane());
+
+    try model.handleKey("shift+tab");
+    try std.testing.expectEqual(Pane.client, model.focusedPane());
+}
+
+test "split model intercepts tab before forwarding server input" {
+    var cfg = try testConfig(false);
+    defer cfg.deinit();
+
+    var capture = InputCapture{};
+    var model = Model.init(.left, &cfg);
+    model.setServerInput(InputCapture.sink(&capture));
+
+    try model.handleKey("ctrl+right");
+    try model.handleKey("tab");
+
+    try std.testing.expectEqual(Pane.client, model.focusedPane());
+    try std.testing.expectEqualStrings("", capture.bytes());
 }
 
 test "split model forwards server-focused keys as terminal input" {

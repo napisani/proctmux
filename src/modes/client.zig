@@ -61,6 +61,12 @@ fn pollLoop(
 ) !void {
     var buffer: [64]u8 = undefined;
     while (true) {
+        if (ipc_client.hasPendingState()) {
+            try session.readStateUpdate();
+            try render(session, output);
+            continue;
+        }
+
         var poll_fds = [_]std.posix.pollfd{
             .{
                 .fd = input_fd,

@@ -41,8 +41,8 @@ class Snapshot:
     def server_text(self) -> str:
         server_lines: list[str] = []
         for line in self.text.splitlines():
-            if " | " in line:
-                server_lines.append(line.split(" | ", 1)[1])
+            if " │ " in line:
+                server_lines.append(line.split(" │ ", 1)[1])
         return "\n".join(server_lines)
 
     def column_of(self, needle: str) -> Optional[tuple[int, str]]:
@@ -116,6 +116,66 @@ class AgentTuiRunner:
         session_id = str(result["session_id"])
         self.sessions.append(session_id)
         return Session(self, session_id, cfg_dir, cfg_path)
+
+    def start_primary_client(
+        self,
+        name: str,
+        config: str,
+        *,
+        cols: int = 120,
+        rows: int = 40,
+        no_color: bool = True,
+    ) -> "PrimaryClientSession":
+        cfg_dir, cfg_path = self.write_config(name, config)
+        primary_args = [
+            "run",
+            "--json",
+            "--cwd",
+            str(cfg_dir),
+            "--cols",
+            str(cols),
+            "--rows",
+            str(rows),
+            "--env",
+            "TERM=xterm-256color",
+            str(PROCTMUX_BIN),
+            "--",
+            "start",
+            "-f",
+            str(cfg_path),
+        ]
+        primary_result = self.agent_json(primary_args, timeout=20)
+        primary_session_id = str(primary_result["session_id"])
+        self.sessions.append(primary_session_id)
+
+        client_args = [
+            "run",
+            "--json",
+            "--cwd",
+            str(cfg_dir),
+            "--cols",
+            str(cols),
+            "--rows",
+            str(rows),
+            "--env",
+            "TERM=xterm-256color",
+        ]
+        if no_color:
+            client_args.extend(["--env", "NO_COLOR=1"])
+        client_args.extend([str(PROCTMUX_BIN), "--", "--client", "-f", str(cfg_path)])
+
+        try:
+            client_result = self.agent_json(client_args, timeout=20)
+        except Exception:
+            self.agent(["--session", primary_session_id, "kill", "--json", "--yes"], timeout=5, check=False)
+            if primary_session_id in self.sessions:
+                self.sessions.remove(primary_session_id)
+            raise
+
+        client_session_id = str(client_result["session_id"])
+        self.sessions.append(client_session_id)
+        client = Session(self, client_session_id, cfg_dir, cfg_path)
+        return PrimaryClientSession(self, primary_session_id, client)
 
     def write_config(self, name: str, body: str) -> tuple[Path, Path]:
         cfg_dir = self.tmp_root / slug(name)
@@ -312,6 +372,25 @@ class Session:
                 f"stderr:\n{proc.stderr}"
             )
         return proc
+
+
+class PrimaryClientSession:
+    def __init__(self, runner: AgentTuiRunner, primary_session_id: str, client: Session) -> None:
+        self.runner = runner
+        self.primary_session_id = primary_session_id
+        self.client = client
+
+    def __enter__(self) -> Session:
+        return self.client
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self.client.close()
+        self.runner.agent(["--session", self.primary_session_id, "kill", "--json", "--yes"], timeout=5, check=False)
+        if self.primary_session_id in self.runner.sessions:
+            self.runner.sessions.remove(self.primary_session_id)
 
 
 class Pane:

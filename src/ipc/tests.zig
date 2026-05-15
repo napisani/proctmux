@@ -502,6 +502,62 @@ test "persistent client consumes state updates and command responses" {
     thread.join();
 }
 
+test "persistent client reports cached state from command response" {
+    const path = "/tmp/proctmux-zig-ipc-persistent-pending-state-test.socket";
+    std.fs.deleteFileAbsolute(path) catch {};
+    defer std.fs.deleteFileAbsolute(path) catch {};
+
+    var cfg = config.schema.Config.empty(std.testing.allocator);
+    defer cfg.deinit();
+    try config.defaults.apply(&cfg, std.testing.allocator);
+    try test_config.putShellProcess(&cfg, "api", "npm run dev");
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
+
+    var fake_controller = test_ipc.FakeProcessController{ .status = .running, .pid = 12345 };
+    const state_line = try protocol.stateLine(
+        std.testing.allocator,
+        &app_state,
+        fake_controller.controller(),
+    );
+    defer std.testing.allocator.free(state_line);
+
+    var fake = test_ipc.FakeCommandHandler{};
+    var state_provider = test_ipc.FakeStateProvider{ .line = state_line };
+    var stopped = std.atomic.Value(bool).init(false);
+    const thread = try std.Thread.spawn(.{}, server.serveCommandsAtPathWithState, .{
+        std.testing.allocator,
+        path,
+        fake.handler(),
+        state_provider.provider(),
+        &stopped,
+    });
+    test_ipc.waitForSocketFile(path);
+
+    var persistent = try client.Client.connect(std.testing.allocator, path);
+    defer persistent.deinit();
+
+    var initial = try persistent.readState();
+    defer initial.deinit();
+
+    _ = try persistent.sendCommand(.start, "api");
+    var response = try persistent.readResponse();
+    defer response.deinit(std.testing.allocator);
+    try std.testing.expect(response.success);
+    try std.testing.expect(persistent.hasPendingState());
+
+    var cached = try persistent.readState();
+    defer cached.deinit();
+    try std.testing.expect(!persistent.hasPendingState());
+
+    stopped.store(true, .seq_cst);
+    persistent.close();
+    test_ipc.unblockServer(path);
+    thread.join();
+}
+
 test "one-shot command server dispatches client request to handler" {
     const path = "/tmp/proctmux-zig-ipc-server-command-test.socket";
     std.fs.deleteFileAbsolute(path) catch {};

@@ -313,17 +313,22 @@ fn resizeLayout(
 ) !void {
     const size = terminal.dimensions.fromFds(output.fd, input.fd);
     try split.resize(size.width, size.height);
-    syncClientTerminalWidth(session, split);
+    syncClientTerminalSize(session, split);
 }
 
-fn syncClientTerminalWidth(
+fn syncClientTerminalSize(
     session: *tui.client_session.ClientSession,
     split: *const tui.split_model.Model,
 ) void {
     var width = split.clientSize().width;
     if (width <= 0) width = split.content_width;
-    if (width <= 0) return;
-    session.model.term_width = @intCast(width);
+    if (width > 0) session.model.term_width = @intCast(width);
+
+    var height = split.clientSize().height;
+    if (height <= 0) height = split.content_height;
+    if (height > 0) session.model.term_height = @intCast(height);
+
+    session.model.show_panel_headers = true;
 }
 
 fn processLabels(
@@ -373,6 +378,11 @@ fn readPendingState(
     session: *tui.client_session.ClientSession,
     ipc_client: *ipc.client.Client,
 ) !void {
+    if (ipc_client.hasPendingState()) {
+        try session.readStateUpdate();
+        return;
+    }
+
     var poll_fds = [_]std.posix.pollfd{
         .{
             .fd = ipc_client.stream.handle,

@@ -1,11 +1,14 @@
 const std = @import("std");
+const domain = @import("../domain/root.zig");
 const io = @import("../modes/io.zig");
 const terminal = @import("../terminal/root.zig");
 const tui = @import("../tui/root.zig");
 const client_mode = @import("../modes/client.zig");
 
-const side_by_side_separator = " | ";
+const side_by_side_separator = " │ ";
 const side_by_side_separator_width = 3;
+const min_unified_width = 80;
+const min_unified_height = 24;
 
 pub fn frame(
     session: *tui.client_session.ClientSession,
@@ -14,10 +17,33 @@ pub fn frame(
     output: io.Output,
 ) !void {
     try output.writeAll(terminal.repaint.begin_frame);
-    try writeSplitContent(session, split, server_text, output);
+    if (terminalTooSmall(split)) {
+        try writeSmallTerminalMessage(split, output);
+    } else {
+        try writeSplitContent(session, split, server_text, output);
+    }
     try output.writeAll(terminal.repaint.end_frame);
     try writeStatusBar(session, split, output);
     try output.writeAll(terminal.repaint.end_frame);
+}
+
+fn terminalTooSmall(split: *const tui.split_model.Model) bool {
+    const total_height = split.content_height + split.status_height;
+    return split.content_width < min_unified_width or total_height < min_unified_height;
+}
+
+fn writeSmallTerminalMessage(
+    split: *const tui.split_model.Model,
+    output: io.Output,
+) !void {
+    var buffer: [128]u8 = undefined;
+    const total_height = split.content_height + split.status_height;
+    const message = try std.fmt.bufPrint(
+        &buffer,
+        "Terminal too small\nNeed at least {}x{}; current {}x{}\n",
+        .{ min_unified_width, min_unified_height, split.content_width, total_height },
+    );
+    try writeTextBlock(output, message);
 }
 
 fn writeStatusBar(
@@ -51,10 +77,34 @@ fn writeSplitContent(
     server_text: []const u8,
     output: io.Output,
 ) !void {
-    if (!split.clientVisible()) {
-        try writeTextBlock(output, server_text);
+    if (session.model.show_help) {
+        const overlay = try tui.render.renderHelpOverlay(
+            session.allocator,
+            &session.model,
+            positiveWidth(split.content_width),
+            positiveHeight(split.content_height),
+        );
+        defer session.allocator.free(overlay);
+        try writeTextBlock(output, overlay);
         return;
     }
+
+    const server_panel_text = try renderServerPanelText(
+        session.allocator,
+        &session.model,
+        server_text,
+        positiveHeight(split.serverSize().height),
+    );
+    defer session.allocator.free(server_panel_text);
+
+    if (!split.clientVisible()) {
+        try writeTextBlock(output, server_panel_text);
+        return;
+    }
+
+    session.model.show_panel_headers = true;
+    session.model.term_width = positiveWidth(split.clientSize().width);
+    session.model.term_height = positiveHeight(split.clientSize().height);
 
     const client_text = try client_mode.renderText(session);
     defer session.allocator.free(client_text);
@@ -63,31 +113,105 @@ fn writeSplitContent(
         .left => try writeSideBySide(
             output,
             client_text,
-            server_text,
+            server_panel_text,
             positiveWidth(split.clientSize().width),
             widthWithoutSeparator(positiveWidth(split.serverSize().width)),
             positiveHeight(split.serverSize().height),
             .head,
-            .tail,
+            .head,
         ),
         .right => try writeSideBySide(
             output,
-            server_text,
+            server_panel_text,
             client_text,
             widthWithoutSeparator(positiveWidth(split.serverSize().width)),
             positiveWidth(split.clientSize().width),
             positiveHeight(split.serverSize().height),
-            .tail,
+            .head,
             .head,
         ),
         .top => {
             try writeTextBlock(output, client_text);
-            try writeTextBlock(output, server_text);
+            try writeTextBlock(output, server_panel_text);
         },
         .bottom => {
-            try writeTextBlock(output, server_text);
+            try writeTextBlock(output, server_panel_text);
             try writeTextBlock(output, client_text);
         },
+    }
+}
+
+fn renderServerPanelText(
+    allocator: std.mem.Allocator,
+    model: *const tui.client_model.ClientModel,
+    server_text: []const u8,
+    height: usize,
+) ![]const u8 {
+    var out = std.array_list.Managed(u8).init(allocator);
+    errdefer out.deinit();
+
+    try appendServerHeader(&out, model);
+    const available_lines = if (height > 1) height - 1 else 0;
+    try appendTailLines(&out, server_text, available_lines);
+    return out.toOwnedSlice();
+}
+
+fn appendServerHeader(
+    out: *std.array_list.Managed(u8),
+    model: *const tui.client_model.ClientModel,
+) !void {
+    const label = activeProcessLabel(model);
+    if (label.len == 0) {
+        try out.appendSlice("Output\n");
+        return;
+    }
+
+    if (activeProcessStatus(model)) |status| {
+        try out.writer().print("Output: {s}  {s}\n", .{ label, statusText(status) });
+        return;
+    }
+
+    try out.writer().print("Output: {s}\n", .{label});
+}
+
+fn activeProcessLabel(model: *const tui.client_model.ClientModel) []const u8 {
+    for (model.process_views) |view| {
+        if (view.id == model.active_proc_id) return view.label;
+    }
+    return "";
+}
+
+fn activeProcessStatus(model: *const tui.client_model.ClientModel) ?domain.process.ProcessStatus {
+    for (model.process_views) |view| {
+        if (view.id == model.active_proc_id) return view.status;
+    }
+    return null;
+}
+
+fn statusText(status: domain.process.ProcessStatus) []const u8 {
+    return switch (status) {
+        .running => "running",
+        .halting => "halting",
+        .halted => "halted",
+        .exited => "exited",
+        .unknown => "unknown",
+    };
+}
+
+fn appendTailLines(out: *std.array_list.Managed(u8), text: []const u8, max_lines: usize) !void {
+    if (text.len == 0 or max_lines == 0) return;
+
+    const count = visibleLineCount(text);
+    const skip = if (count > max_lines) count - max_lines else 0;
+
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var line_index: usize = 0;
+    while (lines.next()) |line| : (line_index += 1) {
+        if (line_index >= count) break;
+
+        if (line_index < skip) continue;
+        try out.appendSlice(line);
+        try out.append('\n');
     }
 }
 
@@ -121,11 +245,9 @@ fn writeSideBySide(
     while (row < height) : (row += 1) {
         const left_line_opt = left_lines.next();
         const right_line_opt = right_lines.next();
-        if (left_line_opt == null and right_line_opt == null) break;
 
         const left_line = trimLineRight(left_line_opt orelse "");
         const right_line = trimLineRight(right_line_opt orelse "");
-        if (left_line.len == 0 and right_line.len == 0) continue;
 
         const left_display_width = try writeFittedLine(output, left_line, left_width);
         if (left_display_width < left_width) try writeSpaces(output, left_width - left_display_width);
@@ -270,7 +392,8 @@ test "side-by-side renderer clips long left pane before right pane" {
     const line_end = std.mem.indexOfScalar(u8, out.items, '\n') orelse out.items.len;
     const line = out.items[0..line_end];
     try std.testing.expect(std.mem.indexOf(u8, line, "RIGHT") != null);
-    try std.testing.expectEqual(@as(usize, 13), std.mem.indexOf(u8, line, "RIGHT").?);
+    const right_index = std.mem.indexOf(u8, line, "RIGHT").?;
+    try std.testing.expectEqual(@as(usize, 13), displayWidth(line[0..right_index]));
 }
 
 test "side-by-side renderer marks the pane boundary before server output" {
@@ -291,7 +414,32 @@ test "side-by-side renderer marks the pane boundary before server output" {
 
     const line_end = std.mem.indexOfScalar(u8, out.items, '\n') orelse out.items.len;
     const line = out.items[0..line_end];
-    try std.testing.expect(std.mem.indexOf(u8, line, " | RIGHT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, " │ RIGHT") != null);
+}
+
+test "side-by-side renderer draws separator through empty rows" {
+    const test_io = @import("../test_support/io.zig");
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try writeSideBySide(
+        test_io.TestOutput.writer(&out),
+        "client",
+        "server",
+        10,
+        10,
+        4,
+        .head,
+        .head,
+    );
+
+    var separators: usize = 0;
+    var lines = std.mem.splitScalar(u8, out.items, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, side_by_side_separator) != null) separators += 1;
+    }
+
+    try std.testing.expectEqual(@as(usize, 4), separators);
 }
 
 test "side-by-side renderer tails server output without scrolling client away" {
@@ -338,7 +486,7 @@ test "status bar moves to bottom row before rendering" {
     try std.testing.expect(std.mem.startsWith(
         u8,
         out.items,
-        "\x1b[12;1HClient | server",
+        "\x1b[12;1HClient  [Tab] server",
     ));
 }
 
@@ -374,16 +522,25 @@ test "frame clears stale content before pinned status bar" {
     const test_config = @import("../test_support/config.zig");
     const test_io = @import("../test_support/io.zig");
 
-    var cfg = try test_config.basicConfig(std.testing.allocator);
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
     defer cfg.deinit();
     cfg.layout.hide_process_list_when_unfocused = true;
 
     var split = tui.split_model.Model.init(.left, &cfg);
-    try split.resize(90, 12);
+    try split.resize(90, 24);
     try split.handleKey("ctrl+right");
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
+
+    var views = test_config.standardRenderViews(&cfg);
+    const model = try tui.client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
 
     var session: tui.client_session.ClientSession = undefined;
     session.allocator = std.testing.allocator;
+    session.model = model;
+    defer session.model.deinit();
 
     var out = std.array_list.Managed(u8).init(std.testing.allocator);
     defer out.deinit();
@@ -393,6 +550,61 @@ test "frame clears stale content before pinned status bar" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         out.items,
-        "NO PROCESS\x1b[K\n\x1b[J\x1b[12;1H",
+        "NO PROCESS\x1b[K\n\x1b[J\x1b[24;1H",
     ) != null);
+}
+
+test "frame renders small terminal resize message" {
+    const test_config = @import("../test_support/config.zig");
+    const test_io = @import("../test_support/io.zig");
+
+    var cfg = try test_config.basicConfig(std.testing.allocator);
+    defer cfg.deinit();
+
+    var split = tui.split_model.Model.init(.left, &cfg);
+    try split.resize(70, 18);
+
+    var session: tui.client_session.ClientSession = undefined;
+    session.allocator = std.testing.allocator;
+
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try frame(&session, &split, "READY", test_io.TestOutput.writer(&out));
+
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "Terminal too small") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "80x24") != null);
+}
+
+test "frame renders help as full width overlay" {
+    const test_config = @import("../test_support/config.zig");
+    const test_io = @import("../test_support/io.zig");
+
+    var cfg = try test_config.standardRenderConfig(std.testing.allocator);
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
+
+    var views = test_config.standardRenderViews(&cfg);
+    var model = try tui.client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    model.show_help = true;
+
+    var session: tui.client_session.ClientSession = undefined;
+    session.allocator = std.testing.allocator;
+    session.model = model;
+    defer session.model.deinit();
+
+    var split = tui.split_model.Model.init(.left, &cfg);
+    try split.resize(100, 24);
+
+    var out = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try frame(&session, &split, "SERVER", test_io.TestOutput.writer(&out));
+
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "Help") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "Focus") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, " │ ") == null);
 }

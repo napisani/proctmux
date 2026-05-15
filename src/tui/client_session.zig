@@ -57,6 +57,7 @@ pub const ClientSession = struct {
             state_update.process_views,
         );
         errdefer model.deinit();
+        model.no_color = std.process.hasEnvVarConstant("NO_COLOR");
 
         return .{
             .allocator = allocator,
