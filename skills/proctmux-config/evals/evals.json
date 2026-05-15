@@ -1,0 +1,23 @@
+{
+  "skill_name": "proctmux-config",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create a proctmux.yaml for an external user with a Node app that has a web dev server, an API server, and a worker. Use pnpm, add ./node_modules/.bin to PATH, autostart web and api, and make the worker manual. Use categories so they can filter frontend/backend/worker.",
+      "expected_output": "A valid proctmux.yaml using procs with shell commands, add_path, autostart, categories, and no ignored legacy fields.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I need a proctmux config for docker compose where stop sends SIGINT, waits 10 seconds, and then runs docker compose down as cleanup. Also turn on unified mode focus hiding and keep ctrl+left/ctrl+right/ctrl+w bindings documented.",
+      "expected_output": "A config with procs.<name>.stop, stop_timeout_ms, on_kill argv list, layout.hide_process_list_when_unfocused, and keybinding focus options.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "An external user pasted a proctmux.yaml that uses stale options: enable_mouse, signal_server, general.kill_existing_session, style.color_level, and style.placeholder_terminal_bg_color. Review and fix it without telling them to inspect proctmux internals. Keep the real process definitions intact.",
+      "expected_output": "A corrected config or patch that removes ignored legacy fields while preserving active options and process entries.",
+      "files": []
+    }
+  ]
+}
