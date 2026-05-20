@@ -44,6 +44,7 @@
           gnumake
           python3
           python3Packages.pytest
+          tmux
           zig_0_15
           agent-tui
         ];

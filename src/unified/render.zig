@@ -17,6 +17,9 @@ pub fn frame(
     output: io.Output,
 ) !void {
     try output.writeAll(terminal.repaint.hide_cursor);
+    try output.writeAll(terminal.repaint.begin_synchronized_update);
+    errdefer output.writeAll(terminal.repaint.end_synchronized_update) catch {};
+
     try output.writeAll(terminal.repaint.begin_frame);
     if (terminalTooSmall(split)) {
         try writeSmallTerminalMessage(split, output);
@@ -27,6 +30,7 @@ pub fn frame(
     try writeStatusBar(session, split, output);
     try output.writeAll(terminal.repaint.end_frame);
     try output.writeAll(terminal.repaint.hide_cursor);
+    try output.writeAll(terminal.repaint.end_synchronized_update);
 }
 
 fn terminalTooSmall(split: *const tui.split_model.Model) bool {
