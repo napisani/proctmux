@@ -16,6 +16,7 @@ pub fn frame(
     server_text: []const u8,
     output: io.Output,
 ) !void {
+    try output.writeAll(terminal.repaint.hide_cursor);
     try output.writeAll(terminal.repaint.begin_frame);
     if (terminalTooSmall(split)) {
         try writeSmallTerminalMessage(split, output);
@@ -25,6 +26,7 @@ pub fn frame(
     try output.writeAll(terminal.repaint.end_frame);
     try writeStatusBar(session, split, output);
     try output.writeAll(terminal.repaint.end_frame);
+    try output.writeAll(terminal.repaint.hide_cursor);
 }
 
 fn terminalTooSmall(split: *const tui.split_model.Model) bool {

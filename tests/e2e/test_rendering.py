@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import fcntl
+import os
+import pty
+import select
+import struct
+import subprocess
+import termios
+import textwrap
 import time
 
 import pytest
 
 from harness import ProctmuxApp
+from harness.agent_tui import PROCTMUX_BIN
 from harness.assertions import (
     ansi_colored_word_found,
     expect,
@@ -13,6 +22,63 @@ from harness.assertions import (
     expect_not_contains,
     is_mostly_blank,
 )
+
+
+def read_pty_until(master_fd: int, needle: bytes, *, timeout: float) -> bytes:
+    deadline = time.monotonic() + timeout
+    captured = bytearray()
+    while time.monotonic() < deadline:
+        timeout_left = max(0.0, min(0.05, deadline - time.monotonic()))
+        ready, _, _ = select.select([master_fd], [], [], timeout_left)
+        if master_fd not in ready:
+            continue
+        try:
+            chunk = os.read(master_fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        captured.extend(chunk)
+        if needle in captured:
+            break
+    return bytes(captured)
+
+
+def read_pty_for(master_fd: int, *, duration: float) -> bytes:
+    deadline = time.monotonic() + duration
+    captured = bytearray()
+    while time.monotonic() < deadline:
+        timeout_left = max(0.0, min(0.05, deadline - time.monotonic()))
+        ready, _, _ = select.select([master_fd], [], [], timeout_left)
+        if master_fd not in ready:
+            continue
+        try:
+            chunk = os.read(master_fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        captured.extend(chunk)
+    return bytes(captured)
+
+
+def start_raw_unified_pty(config_dir, config_path):
+    master_fd, slave_fd = pty.openpty()
+    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    env = os.environ.copy()
+    env.update({"NO_COLOR": "1", "TERM": "xterm-256color"})
+    proc = subprocess.Popen(
+        [str(PROCTMUX_BIN), "--unified", "-f", str(config_path)],
+        cwd=config_dir,
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        env=env,
+        close_fds=True,
+        start_new_session=True,
+    )
+    os.close(slave_fd)
+    return proc, master_fd
 
 
 @pytest.mark.go_name("TestUnified_RapidStdout_NoExcessiveRepaints")
@@ -147,6 +213,79 @@ def test_unified_output_handles_carriage_return_progress(app: ProctmuxApp) -> No
     ) as tui:
         snap = tui.wait_for_text("progress done")
         expect_not_contains(snap, "progress 10%", "carriage-return progress update left stale text visible")
+
+
+@pytest.mark.go_name("TestUnified_ProcessCursorControlsNotEmittedToOuterTerminal")
+def test_unified_process_cursor_controls_not_emitted_to_outer_terminal(tmp_path) -> None:
+    config_path = tmp_path / "proctmux.yaml"
+    config_path.write_text(
+        textwrap.dedent(
+            """
+        layout:
+          placeholder_banner: "NO PROCESS"
+        log_file: proctmux.log
+        procs:
+          term-start:
+            shell: |
+              printf '\\033[?25'
+              sleep 0.15
+              printf 'h'
+              sleep 0.15
+              printf '\\033[2'
+              sleep 0.15
+              printf ' q'
+              sleep 0.35
+              printf 'PROMPT_READY\\n'
+              sleep 60
+            autostart: false
+        """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    proc, master_fd = start_raw_unified_pty(tmp_path, config_path)
+    try:
+        captured = bytearray(read_pty_until(master_fd, b"term-start", timeout=5.0))
+        os.write(master_fd, b"j")
+        os.write(master_fd, b"s")
+        captured.extend(read_pty_until(master_fd, b"PROMPT_READY", timeout=5.0))
+        captured.extend(read_pty_for(master_fd, duration=0.25))
+        before_cleanup = bytes(captured)
+
+        expect(b"PROMPT_READY" in before_cleanup, "process output did not reach raw unified PTY")
+        expect(
+            b"\x1b[2 q" not in before_cleanup,
+            "cursor-shape escape was emitted to the outer terminal",
+            before_cleanup.decode("utf-8", errors="replace"),
+        )
+        expect(
+            b"\x1b[?25h" not in before_cleanup,
+            "process show-cursor escape was emitted to the outer terminal",
+            before_cleanup.decode("utf-8", errors="replace"),
+        )
+        last_prompt = before_cleanup.rfind(b"PROMPT_READY")
+        last_hide = before_cleanup.rfind(b"\x1b[?25l")
+        expect(
+            last_hide > last_prompt,
+            "unified did not re-hide the outer cursor after rendering process-start output",
+            before_cleanup.decode("utf-8", errors="replace"),
+        )
+    finally:
+        try:
+            os.write(master_fd, b"q")
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
+        os.close(master_fd)
 
 
 @pytest.mark.go_name("TestUnified_OutputRestoresMainScreenAfterAlternateScreen")
