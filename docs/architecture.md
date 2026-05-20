@@ -255,9 +255,9 @@ The runtime:
 Build and test commands:
 
 ```bash
-make build                 # build the Zig implementation at bin/proctmux
-make test-zig              # run Zig unit tests
-make test-zig-e2e          # run agent-tui e2e tests
+make build                 # build the application at bin/proctmux
+make test                  # run unit tests
+make test-e2e              # run agent-tui e2e tests
 make test-all              # run unit + e2e release gates
 ```
 

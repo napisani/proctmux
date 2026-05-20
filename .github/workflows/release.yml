@@ -32,16 +32,16 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            zig_target: x86_64-linux-gnu
+            target: x86_64-linux-gnu
             artifact_name: proctmux-linux-amd64
           - os: ubuntu-24.04-arm
-            zig_target: aarch64-linux-gnu
+            target: aarch64-linux-gnu
             artifact_name: proctmux-linux-arm64
           - os: macos-15-intel
-            zig_target: x86_64-macos
+            target: x86_64-macos
             artifact_name: proctmux-darwin-amd64
           - os: macos-15
-            zig_target: aarch64-macos
+            target: aarch64-macos
             artifact_name: proctmux-darwin-arm64
 
     runs-on: ${{ matrix.os }}
@@ -54,7 +54,7 @@ jobs:
 
       - name: Build binary
         run: |
-          nix develop --command make build-release-artifact ZIG_TARGET=${{ matrix.zig_target }} ARTIFACT_NAME=${{ matrix.artifact_name }} VERSION=${{ github.ref_name }}
+          nix develop --command make build-release-artifact TARGET=${{ matrix.target }} ARTIFACT_NAME=${{ matrix.artifact_name }} VERSION=${{ github.ref_name }}
 
       - name: Smoke test binary
         shell: bash

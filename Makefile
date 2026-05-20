@@ -9,84 +9,73 @@ ZIG ?= zig
 AGENT_TUI ?= agent-tui
 PYTHON ?= python3
 PYTEST_ARGS ?=
-ZIG_OUT=zig-out
-ZIG_CACHE_DIR ?= .zig-cache/global
-ZIG_E2E_RUN ?=
-AGENT_TUI_E2E_RUN ?= $(ZIG_E2E_RUN)
-zig_platform_flags = -Dtarget=$(1) $(if $(findstring macos,$(1)),--sysroot $(MACOS_SDK),)
+BUILD_OUT_DIR=zig-out
+BUILD_CACHE_DIR ?= .zig-cache/global
+E2E_RUN ?=
+platform_flags = -Dtarget=$(1) $(if $(findstring macos,$(1)),--sysroot $(MACOS_SDK),)
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_S),Darwin)
-ZIG_NATIVE_TARGET ?= $(if $(filter arm64 aarch64,$(UNAME_M)),aarch64-macos,x86_64-macos)
+NATIVE_TARGET ?= $(if $(filter arm64 aarch64,$(UNAME_M)),aarch64-macos,x86_64-macos)
 MACOS_SDK ?= $(shell xcrun --show-sdk-path 2>/dev/null || echo /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk)
-ZIG_PLATFORM_FLAGS ?= -target $(ZIG_NATIVE_TARGET) -lc --sysroot $(MACOS_SDK)
 else ifeq ($(UNAME_S),Linux)
-ZIG_NATIVE_TARGET ?= $(if $(filter arm64 aarch64,$(UNAME_M)),aarch64-linux-gnu,x86_64-linux-gnu)
-ZIG_PLATFORM_FLAGS ?= -target $(ZIG_NATIVE_TARGET) -lc
+NATIVE_TARGET ?= $(if $(filter arm64 aarch64,$(UNAME_M)),aarch64-linux-gnu,x86_64-linux-gnu)
 endif
-ZIG_BUILD_FLAGS ?= --global-cache-dir $(ZIG_CACHE_DIR) $(call zig_platform_flags,$(ZIG_NATIVE_TARGET)) -Dversion=$(BUILD_VERSION)
-ZIG_TEST_CMD=$(ZIG) build test $(ZIG_BUILD_FLAGS)
-ZIG_BUILD_CMD=$(ZIG) build $(ZIG_BUILD_FLAGS)
+BUILD_FLAGS ?= --global-cache-dir $(BUILD_CACHE_DIR) $(call platform_flags,$(NATIVE_TARGET)) -Dversion=$(BUILD_VERSION)
+TEST_CMD=$(ZIG) build test $(BUILD_FLAGS)
+BUILD_CMD=$(ZIG) build $(BUILD_FLAGS)
 # Run the app
 .PHONY: run
-run:
-	$(MAKE) run-zig
+run: build
+	@echo "Running $(APP_NAME)..."
+	./$(BUILD_DIR)/$(BINARY_NAME)
 
 # Build the binary
 .PHONY: build
 build:
-	$(MAKE) build-zig
-
-.PHONY: build-zig
-build-zig:
-	@echo "Building the Zig implementation..."
+	@echo "Building $(APP_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	$(ZIG_BUILD_CMD)
-	@cp $(ZIG_OUT)/bin/$(BINARY_NAME) $(BUILD_DIR)/$(BINARY_NAME)
+	$(BUILD_CMD)
+	@cp $(BUILD_OUT_DIR)/bin/$(BINARY_NAME) $(BUILD_DIR)/$(BINARY_NAME)
 
-.PHONY: run-zig
-run-zig: build-zig
-	@echo "Running the Zig implementation..."
-	./$(BUILD_DIR)/$(BINARY_NAME)
+.PHONY: test
+test:
+	@echo "Running unit tests..."
+	$(TEST_CMD)
 
-.PHONY: test-zig
-test-zig:
-	@echo "Running Zig tests..."
-	$(ZIG_TEST_CMD)
-
-.PHONY: fmt-zig
-fmt-zig:
-	@echo "Formatting Zig files..."
+.PHONY: fmt
+fmt:
+	@echo "Formatting files..."
 	$(ZIG) fmt build.zig src
 
 # Build for all supported Unix platforms
 .PHONY: build-all
 build-all:
-	@echo "Building Zig release artifacts for all Unix platforms..."
-	$(MAKE) build-release-artifact ZIG_TARGET=x86_64-linux-gnu ARTIFACT_NAME=$(BINARY_NAME)-linux-amd64
-	$(MAKE) build-release-artifact ZIG_TARGET=aarch64-linux-gnu ARTIFACT_NAME=$(BINARY_NAME)-linux-arm64
-	$(MAKE) build-release-artifact ZIG_TARGET=x86_64-macos ARTIFACT_NAME=$(BINARY_NAME)-darwin-amd64
-	$(MAKE) build-release-artifact ZIG_TARGET=aarch64-macos ARTIFACT_NAME=$(BINARY_NAME)-darwin-arm64
+	@echo "Building release artifacts for all Unix platforms..."
+	$(MAKE) build-release-artifact TARGET=x86_64-linux-gnu ARTIFACT_NAME=$(BINARY_NAME)-linux-amd64
+	$(MAKE) build-release-artifact TARGET=aarch64-linux-gnu ARTIFACT_NAME=$(BINARY_NAME)-linux-arm64
+	$(MAKE) build-release-artifact TARGET=x86_64-macos ARTIFACT_NAME=$(BINARY_NAME)-darwin-amd64
+	$(MAKE) build-release-artifact TARGET=aarch64-macos ARTIFACT_NAME=$(BINARY_NAME)-darwin-arm64
 	@echo "Built binaries:"
 	@ls -lh $(BUILD_DIR)/$(BINARY_NAME)-*
 
 .PHONY: build-release-artifact
 build-release-artifact:
-	@if [ -z "$(ZIG_TARGET)" ] || [ -z "$(ARTIFACT_NAME)" ]; then \
-		echo "Usage: make build-release-artifact ZIG_TARGET=<zig-target> ARTIFACT_NAME=<output-name>" >&2; \
+	@if [ -z "$(TARGET)" ] || [ -z "$(ARTIFACT_NAME)" ]; then \
+		echo "Usage: make build-release-artifact TARGET=<target> ARTIFACT_NAME=<output-name>" >&2; \
 		exit 2; \
 	fi
-	@echo "Building Zig release artifact $(ARTIFACT_NAME) for $(ZIG_TARGET)..."
+	@echo "Building release artifact $(ARTIFACT_NAME) for $(TARGET)..."
 	@mkdir -p $(BUILD_DIR)
-	$(ZIG) build --global-cache-dir $(ZIG_CACHE_DIR) $(call zig_platform_flags,$(ZIG_TARGET)) -Doptimize=ReleaseFast -Dversion=$(BUILD_VERSION)
-	@cp $(ZIG_OUT)/bin/$(BINARY_NAME) $(BUILD_DIR)/$(ARTIFACT_NAME)
+	$(ZIG) build --global-cache-dir $(BUILD_CACHE_DIR) $(call platform_flags,$(TARGET)) -Doptimize=ReleaseFast -Dversion=$(BUILD_VERSION)
+	@cp $(BUILD_OUT_DIR)/bin/$(BINARY_NAME) $(BUILD_DIR)/$(ARTIFACT_NAME)
 
 
 # Clean build artifacts
 .PHONY: clean
 clean:
 	@echo "Cleaning up..."
-	rm -rf $(BUILD_DIR) $(ZIG_OUT) .zig-cache
+	rm -rf $(BUILD_DIR) $(BUILD_OUT_DIR) .zig-cache
 
 # Create a distribution archive
 .PHONY: dist
@@ -100,21 +89,13 @@ inspect:
 	@echo "Inspecting the application..."
 	@npx   npx @modelcontextprotocol/inspector  ./bin/$(BINARY_NAME) 
 
-.PHONY: test
-test: test-zig
-
 .PHONY: test-e2e
-test-e2e: build-zig
-	@echo "Running agent-tui end-to-end tests against the Zig binary..."
-	AGENT_TUI="$(AGENT_TUI)" PROCTMUX_E2E_BIN="$(CURDIR)/$(ZIG_OUT)/bin/$(BINARY_NAME)" AGENT_TUI_E2E_RUN="$(AGENT_TUI_E2E_RUN)" $(PYTHON) -m pytest -q -s tests/e2e $(PYTEST_ARGS)
-
-.PHONY: test-zig-e2e
-test-zig-e2e: build-zig
-	@echo "Running agent-tui end-to-end tests against the Zig binary..."
-	AGENT_TUI="$(AGENT_TUI)" PROCTMUX_E2E_BIN="$(CURDIR)/$(ZIG_OUT)/bin/$(BINARY_NAME)" AGENT_TUI_E2E_RUN="$(AGENT_TUI_E2E_RUN)" $(PYTHON) -m pytest -q -s tests/e2e $(PYTEST_ARGS)
+test-e2e: build
+	@echo "Running agent-tui end-to-end tests..."
+	AGENT_TUI="$(AGENT_TUI)" PROCTMUX_E2E_BIN="$(CURDIR)/$(BUILD_OUT_DIR)/bin/$(BINARY_NAME)" E2E_RUN="$(E2E_RUN)" $(PYTHON) -m pytest -q -s tests/e2e $(PYTEST_ARGS)
 
 .PHONY: test-all
-test-all: test-zig test-zig-e2e
+test-all: test test-e2e
 
 .PHONY: tmux-list-panes
 tmux-list-panes:
@@ -234,19 +215,16 @@ update-brew-latest:
 help:
 	@echo "Makefile commands:"
 	@echo "  make build      - Build the application for current platform"
-	@echo "  make build-zig  - Build the Zig implementation for current platform"
-	@echo "  make build-release-artifact ZIG_TARGET=<target> ARTIFACT_NAME=<name> - Build one Zig release artifact"
+	@echo "  make build-release-artifact TARGET=<target> ARTIFACT_NAME=<name> - Build one release artifact"
 	@echo "  make build-all  - Build for all supported Unix platforms (Linux, macOS)"
 	@echo "  make run        - Build and run the application"
-	@echo "  make run-zig    - Run the Zig implementation"
 	@echo "  make clean      - Clean up build artifacts"
 	@echo "  make dist       - Create a distribution archive"
 	@echo "  make inspect    - Inspect the application with Model Context Protocol"
-	@echo "  make test       - Run Zig unit tests"
-	@echo "  make test-zig   - Run Zig tests"
-	@echo "  make test-e2e   - Run agent-tui e2e tests against the Zig binary"
-	@echo "  make test-zig-e2e - Run agent-tui e2e tests against the Zig binary"
-	@echo "  make test-all   - Run Zig unit tests and agent-tui e2e tests"
+	@echo "  make test       - Run unit tests"
+	@echo "  make test-e2e   - Run agent-tui e2e tests"
+	@echo "  make test-all   - Run unit tests and agent-tui e2e tests"
+	@echo "  make fmt        - Format source files"
 	@echo "  make release-create VERSION=vX.Y.Z - Create a release (test, tag, push)"
 	@echo "  make release-publish VERSION=vX.Y.Z - Update Homebrew formula after release"
 	@echo "  make release VERSION=vX.Y.Z - Full release workflow (create + publish)"

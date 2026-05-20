@@ -389,14 +389,14 @@ Notes:
 ### Running Tests
 
 ```bash
-# Zig unit tests
+# Unit tests
 make test
 
 # agent-tui end-to-end tests
-make test-zig-e2e
+make test-e2e
 
 # Focus one e2e scenario by pytest name or legacy TestUnified name
-AGENT_TUI_E2E_RUN=TestUnified_Filter_NavigationWhileFiltered make test-zig-e2e
+E2E_RUN=TestUnified_Filter_NavigationWhileFiltered make test-e2e
 
 # Unit + e2e release gate
 make test-all
@@ -414,7 +414,7 @@ and agent-tui for end-to-end tests.
 ### Building from Source
 
 ```bash
-# Build the Zig implementation for the current platform
+# Build the application for the current platform
 make build
 
 # Build for all supported Unix platforms (Linux amd64/arm64, macOS amd64/arm64)

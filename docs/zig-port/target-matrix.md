@@ -1,4 +1,4 @@
-# Zig Port Target Matrix
+# Release Target Matrix
 
 The Zig release path targets the supported Unix platform families.
 
@@ -9,7 +9,7 @@ The Zig release path targets the supported Unix platform families.
 | macOS amd64 | `x86_64-macos` | `proctmux-darwin-amd64` |
 | macOS arm64 | `aarch64-macos` | `proctmux-darwin-arm64` |
 
-The current local Zig verification path intentionally goes through the
+The current local verification path intentionally goes through the
 Makefile. The Makefile drives `zig build` for both tests and binaries so the
 same module graph is used in development, release builds, and e2e runs. On
 macOS, the Makefile passes the configured SDK path into `zig build`.
@@ -17,7 +17,7 @@ macOS, the Makefile passes the configured SDK path into `zig build`.
 Release artifacts are built with:
 
 ```bash
-make build-release-artifact ZIG_TARGET=<zig-target> ARTIFACT_NAME=<artifact-name>
+make build-release-artifact TARGET=<target> ARTIFACT_NAME=<artifact-name>
 ```
 
 ## Local Verification
@@ -25,18 +25,18 @@ make build-release-artifact ZIG_TARGET=<zig-target> ARTIFACT_NAME=<artifact-name
 Run these commands from a Nix development shell:
 
 ```bash
-make fmt-zig
-make test-zig
-make test-zig-e2e
-make build-zig
+make fmt
+make test
+make test-e2e
+make build
 ```
 
 If `zig` is not on `PATH`, pass the pinned compiler explicitly:
 
 ```bash
-make fmt-zig ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
-make test-zig ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
-make build-zig ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
+make fmt ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
+make test ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
+make build ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
 ```
 
 The Zig tests include Unix socket listener and process lifecycle coverage, so

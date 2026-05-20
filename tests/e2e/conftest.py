@@ -14,7 +14,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    pattern = os.environ.get("AGENT_TUI_E2E_RUN") or os.environ.get("ZIG_E2E_RUN") or ""
+    pattern = os.environ.get("E2E_RUN") or ""
     if not pattern:
         return
 

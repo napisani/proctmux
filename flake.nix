@@ -67,7 +67,7 @@
 
           buildPhase = ''
             runHook preBuild
-            make build-zig ZIG_CACHE_DIR="$TMPDIR/zig-cache" VERSION=v${version}
+            make build BUILD_CACHE_DIR="$TMPDIR/zig-cache" VERSION=v${version}
             runHook postBuild
           '';
 
