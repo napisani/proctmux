@@ -178,7 +178,7 @@ fn runInteractiveRuntime(runtime: RuntimeSession) !void {
     try runtime.output.writeAll(terminal.repaint.hide_cursor);
     defer runtime.output.writeAll(terminal.repaint.show_cursor) catch {};
 
-    try resizeLayout(runtime.session, runtime.split, runtime.input, runtime.output);
+    _ = try resizeLayout(runtime.session, runtime.split, runtime.input, runtime.output);
 
     var output_state = try server_output.State.init(runtime.session.allocator, runtime.target);
     defer output_state.deinit();
@@ -271,14 +271,14 @@ fn handleKey(state: InputLoop, key: []const u8) !bool {
         } else {
             try state.split.handleKey(key);
         }
-        try resizeLayout(state.session, state.split, state.input, state.output);
+        _ = try resizeLayout(state.session, state.split, state.input, state.output);
         try renderFrame(state.session, state.split, state.output_state, state.output);
         if (action) |value| return value == .stop_running;
         return false;
     }
 
     try state.split.handleKey(key);
-    try resizeLayout(state.session, state.split, state.input, state.output);
+    _ = try resizeLayout(state.session, state.split, state.input, state.output);
     try renderFrame(state.session, state.split, state.output_state, state.output);
     return false;
 }
@@ -310,10 +310,17 @@ fn resizeLayout(
     split: *tui.split_model.Model,
     input: io.Input,
     output: io.Output,
-) !void {
+) !bool {
+    const previous_content_width = split.content_width;
+    const previous_content_height = split.content_height;
+    const previous_status_height = split.status_height;
+
     const size = terminal.dimensions.fromFds(output.fd, input.fd);
     try split.resize(size.width, size.height);
     syncClientTerminalSize(session, split);
+    return split.content_width != previous_content_width or
+        split.content_height != previous_content_height or
+        split.status_height != previous_status_height;
 }
 
 fn syncClientTerminalSize(
@@ -358,14 +365,20 @@ fn runRenderLoop(state: *RenderLoop) void {
         state.mutex.lock();
         defer state.mutex.unlock();
 
-        readPendingState(state.session, state.ipc_client) catch |err| {
+        const state_changed = readPendingState(state.session, state.ipc_client) catch |err| {
             state.result = .{ .failed = err };
             return;
         };
-        resizeLayout(state.session, state.split, state.input, state.output) catch |err| {
+        const resized = resizeLayout(state.session, state.split, state.input, state.output) catch |err| {
             state.result = .{ .failed = err };
             return;
         };
+        const output_changed = state.output_state.hasPendingOutput(state.session.model.active_proc_id) catch |err| {
+            state.result = .{ .failed = err };
+            return;
+        };
+        if (!state_changed and !resized and !output_changed) continue;
+
         renderFrame(state.session, state.split, state.output_state, state.output) catch |err| {
             state.result = .{ .failed = err };
             return;
@@ -377,10 +390,10 @@ fn runRenderLoop(state: *RenderLoop) void {
 fn readPendingState(
     session: *tui.client_session.ClientSession,
     ipc_client: *ipc.client.Client,
-) !void {
+) !bool {
     if (ipc_client.hasPendingState()) {
         try session.readStateUpdate();
-        return;
+        return true;
     }
 
     var poll_fds = [_]std.posix.pollfd{
@@ -391,10 +404,11 @@ fn readPendingState(
         },
     };
     const ready = try std.posix.poll(&poll_fds, 0);
-    if (ready == 0) return;
-    if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) return;
+    if (ready == 0) return false;
+    if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) return false;
 
     try session.readStateUpdate();
+    return true;
 }
 
 fn unblockServer(path: []const u8) void {

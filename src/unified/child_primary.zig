@@ -108,6 +108,12 @@ pub const ChildPrimary = struct {
         return result;
     }
 
+    pub fn outputEndOffset(self: *ChildPrimary) u64 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.output_base_offset + self.output.items.len;
+    }
+
     fn appendOutput(self: *ChildPrimary, bytes: []const u8) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -189,6 +195,17 @@ test "child primary readSince clamps stale cursor after trim" {
     try std.testing.expectEqual(@as(u8, 'x'), clamped[0]);
     try std.testing.expectEqualStrings("new", clamped[clamped.len - 3 ..]);
     try std.testing.expectEqual(child.output_base_offset + child.output.items.len, cursor.offset);
+}
+
+test "child primary exposes output end offset" {
+    var child = testChildPrimary(std.testing.allocator);
+    defer child.output.deinit();
+
+    try child.appendOutput("first");
+    try std.testing.expectEqual(@as(u64, 5), child.outputEndOffset());
+
+    try child.appendOutput("second");
+    try std.testing.expectEqual(@as(u64, 11), child.outputEndOffset());
 }
 
 fn testChildPrimary(allocator: std.mem.Allocator) ChildPrimary {

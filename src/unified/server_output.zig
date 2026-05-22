@@ -91,6 +91,43 @@ pub const State = struct {
         };
     }
 
+    pub fn hasPendingOutput(
+        self: *State,
+        active_proc_id: domain.process.ProcessId,
+    ) !bool {
+        return switch (self.target) {
+            .child => |child| self.hasPendingChildOutput(child, active_proc_id),
+            .in_process => |server| self.hasPendingProcessOutput(server, active_proc_id),
+        };
+    }
+
+    fn hasPendingChildOutput(
+        self: *State,
+        child: *child_primary.ChildPrimary,
+        active_proc_id: domain.process.ProcessId,
+    ) bool {
+        const state = if (self.child) |*value| value else return true;
+        if (state.selected_process_id != active_proc_id) return true;
+        return child.outputEndOffset() > state.cursor.offset;
+    }
+
+    fn hasPendingProcessOutput(
+        self: *State,
+        server: *primary.Server,
+        active_proc_id: domain.process.ProcessId,
+    ) !bool {
+        if (active_proc_id.isNone()) return false;
+
+        const scrollback = server.controller.getScrollback(self.allocator, active_proc_id) catch |err| switch (err) {
+            error.ProcessNotFound => return false,
+            else => return err,
+        };
+        defer self.allocator.free(scrollback);
+
+        const process = self.processes.get(active_proc_id) orelse return scrollback.len > 0;
+        return scrollback.len != process.consumed_len;
+    }
+
     fn renderChild(
         self: *State,
         child: *child_primary.ChildPrimary,
@@ -254,4 +291,38 @@ test "child target ignores stale bytes queued before new process snapshot" {
     const third = try output.renderText(&split, domain.process.ProcessId.fromInt(2), "NO PROCESS");
     defer std.testing.allocator.free(third);
     try std.testing.expectEqualStrings("NEW_PROCESS_OUTPUT", third);
+}
+
+test "child target reports pending output only when child output advances" {
+    const test_config = @import("../test_support/config.zig");
+
+    var cfg = try test_config.basicConfig(std.testing.allocator);
+    defer cfg.deinit();
+    cfg.layout.placeholder_banner = "NO PROCESS";
+
+    var split = tui.split_model.Model.init(.left, &cfg);
+    try split.resize(120, 40);
+
+    var child = child_primary.ChildPrimary{
+        .allocator = std.testing.allocator,
+        .pid = 0,
+        .pty_file = null,
+        .output_file = null,
+        .output = std.array_list.Managed(u8).init(std.testing.allocator),
+    };
+    defer child.output.deinit();
+
+    var output = try State.init(std.testing.allocator, .{ .child = &child });
+    defer output.deinit();
+
+    try std.testing.expect(try output.hasPendingOutput(domain.process.ProcessId.fromInt(1)));
+
+    try child.output.appendSlice("FIRST\n");
+    const first = try output.renderText(&split, domain.process.ProcessId.fromInt(1), "NO PROCESS");
+    defer std.testing.allocator.free(first);
+
+    try std.testing.expect(!try output.hasPendingOutput(domain.process.ProcessId.fromInt(1)));
+
+    try child.output.appendSlice("SECOND\n");
+    try std.testing.expect(try output.hasPendingOutput(domain.process.ProcessId.fromInt(1)));
 }

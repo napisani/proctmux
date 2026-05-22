@@ -4,6 +4,7 @@ import fcntl
 import os
 import pty
 import re
+import shlex
 import shutil
 import select
 import struct
@@ -41,6 +42,10 @@ def tmux_capture(tmux_socket: str, pane_id: str) -> str:
     return run_tmux(tmux_socket, "capture-pane", "-t", pane_id, "-p").stdout
 
 
+def tmux_pipe_pane_to_file(tmux_socket: str, pane_id: str, output_path) -> None:
+    run_tmux(tmux_socket, "pipe-pane", "-o", "-t", pane_id, f"cat > {shlex.quote(str(output_path))}")
+
+
 def wait_tmux_pane(tmux_socket: str, pane_id: str, needle: str, *, timeout: float) -> str:
     deadline = time.monotonic() + timeout
     last = ""
@@ -54,6 +59,18 @@ def wait_tmux_pane(tmux_socket: str, pane_id: str, needle: str, *, timeout: floa
 
 def compact_tmux_pane(text: str) -> str:
     return re.sub(r"\s+", "", text)
+
+
+def wait_file_contains(path, needle: bytes, *, timeout: float) -> bytes:
+    deadline = time.monotonic() + timeout
+    last = b""
+    while time.monotonic() < deadline:
+        if path.exists():
+            last = path.read_bytes()
+            if needle in last:
+                return last
+        time.sleep(0.05)
+    raise AssertionError(f"timed out waiting for {needle!r} in {path}\n\nRaw output:\n{last.decode('utf-8', errors='replace')}")
 
 
 def attach_tmux_pty(tmux_socket: str, session: str) -> tuple[subprocess.Popen[bytes], int]:
@@ -452,6 +469,79 @@ def test_unified_tmux_split_cursor_passthrough_not_rendered(tmp_path) -> None:
                     attach_proc.wait(timeout=2)
         if master_fd is not None:
             os.close(master_fd)
+        subprocess.run(["tmux", "-L", tmux_socket, "kill-session", "-t", session], timeout=5, check=False)
+
+
+@pytest.mark.go_name("TestUnified_TmuxSplit_NoIdleFullFrameRedrawsAfterProcessStart")
+def test_unified_tmux_split_no_idle_full_frame_redraws_after_process_start(tmp_path) -> None:
+    if shutil.which("tmux") is None:
+        pytest.skip("tmux is required for this regression")
+
+    config_path = tmp_path / "proctmux.yaml"
+    raw_log_path = tmp_path / "pane-output.raw"
+    config_path.write_text(
+        textwrap.dedent(
+            """
+        layout:
+          placeholder_banner: "NO PROCESS"
+        log_file: proctmux.log
+        procs:
+          flicker-idle:
+            shell: |
+              i=1
+              while [ $i -le 8 ]; do
+                printf 'FLICKER_LINE_%s\\n' "$i"
+                i=$((i + 1))
+                sleep 0.02
+              done
+              printf 'QUIET_READY\\n'
+              sleep 60
+            autostart: false
+        """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    tmux_socket = f"proctmux-e2e-{os.getpid()}-{time.monotonic_ns()}"
+    session = "idle_redraws"
+    pane_id = ""
+    try:
+        run_tmux(tmux_socket, "new-session", "-d", "-x", "220", "-y", "40", "-s", session, "sleep 60")
+        pane_id = run_tmux(
+            tmux_socket,
+            "split-window",
+            "-h",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            f"{session}:0",
+            "-c",
+            str(tmp_path),
+            f'TERM=tmux-256color NO_COLOR=1 "{PROCTMUX_BIN}" --unified -f "{config_path}"',
+        ).stdout.strip()
+        tmux_pipe_pane_to_file(tmux_socket, pane_id, raw_log_path)
+
+        wait_tmux_pane(tmux_socket, pane_id, "flicker-idle", timeout=5.0)
+        run_tmux(tmux_socket, "send-keys", "-t", pane_id, "j", timeout=2.0)
+        run_tmux(tmux_socket, "send-keys", "-t", pane_id, "s", timeout=2.0)
+
+        raw_until_quiet = wait_file_contains(raw_log_path, b"QUIET_READY", timeout=5.0)
+        quiet_marker = raw_until_quiet.rfind(b"QUIET_READY")
+        time.sleep(0.55)
+        raw_after_quiet = raw_log_path.read_bytes()[quiet_marker + len(b"QUIET_READY") :]
+
+        pane = wait_tmux_pane(tmux_socket, pane_id, "QUIET_READY", timeout=5.0)
+        expect("FLICKER_LINE_8" in pane, "tmux split expected process output before idle", pane)
+
+        idle_full_frame_redraws = raw_after_quiet.count(b"Client  [Tab] server")
+        expect(
+            idle_full_frame_redraws <= 1,
+            "unified kept repainting full frames in an idle tmux split after process start",
+            raw_after_quiet.decode("utf-8", errors="replace"),
+        )
+    finally:
         subprocess.run(["tmux", "-L", tmux_socket, "kill-session", "-t", session], timeout=5, check=False)
 
 
