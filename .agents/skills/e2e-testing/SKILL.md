@@ -1,3 +1,8 @@
+---
+name: e2e-testing
+description: Use when adding, running, or debugging proctmux end-to-end integration tests, especially PTY/TUI behavior, terminal snapshots, unified/client modes, timing flakes, VT100 emulator limits, or files under tests/e2e and internal/testharness/e2e.
+---
+
 # Skill: e2e-testing
 
 E2E integration tests for proctmux. This skill covers writing, running, and debugging end-to-end tests that exercise the full proctmux binary through a PTY-based test harness.
