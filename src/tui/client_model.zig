@@ -134,6 +134,8 @@ pub const ClientModel = struct {
 
     pub fn handleKey(self: *ClientModel, key: []const u8) !?CommandIntent {
         if (self.entering_filter_text) {
+            if (self.processListIntentForControlModifiedKey(key)) |intent| return intent;
+
             if (matches(self.app_state.config.keybinding.submit_filter, key)) {
                 self.entering_filter_text = false;
                 self.mode = .normal;
@@ -155,9 +157,13 @@ pub const ClientModel = struct {
                 if (self.filter_text.items.len > 0) self.filter_text.items.len -= 1;
                 return self.applyFilterNow();
             }
+            if (self.navigationIntentForSpecialKey(key)) |intent| return intent;
 
-            try self.filter_text.appendSlice(key);
-            return self.applyFilterNow();
+            if (isTextInputKey(key)) {
+                try self.filter_text.appendSlice(key);
+                return self.applyFilterNow();
+            }
+            return null;
         }
 
         if (matches(self.app_state.config.keybinding.filter, key)) {
@@ -220,6 +226,37 @@ pub const ClientModel = struct {
         return self.commandIntent(.switch_process);
     }
 
+    fn processListIntentForControlModifiedKey(self: *ClientModel, key: []const u8) ?CommandIntent {
+        const process_list_key = controlModifiedKey(key) orelse return null;
+        const bindings = &self.app_state.config.keybinding;
+
+        if (self.navigationIntentForKey(process_list_key)) |intent| return intent;
+        if (matches(bindings.start, process_list_key)) return self.commandIntent(.start);
+        if (matches(bindings.stop, process_list_key)) return self.commandIntent(.stop);
+        if (matches(bindings.restart, process_list_key)) return self.commandIntent(.restart);
+        return null;
+    }
+
+    fn navigationIntentForSpecialKey(self: *ClientModel, key: []const u8) ?CommandIntent {
+        if (isTextInputKey(key)) return null;
+        return self.navigationIntentForKey(key);
+    }
+
+    fn navigationIntentForKey(self: *ClientModel, key: []const u8) ?CommandIntent {
+        const bindings = &self.app_state.config.keybinding;
+        if (matches(bindings.down, key)) {
+            self.moveSelection(1);
+            if (self.active_proc_id.isNone()) return null;
+            return self.switchIntent();
+        }
+        if (matches(bindings.up, key)) {
+            self.moveSelection(-1);
+            if (self.active_proc_id.isNone()) return null;
+            return self.switchIntent();
+        }
+        return null;
+    }
+
     fn commandIntent(self: *ClientModel, action: ipc.protocol.Command) CommandIntent {
         return .{
             .action = action,
@@ -280,6 +317,24 @@ fn matches(bindings: config.schema.StringList, key: []const u8) bool {
         if (std.mem.eql(u8, binding, key)) return true;
     }
     return false;
+}
+
+fn controlModifiedKey(key: []const u8) ?[]const u8 {
+    const prefix = "ctrl+";
+    if (!std.mem.startsWith(u8, key, prefix)) return null;
+    const unmodified = key[prefix.len..];
+    if (unmodified.len == 0) return null;
+    return unmodified;
+}
+
+fn isTextInputKey(key: []const u8) bool {
+    return key.len == 1 and key[0] >= 0x20 and key[0] <= 0x7e;
+}
+
+fn replaceTestBinding(list: *config.schema.StringList, values: []const []const u8) !void {
+    config.schema.deinitStringList(list);
+    list.* = config.schema.StringList.init(std.testing.allocator);
+    for (values) |value| try config.schema.appendOwned(std.testing.allocator, list, value);
 }
 
 test "client model enters filter mode with configured filter key" {
@@ -352,6 +407,152 @@ test "client model backspace edits filter text" {
     _ = try model.handleKey("h");
 
     try std.testing.expectEqualStrings("alh", model.filterText());
+}
+
+test "client model control-modified process list keys work while typing filter" {
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
+
+    var views = test_config.standardClientModelViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    _ = try model.handleKey("/");
+    _ = try model.handleKey("a");
+
+    try std.testing.expect(model.entering_filter_text);
+    try std.testing.expectEqualStrings("a", model.filterText());
+    try std.testing.expect(model.visibleCount() > 1);
+
+    const first_id = model.active_proc_id;
+    const second_label = model.visibleLabel(1);
+    const down = try model.handleKey("ctrl+j");
+
+    try std.testing.expect(model.entering_filter_text);
+    try std.testing.expectEqual(domain.state.Mode.filter, model.mode);
+    try std.testing.expectEqualStrings("a", model.filterText());
+    try std.testing.expect(down != null);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, down.?.action);
+    try std.testing.expectEqualStrings(second_label, down.?.label);
+    try std.testing.expect(model.active_proc_id != first_id);
+
+    const up = try model.handleKey("ctrl+k");
+
+    try std.testing.expect(model.entering_filter_text);
+    try std.testing.expectEqualStrings("a", model.filterText());
+    try std.testing.expect(up != null);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, up.?.action);
+    try std.testing.expectEqual(first_id, model.active_proc_id);
+
+    const start = try model.handleKey("ctrl+s");
+    try std.testing.expect(model.entering_filter_text);
+    try std.testing.expectEqualStrings("a", model.filterText());
+    try std.testing.expect(start != null);
+    try std.testing.expectEqual(ipc.protocol.Command.start, start.?.action);
+    try std.testing.expectEqualStrings(model.activeProcessLabel(), start.?.label);
+
+    const stop = try model.handleKey("ctrl+x");
+    try std.testing.expect(model.entering_filter_text);
+    try std.testing.expectEqualStrings("a", model.filterText());
+    try std.testing.expect(stop != null);
+    try std.testing.expectEqual(ipc.protocol.Command.stop, stop.?.action);
+    try std.testing.expectEqualStrings(model.activeProcessLabel(), stop.?.label);
+}
+
+test "client model navigates on special up and down keys while typing filter" {
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
+
+    var views = test_config.standardClientModelViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    _ = try model.handleKey("/");
+    _ = try model.handleKey("a");
+
+    const first_id = model.active_proc_id;
+    const down = try model.handleKey("down");
+    try std.testing.expect(down != null);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, down.?.action);
+    try std.testing.expect(model.active_proc_id != first_id);
+
+    const up = try model.handleKey("up");
+    try std.testing.expect(up != null);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, up.?.action);
+    try std.testing.expectEqual(first_id, model.active_proc_id);
+    try std.testing.expect(model.entering_filter_text);
+    try std.testing.expectEqualStrings("a", model.filterText());
+
+    _ = try model.handleKey("j");
+    try std.testing.expectEqualStrings("aj", model.filterText());
+}
+
+test "client model control modifier honors configured process list bindings" {
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
+    defer cfg.deinit();
+    try replaceTestBinding(&cfg.keybinding.down, &.{"n"});
+    try replaceTestBinding(&cfg.keybinding.up, &.{"p"});
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
+
+    var views = test_config.standardClientModelViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    _ = try model.handleKey("/");
+    _ = try model.handleKey("a");
+
+    const first_id = model.active_proc_id;
+    const down = try model.handleKey("ctrl+n");
+    try std.testing.expect(down != null);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, down.?.action);
+    try std.testing.expect(model.active_proc_id != first_id);
+
+    const up = try model.handleKey("ctrl+p");
+    try std.testing.expect(up != null);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, up.?.action);
+    try std.testing.expectEqual(first_id, model.active_proc_id);
+    try std.testing.expect(model.entering_filter_text);
+    try std.testing.expectEqualStrings("a", model.filterText());
+}
+
+test "client model ctrl arrows move selection while typing filter when arrow keys are configured" {
+    var cfg = try test_config.standardClientModelConfig(std.testing.allocator);
+    defer cfg.deinit();
+
+    var app_state = try domain.state.AppState.init(std.testing.allocator, &cfg);
+    defer app_state.deinit();
+    app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
+
+    var views = test_config.standardClientModelViews(&cfg);
+    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    defer model.deinit();
+
+    _ = try model.handleKey("/");
+    _ = try model.handleKey("a");
+
+    const first_id = model.active_proc_id;
+    const down = try model.handleKey("ctrl+down");
+    try std.testing.expect(down != null);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, down.?.action);
+    try std.testing.expect(model.active_proc_id != first_id);
+
+    const up = try model.handleKey("ctrl+up");
+    try std.testing.expect(up != null);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, up.?.action);
+    try std.testing.expectEqual(first_id, model.active_proc_id);
+    try std.testing.expect(model.entering_filter_text);
+    try std.testing.expectEqualStrings("a", model.filterText());
 }
 
 test "client model down key moves selection and wraps within visible list" {

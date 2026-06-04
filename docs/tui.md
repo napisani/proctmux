@@ -113,7 +113,7 @@ All keybindings are configurable via the `keybinding` section in the YAML config
 | Submit filter | `enter` | Apply filter text and exit filter mode |
 | Cancel filter | `esc` | Cancel filter, clear text, exit filter mode |
 
-While in filter mode, pressing `/` again exits filter mode but keeps the current text. Typing any other key is forwarded to the text input and the filter is applied live as you type.
+While in filter mode, pressing `/` again exits filter mode but keeps the current text. Typing printable keys updates the text input and applies the filter live. Hold `ctrl` with a configured process-list control (`j`/`k`, arrows, `s`, `x`, `r`, etc.) to move or control the selected process without leaving filter mode.
 
 ### Toggles
 

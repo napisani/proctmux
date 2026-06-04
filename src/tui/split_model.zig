@@ -245,6 +245,36 @@ pub const Model = struct {
     }
 };
 
+const control_letter_inputs = [_][]const u8{
+    "",
+    "\x01",
+    "\x02",
+    "\x03",
+    "\x04",
+    "\x05",
+    "\x06",
+    "\x07",
+    "\x08",
+    "\x09",
+    "\x0a",
+    "\x0b",
+    "\x0c",
+    "\x0d",
+    "\x0e",
+    "\x0f",
+    "\x10",
+    "\x11",
+    "\x12",
+    "\x13",
+    "\x14",
+    "\x15",
+    "\x16",
+    "\x17",
+    "\x18",
+    "\x19",
+    "\x1a",
+};
+
 pub fn terminalInputForKey(key: []const u8) ?[]const u8 {
     if (key.len == 1) return key;
     if (std.mem.eql(u8, key, "enter")) return "\n";
@@ -254,6 +284,8 @@ pub fn terminalInputForKey(key: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, key, "esc")) return "\x1b";
     if (std.mem.eql(u8, key, "up")) return "\x1b[A";
     if (std.mem.eql(u8, key, "down")) return "\x1b[B";
+    if (std.mem.eql(u8, key, "ctrl+up")) return "\x1b[1;5A";
+    if (std.mem.eql(u8, key, "ctrl+down")) return "\x1b[1;5B";
     if (std.mem.eql(u8, key, "right")) return "\x1b[C";
     if (std.mem.eql(u8, key, "left")) return "\x1b[D";
     if (std.mem.eql(u8, key, "home")) return "\x1b[H";
@@ -277,7 +309,18 @@ pub fn terminalInputForKey(key: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, key, "ctrl+d")) return "\x04";
     if (std.mem.eql(u8, key, "ctrl+z")) return "\x1a";
     if (std.mem.eql(u8, key, "ctrl+l")) return "\x0c";
+    if (terminalInputForControlLetter(key)) |input| return input;
     return null;
+}
+
+fn terminalInputForControlLetter(key: []const u8) ?[]const u8 {
+    const prefix = "ctrl+";
+    if (!std.mem.startsWith(u8, key, prefix)) return null;
+
+    const letter = key[prefix.len..];
+    if (letter.len != 1 or letter[0] < 'a' or letter[0] > 'z') return null;
+    const index = letter[0] - 'a' + 1;
+    return control_letter_inputs[index];
 }
 
 fn matches(bindings: config.schema.StringList, key: []const u8) bool {
@@ -428,8 +471,10 @@ test "split model forwards server-focused keys as terminal input" {
 
     try model.handleKey("ctrl+right");
     try model.handleKey("up");
+    try model.handleKey("ctrl+up");
+    try model.handleKey("ctrl+down");
 
-    try std.testing.expectEqualStrings("\x1b[A", capture.bytes());
+    try std.testing.expectEqualStrings("\x1b[A\x1b[1;5A\x1b[1;5B", capture.bytes());
 }
 
 test "split model forwards server-focused control keys as terminal input" {
@@ -444,8 +489,12 @@ test "split model forwards server-focused control keys as terminal input" {
     try model.handleKey("ctrl+d");
     try model.handleKey("ctrl+l");
     try model.handleKey("ctrl+z");
+    try model.handleKey("ctrl+j");
+    try model.handleKey("ctrl+k");
+    try model.handleKey("ctrl+s");
+    try model.handleKey("ctrl+x");
 
-    try std.testing.expectEqualStrings("\x04\x0c\x1a", capture.bytes());
+    try std.testing.expectEqualStrings("\x04\x0c\x1a\x0a\x0b\x13\x18", capture.bytes());
 }
 
 fn testConfig(hide_process_list_when_unfocused: bool) !config.schema.Config {

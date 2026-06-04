@@ -769,7 +769,7 @@ test "app client mode accepts printable filter input" {
     }
     try waitForSocketFile(socket_path);
 
-    var input = test_io.BytesInput{ .data = "/api\nq" };
+    var input = test_io.BytesInput{ .data = "/api\rq" };
     var out = std.array_list.Managed(u8).init(std.testing.allocator);
     defer out.deinit();
     try runInDirWithInput(std.testing.allocator, dir, &.{"--client"}, test_io.BytesInput.reader(&input), test_io.TestOutput.writer(&out));

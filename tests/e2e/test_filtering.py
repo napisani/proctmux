@@ -83,6 +83,87 @@ def test_filter_no_match_state(app: ProctmuxApp) -> None:
         tui.wait_until("processes restored", lambda snap: "alpha-service" in snap.text and "beta-worker" in snap.text)
 
 
+@pytest.mark.go_name("TestUnified_Filter_ControlModifiedProcessListBindings")
+def test_filter_control_modified_process_list_bindings(app: ProctmuxApp) -> None:
+    with app.unified(
+        "filter-control-process-list",
+        """
+        layout:
+          placeholder_banner: "IDLE BANNER"
+        log_file: proctmux.log
+        procs:
+          alpha-one:
+            shell: "sleep 600"
+            autostart: false
+          alpha-two:
+            shell: "printf 'ALPHA_TWO_STARTED\\n'; sleep 600"
+            autostart: false
+          beta-only:
+            shell: "sleep 600"
+            autostart: false
+        """,
+    ) as tui:
+        tui.wait_until(
+            "all processes visible",
+            lambda snap: "alpha-one" in snap.text and "alpha-two" in snap.text and "beta-only" in snap.text,
+        )
+        tui.type("/")
+        time.sleep(0.2)
+        tui.type("alpha")
+        tui.wait_until(
+            "active filter with alpha matches",
+            lambda snap: "Filter: alpha" in snap.client_text
+            and "alpha-one" in snap.client_text
+            and "alpha-two" in snap.client_text,
+        )
+
+        tui.press("Ctrl+J")
+        snap = tui.wait_until(
+            "ctrl+j moved selection down while filtering",
+            lambda snap: "Filter: alpha" in snap.client_text and "▶ ■ alpha-two" in snap.client_text,
+        )
+        expect_contains(snap.client_text, "Filter: alpha")
+        expect_not_contains(snap.client_text, "ctrl+j", "ctrl+j was inserted into the filter text")
+
+        tui.press("Ctrl+K")
+        tui.wait_until(
+            "ctrl+k moved selection up while filtering",
+            lambda snap: "Filter: alpha" in snap.client_text and "▶ ■ alpha-one" in snap.client_text,
+        )
+
+        tui.press("ArrowDown")
+        tui.wait_until(
+            "down arrow moved selection down while filtering",
+            lambda snap: "Filter: alpha" in snap.client_text and "▶ ■ alpha-two" in snap.client_text,
+        )
+        tui.press("ArrowUp")
+        tui.wait_until(
+            "up arrow moved selection up while filtering",
+            lambda snap: "Filter: alpha" in snap.client_text and "▶ ■ alpha-one" in snap.client_text,
+        )
+
+        tui.press("Ctrl+J")
+        tui.wait_until(
+            "alpha-two selected before start",
+            lambda snap: "Filter: alpha" in snap.client_text and "▶ ■ alpha-two" in snap.client_text,
+        )
+        tui.press("Ctrl+S")
+        snap = tui.wait_until(
+            "ctrl+s started selected process while filtering",
+            lambda snap: "Filter: alpha" in snap.client_text
+            and "▶ ● alpha-two" in snap.client_text
+            and "ALPHA_TWO_STARTED" in snap.server_text,
+        )
+        expect_contains(snap.client_text, "Filter: alpha")
+
+        tui.press("Ctrl+X")
+        snap = tui.wait_until(
+            "ctrl+x stopped selected process while filtering",
+            lambda snap: "Filter: alpha" in snap.client_text and "▶ ■ alpha-two" in snap.client_text,
+        )
+        expect_contains(snap.client_text, "Filter: alpha")
+
+
 @pytest.mark.go_name("TestUnified_Filter_NavigationWhileFiltered")
 def test_filter_navigation_while_filtered(app: ProctmuxApp) -> None:
     with app.unified(
