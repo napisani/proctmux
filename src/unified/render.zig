@@ -16,6 +16,20 @@ pub fn frame(
     server_text: []const u8,
     output: io.Output,
 ) !void {
+    var frame_buffer = std.array_list.Managed(u8).init(session.allocator);
+    defer frame_buffer.deinit();
+
+    const buffered_output = io.BufferOutput.writer(&frame_buffer, output.fd);
+    try writeFrame(session, split, server_text, buffered_output);
+    try output.writeAll(frame_buffer.items);
+}
+
+fn writeFrame(
+    session: *tui.client_session.ClientSession,
+    split: *const tui.split_model.Model,
+    server_text: []const u8,
+    output: io.Output,
+) !void {
     try output.writeAll(terminal.repaint.hide_cursor);
     try output.writeAll(terminal.repaint.begin_synchronized_update);
     errdefer output.writeAll(terminal.repaint.end_synchronized_update) catch {};

@@ -30,19 +30,19 @@ pub fn filterProcesses(
         return owned;
     }
 
-    var labels = try allocator.alloc([]const u8, processes.len);
-    defer allocator.free(labels);
-    for (processes, 0..) |view, i| labels[i] = view.label;
-    const matches = try fuzzy.find(allocator, trimmed, labels);
-    defer allocator.free(matches);
+    var matches = std.array_list.Managed(fuzzy.Match).init(allocator);
+    defer matches.deinit();
+    for (processes, 0..) |view, index| {
+        if (show_only_running and view.status != .running) continue;
+        if (fuzzy.score(trimmed, view.label)) |score| {
+            try matches.append(.{ .index = index, .score = score });
+        }
+    }
+    fuzzy.sortMatches(matches.items);
 
     var result = std.array_list.Managed(process.ProcessView).init(allocator);
     errdefer result.deinit();
-    for (matches) |match| {
-        const view = processes[match.index];
-        if (show_only_running and view.status != .running) continue;
-        try result.append(view);
-    }
+    for (matches.items) |match| try result.append(processes[match.index]);
     return result.toOwnedSlice();
 }
 

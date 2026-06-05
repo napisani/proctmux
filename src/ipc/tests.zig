@@ -390,6 +390,61 @@ test "client skips state broadcasts while waiting for command response" {
     try std.testing.expectEqualStrings("52", response.request_id);
 }
 
+test "persistent client skips stale responses when waiting for a specific request" {
+    const path = "/tmp/proctmux-zig-ipc-client-skip-stale-response-test.socket";
+    std.fs.deleteFileAbsolute(path) catch {};
+    defer std.fs.deleteFileAbsolute(path) catch {};
+
+    const address = try std.net.Address.initUnix(path);
+    var listener = try address.listen(.{});
+    defer listener.deinit();
+
+    var capture = OneShotCapture{};
+    const thread = try std.Thread.spawn(.{}, runStaleThenExpectedResponseServer, .{ &listener, &capture });
+
+    var ipc_client = try client.Client.connect(std.testing.allocator, path);
+    defer ipc_client.deinit();
+
+    var response = try ipc_client.readResponseFor("2");
+    defer response.deinit(std.testing.allocator);
+    thread.join();
+    if (capture.err) |err| return err;
+
+    try std.testing.expect(response.success);
+    try std.testing.expectEqualStrings("2", response.request_id);
+}
+
+test "persistent client buffers partial available state without blocking" {
+    const path = "/tmp/proctmux-zig-ipc-client-partial-state-test.socket";
+    std.fs.deleteFileAbsolute(path) catch {};
+    defer std.fs.deleteFileAbsolute(path) catch {};
+
+    const address = try std.net.Address.initUnix(path);
+    var listener = try address.listen(.{});
+    defer listener.deinit();
+
+    var capture = PartialStateCapture{};
+    const thread = try std.Thread.spawn(.{}, runPartialStateServer, .{ &listener, &capture });
+
+    var ipc_client = try client.Client.connect(std.testing.allocator, path);
+    defer ipc_client.deinit();
+
+    while (!capture.partial_written.load(.seq_cst)) std.Thread.sleep(1 * std.time.ns_per_ms);
+
+    var maybe_state = try ipc_client.readStateIfAvailable();
+    if (maybe_state) |*unexpected| {
+        unexpected.deinit();
+        return error.ExpectedNoAvailableState;
+    }
+
+    var state_update = try ipc_client.readState();
+    defer state_update.deinit();
+    try std.testing.expectEqual(domain.process.ProcessId.none, state_update.state.current_proc_id);
+
+    thread.join();
+    if (capture.err) |err| return err;
+}
+
 test "persistent client times out waiting for command response like legacy behavior" {
     const path = "/tmp/proctmux-zig-ipc-client-response-timeout-test.socket";
     std.fs.deleteFileAbsolute(path) catch {};
@@ -487,14 +542,14 @@ test "persistent client consumes state updates and command responses" {
     const request_id = try persistent.sendCommand(.start, "api");
     try std.testing.expectEqualStrings("1", request_id);
 
-    var broadcast = try persistent.readState();
-    defer broadcast.deinit();
-    try std.testing.expectEqualStrings("api", broadcast.process_views[0].label);
-
     var response = try persistent.readResponse();
     defer response.deinit(std.testing.allocator);
     try std.testing.expect(response.success);
     try std.testing.expectEqualStrings("1", response.request_id);
+
+    var broadcast = try persistent.readState();
+    defer broadcast.deinit();
+    try std.testing.expectEqualStrings("api", broadcast.process_views[0].label);
 
     stopped.store(true, .seq_cst);
     persistent.close();
@@ -502,7 +557,7 @@ test "persistent client consumes state updates and command responses" {
     thread.join();
 }
 
-test "persistent client reports cached state from command response" {
+test "persistent client reads broadcast state after command response" {
     const path = "/tmp/proctmux-zig-ipc-persistent-pending-state-test.socket";
     std.fs.deleteFileAbsolute(path) catch {};
     defer std.fs.deleteFileAbsolute(path) catch {};
@@ -546,11 +601,11 @@ test "persistent client reports cached state from command response" {
     var response = try persistent.readResponse();
     defer response.deinit(std.testing.allocator);
     try std.testing.expect(response.success);
-    try std.testing.expect(persistent.hasPendingState());
-
-    var cached = try persistent.readState();
-    defer cached.deinit();
     try std.testing.expect(!persistent.hasPendingState());
+
+    var broadcast = try persistent.readState();
+    defer broadcast.deinit();
+    try std.testing.expectEqualStrings("api", broadcast.process_views[0].label);
 
     stopped.store(true, .seq_cst);
     persistent.close();
@@ -765,10 +820,6 @@ test "state command server keeps client open and broadcasts mutations" {
     defer std.testing.allocator.free(start_request);
     try stream.writeAll(start_request);
 
-    const broadcast_line = try test_ipc.readLine(std.testing.allocator, stream);
-    defer std.testing.allocator.free(broadcast_line);
-    try std.testing.expectEqualStrings(state_provider.line, broadcast_line);
-
     const start_response_line = try test_ipc.readLine(std.testing.allocator, stream);
     defer std.testing.allocator.free(start_response_line);
     var start_response = try protocol.parseResponseLine(std.testing.allocator, start_response_line);
@@ -776,13 +827,13 @@ test "state command server keeps client open and broadcasts mutations" {
     try std.testing.expect(start_response.success);
     try std.testing.expectEqualStrings("72", start_response.request_id);
 
+    const broadcast_line = try test_ipc.readLine(std.testing.allocator, stream);
+    defer std.testing.allocator.free(broadcast_line);
+    try std.testing.expectEqualStrings(state_provider.line, broadcast_line);
+
     const stop_request = try protocol.commandRequestLine(std.testing.allocator, "73", .stop, "api");
     defer std.testing.allocator.free(stop_request);
     try stream.writeAll(stop_request);
-
-    const second_broadcast_line = try test_ipc.readLine(std.testing.allocator, stream);
-    defer std.testing.allocator.free(second_broadcast_line);
-    try std.testing.expectEqualStrings(state_provider.line, second_broadcast_line);
 
     const stop_response_line = try test_ipc.readLine(std.testing.allocator, stream);
     defer std.testing.allocator.free(stop_response_line);
@@ -790,6 +841,10 @@ test "state command server keeps client open and broadcasts mutations" {
     defer stop_response.deinit(std.testing.allocator);
     try std.testing.expect(stop_response.success);
     try std.testing.expectEqualStrings("73", stop_response.request_id);
+
+    const second_broadcast_line = try test_ipc.readLine(std.testing.allocator, stream);
+    defer std.testing.allocator.free(second_broadcast_line);
+    try std.testing.expectEqualStrings(state_provider.line, second_broadcast_line);
 
     stopped.store(true, .seq_cst);
     stream.close();
@@ -829,6 +884,13 @@ test "state command server broadcasts mutations to other connected clients" {
     defer std.testing.allocator.free(start_request);
     try first.writeAll(start_request);
 
+    const response_line = try test_ipc.readLineTimeout(std.testing.allocator, first, 200);
+    defer std.testing.allocator.free(response_line);
+    var response = try protocol.parseResponseLine(std.testing.allocator, response_line);
+    defer response.deinit(std.testing.allocator);
+    try std.testing.expect(response.success);
+    try std.testing.expectEqualStrings("74", response.request_id);
+
     const first_broadcast = try test_ipc.readLineTimeout(std.testing.allocator, first, 200);
     defer std.testing.allocator.free(first_broadcast);
     try std.testing.expectEqualStrings(state_provider.line, first_broadcast);
@@ -836,13 +898,6 @@ test "state command server broadcasts mutations to other connected clients" {
     const second_broadcast = try test_ipc.readLineTimeout(std.testing.allocator, second, 200);
     defer std.testing.allocator.free(second_broadcast);
     try std.testing.expectEqualStrings(state_provider.line, second_broadcast);
-
-    const response_line = try test_ipc.readLineTimeout(std.testing.allocator, first, 200);
-    defer std.testing.allocator.free(response_line);
-    var response = try protocol.parseResponseLine(std.testing.allocator, response_line);
-    defer response.deinit(std.testing.allocator);
-    try std.testing.expect(response.success);
-    try std.testing.expectEqualStrings("74", response.request_id);
 
     stopped.store(true, .seq_cst);
     first.close();
@@ -859,6 +914,11 @@ const OneShotCapture = struct {
     fn requestLine(self: *const OneShotCapture) []const u8 {
         return self.request[0..self.request_len];
     }
+};
+
+const PartialStateCapture = struct {
+    partial_written: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    err: ?anyerror = null,
 };
 
 const DelayedSocketServer = struct {
@@ -939,6 +999,43 @@ fn runStateThenResponseServer(listener: *std.net.Server, capture: *OneShotCaptur
         return;
     };
     conn.stream.writeAll("{\"type\":\"response\",\"request_id\":\"52\",\"success\":true}\n") catch |err| {
+        capture.err = err;
+        return;
+    };
+}
+
+fn runStaleThenExpectedResponseServer(listener: *std.net.Server, capture: *OneShotCapture) void {
+    const conn = listener.accept() catch |err| {
+        capture.err = err;
+        return;
+    };
+    defer conn.stream.close();
+
+    conn.stream.writeAll("{\"type\":\"response\",\"request_id\":\"1\",\"success\":true}\n") catch |err| {
+        capture.err = err;
+        return;
+    };
+    conn.stream.writeAll("{\"type\":\"response\",\"request_id\":\"2\",\"success\":true}\n") catch |err| {
+        capture.err = err;
+        return;
+    };
+}
+
+fn runPartialStateServer(listener: *std.net.Server, capture: *PartialStateCapture) void {
+    const conn = listener.accept() catch |err| {
+        capture.err = err;
+        return;
+    };
+    defer conn.stream.close();
+
+    conn.stream.writeAll("{\"type\":\"state\",\"state\":{\"Config\":{\"FilePath\":\"/tmp/proctmux-zig-partial-state.yaml\",\"Keybinding\":{},\"Layout\":{},\"Style\":{},\"General\":{},\"ShellCmd\":null,\"Procs\":{}},\"CurrentProcID\":0,\"Processes\":[],\"Exiting\":false},\"process_views\"") catch |err| {
+        capture.err = err;
+        return;
+    };
+    capture.partial_written.store(true, .seq_cst);
+    std.Thread.sleep(150 * std.time.ns_per_ms);
+
+    conn.stream.writeAll(":[]}\n") catch |err| {
         capture.err = err;
         return;
     };

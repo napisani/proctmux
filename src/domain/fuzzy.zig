@@ -24,11 +24,15 @@ pub fn find(allocator: std.mem.Allocator, pattern: []const u8, labels: []const [
         }
     }
 
-    std.mem.sort(Match, matches.items, {}, lessMatch);
+    sortMatches(matches.items);
     return matches.toOwnedSlice();
 }
 
-fn score(pattern: []const u8, candidate: []const u8) ?i32 {
+pub fn sortMatches(matches: []Match) void {
+    std.mem.sort(Match, matches, {}, lessMatch);
+}
+
+pub fn score(pattern: []const u8, candidate: []const u8) ?i32 {
     if (pattern.len == 0) return null;
     if (candidate.len == 0) return null;
 

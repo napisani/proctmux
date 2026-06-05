@@ -10,3 +10,4 @@ zig-out/
 bin/
 ./result
 __pycache__/
+.understand-anything/

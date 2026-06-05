@@ -247,40 +247,62 @@ fn runInputLoop(state: InputLoop) !void {
         const n = try state.input.readBytes(&buffer);
         if (n == 0) return;
 
+        state.mutex.lock();
+        defer state.mutex.unlock();
+
+        var should_render = false;
         var index: usize = 0;
         while (index < n) {
             var key_buf: [1]u8 = undefined;
             if (tui.key_input.keyForInput(buffer[0..n], &index, &key_buf)) |key| {
-                if (try handleKey(state, key)) return;
+                const previous_focus = state.split.focusedPane();
+                should_render = true;
+                const handling = try handleKey(state, key);
+                if (handling.stop) {
+                    try renderFrame(state.session, state.split, state.output_state, state.output);
+                    return;
+                }
+                if (handling.render_now) {
+                    try renderFrame(state.session, state.split, state.output_state, state.output);
+                    should_render = false;
+                    continue;
+                }
+                if (state.split.focusedPane() != previous_focus) {
+                    try renderFrame(state.session, state.split, state.output_state, state.output);
+                    should_render = false;
+                }
             }
         }
+
+        if (should_render) try renderFrame(state.session, state.split, state.output_state, state.output);
     }
 }
 
-fn handleKey(state: InputLoop, key: []const u8) !bool {
-    state.mutex.lock();
-    defer state.mutex.unlock();
+const KeyHandling = struct {
+    stop: bool = false,
+    render_now: bool = false,
+};
 
+fn handleKey(state: InputLoop, key: []const u8) !KeyHandling {
     if (state.split.focusedPane() == .client) {
         const action = try state.session.handleKeyAction(key);
         if (action) |value| {
-            if (value != .stop_running) {
+            if (tui.client_session.commandNeedsImmediateStateSync(value)) {
                 try state.session.readStateUpdate();
                 if (state.sync_selection_after_command) try syncSelectionAfterAction(state.session, value);
             }
-        } else {
-            try state.split.handleKey(key);
+            return .{
+                .stop = value == .stop_running,
+                .render_now = tui.client_session.commandShouldRenderImmediately(value),
+            };
         }
-        _ = try resizeLayout(state.session, state.split, state.input, state.output);
-        try renderFrame(state.session, state.split, state.output_state, state.output);
-        if (action) |value| return value == .stop_running;
-        return false;
+
+        try state.split.handleKey(key);
+        return .{};
     }
 
     try state.split.handleKey(key);
-    _ = try resizeLayout(state.session, state.split, state.input, state.output);
-    try renderFrame(state.session, state.split, state.output_state, state.output);
-    return false;
+    return .{};
 }
 
 fn syncSelectionAfterAction(
@@ -366,6 +388,7 @@ fn runRenderLoop(state: *RenderLoop) void {
         defer state.mutex.unlock();
 
         const state_changed = readPendingState(state.session, state.ipc_client) catch |err| {
+            if (state.stopped.load(.seq_cst) or err == error.EndOfStream) break;
             state.result = .{ .failed = err };
             return;
         };
@@ -391,10 +414,7 @@ fn readPendingState(
     session: *tui.client_session.ClientSession,
     ipc_client: *ipc.client.Client,
 ) !bool {
-    if (ipc_client.hasPendingState()) {
-        try session.readStateUpdate();
-        return true;
-    }
+    if (try readAvailableStateUpdate(session, ipc_client)) return true;
 
     var poll_fds = [_]std.posix.pollfd{
         .{
@@ -407,7 +427,15 @@ fn readPendingState(
     if (ready == 0) return false;
     if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) return false;
 
-    try session.readStateUpdate();
+    return readAvailableStateUpdate(session, ipc_client);
+}
+
+fn readAvailableStateUpdate(
+    session: *tui.client_session.ClientSession,
+    ipc_client: *ipc.client.Client,
+) !bool {
+    const update = (try ipc_client.readLatestStateIfAvailable()) orelse return false;
+    try session.applyStateUpdate(update);
     return true;
 }
 

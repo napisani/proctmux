@@ -20,6 +20,40 @@ pub const Output = struct {
     }
 };
 
+pub const BufferOutput = struct {
+    buffer: *std.array_list.Managed(u8),
+
+    pub fn writer(buffer: *std.array_list.Managed(u8), fd: ?std.posix.fd_t) Output {
+        return .{
+            .context = buffer,
+            .write = write,
+            .fd = fd,
+        };
+    }
+
+    fn write(context: *anyopaque, bytes: []const u8) anyerror!void {
+        const buffer: *std.array_list.Managed(u8) = @ptrCast(@alignCast(context));
+        try buffer.appendSlice(bytes);
+    }
+};
+
+pub fn appendTextClearingLineTails(out: *std.array_list.Managed(u8), text: []const u8, clear_line_tail: []const u8) !void {
+    var start: usize = 0;
+    for (text, 0..) |byte, index| {
+        if (byte != '\n') continue;
+
+        if (index > start) try out.appendSlice(text[start..index]);
+        try out.appendSlice(clear_line_tail);
+        try out.append('\n');
+        start = index + 1;
+    }
+
+    if (start < text.len) {
+        try out.appendSlice(text[start..]);
+        try out.appendSlice(clear_line_tail);
+    }
+}
+
 pub fn writeTextClearingLineTails(output: Output, text: []const u8, clear_line_tail: []const u8) !void {
     var start: usize = 0;
     for (text, 0..) |byte, index| {

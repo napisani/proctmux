@@ -139,7 +139,8 @@ pub const ClientModel = struct {
             if (matches(self.app_state.config.keybinding.submit_filter, key)) {
                 self.entering_filter_text = false;
                 self.mode = .normal;
-                return self.applyFilterNow();
+                try self.applyFilterLocal();
+                return self.syncActiveSelection();
             }
             if (matches(self.app_state.config.keybinding.filter, key)) {
                 self.entering_filter_text = false;
@@ -151,17 +152,20 @@ pub const ClientModel = struct {
                 self.entering_filter_text = false;
                 self.mode = .normal;
                 self.filter_text.clearRetainingCapacity();
-                return self.applyFilterNow();
+                try self.applyFilterLocal();
+                return null;
             }
             if (std.mem.eql(u8, key, "delete") or std.mem.eql(u8, key, "backspace")) {
                 if (self.filter_text.items.len > 0) self.filter_text.items.len -= 1;
-                return self.applyFilterNow();
+                try self.applyFilterLocal();
+                return null;
             }
             if (self.navigationIntentForSpecialKey(key)) |intent| return intent;
 
             if (isTextInputKey(key)) {
                 try self.filter_text.appendSlice(key);
-                return self.applyFilterNow();
+                try self.applyFilterLocal();
+                return null;
             }
             return null;
         }
@@ -184,7 +188,8 @@ pub const ClientModel = struct {
         }
         if (matches(self.app_state.config.keybinding.toggle_running, key)) {
             self.show_only_running = !self.show_only_running;
-            return self.applyFilterNow();
+            try self.applyFilterLocal();
+            return self.syncActiveSelection();
         }
         if (matches(self.app_state.config.keybinding.start, key)) {
             return self.commandIntent(.start);
@@ -208,14 +213,18 @@ pub const ClientModel = struct {
         return null;
     }
 
-    fn applyFilterNow(self: *ClientModel) !?CommandIntent {
+    fn applyFilterLocal(self: *ClientModel) !void {
         try self.rebuildProcessList();
         if (self.filtered_views.len == 0) {
             self.active_proc_id = .none;
-            return null;
+            return;
         }
 
         self.active_proc_id = self.filtered_views[0].id;
+    }
+
+    fn syncActiveSelection(self: *ClientModel) ?CommandIntent {
+        if (self.active_proc_id.isNone()) return null;
         return .{
             .action = .switch_process,
             .label = self.activeProcLabel(),
@@ -381,8 +390,12 @@ test "client model typing filter narrows list and selects first match" {
     try std.testing.expectEqual(@as(usize, 1), model.visibleCount());
     try std.testing.expectEqualStrings("gamma-db", model.visibleLabel(0));
     try std.testing.expectEqual(domain.process.ProcessId.fromInt(3), model.active_proc_id);
-    try std.testing.expectEqual(ipc.protocol.Command.switch_process, intent.?.action);
-    try std.testing.expectEqualStrings("gamma-db", intent.?.label);
+    try std.testing.expect(intent == null);
+
+    const submitted = try model.handleKey("enter");
+    try std.testing.expect(submitted != null);
+    try std.testing.expectEqual(ipc.protocol.Command.switch_process, submitted.?.action);
+    try std.testing.expectEqualStrings("gamma-db", submitted.?.label);
 }
 
 test "client model backspace edits filter text" {

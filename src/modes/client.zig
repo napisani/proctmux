@@ -61,8 +61,7 @@ fn pollLoop(
 ) !void {
     var buffer: [64]u8 = undefined;
     while (true) {
-        if (ipc_client.hasPendingState()) {
-            try session.readStateUpdate();
+        if (try readAvailableStateUpdate(session, ipc_client)) {
             try render(session, output);
             continue;
         }
@@ -84,14 +83,22 @@ fn pollLoop(
         if (ready == 0) continue;
 
         if ((poll_fds[1].revents & std.posix.POLL.IN) != 0) {
-            try session.readStateUpdate();
-            try render(session, output);
+            if (try readAvailableStateUpdate(session, ipc_client)) try render(session, output);
         }
 
         if ((poll_fds[0].revents & std.posix.POLL.IN) != 0) {
             if (try handleInput(session, input, output, &buffer)) return;
         }
     }
+}
+
+fn readAvailableStateUpdate(
+    session: *tui.client_session.ClientSession,
+    ipc_client: *ipc.client.Client,
+) !bool {
+    const update = (try ipc_client.readLatestStateIfAvailable()) orelse return false;
+    try session.applyStateUpdate(update);
+    return true;
 }
 
 fn handleInput(
@@ -103,30 +110,44 @@ fn handleInput(
     const n = try input.readBytes(buffer);
     if (n == 0) return true;
 
+    var should_render = false;
     var index: usize = 0;
     while (index < n) {
         var key_buf: [1]u8 = undefined;
         if (tui.key_input.keyForInput(buffer[0..n], &index, &key_buf)) |key| {
             const action = try session.handleKeyAction(key);
             if (action) |value| {
-                if (value != .stop_running) try session.readStateUpdate();
+                if (tui.client_session.commandNeedsImmediateStateSync(value)) try session.readStateUpdate();
+                if (value == .stop_running) {
+                    should_render = true;
+                    try render(session, output);
+                    return true;
+                }
+                if (tui.client_session.commandShouldRenderImmediately(value)) {
+                    try render(session, output);
+                    should_render = false;
+                    continue;
+                }
             }
-            try render(session, output);
-            if (action) |value| {
-                if (value == .stop_running) return true;
-            }
+            should_render = true;
         }
     }
 
+    if (should_render) try render(session, output);
     return false;
 }
 
 fn render(session: *tui.client_session.ClientSession, output: io.Output) !void {
-    try output.writeAll(terminal.repaint.begin_frame);
+    var frame = std.array_list.Managed(u8).init(session.allocator);
+    defer frame.deinit();
+
+    try frame.appendSlice(terminal.repaint.begin_frame);
     const rendered = try renderText(session);
     defer session.allocator.free(rendered);
-    try io.writeTextClearingLineTails(output, rendered, terminal.repaint.clear_line_tail);
-    try output.writeAll(terminal.repaint.end_frame);
+    try io.appendTextClearingLineTails(&frame, rendered, terminal.repaint.clear_line_tail);
+    try frame.appendSlice(terminal.repaint.end_frame);
+
+    try output.writeAll(frame.items);
 }
 
 pub fn renderText(session: *tui.client_session.ClientSession) ![]const u8 {

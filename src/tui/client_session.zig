@@ -8,6 +8,7 @@ const client_model = @import("client_model.zig");
 pub const Transport = struct {
     context: *anyopaque,
     read_state: *const fn (context: *anyopaque, allocator: std.mem.Allocator) anyerror!ipc.protocol.StateUpdate,
+    read_latest_state: *const fn (context: *anyopaque, allocator: std.mem.Allocator) anyerror!ipc.protocol.StateUpdate,
     send_command: *const fn (
         context: *anyopaque,
         allocator: std.mem.Allocator,
@@ -17,6 +18,10 @@ pub const Transport = struct {
 
     fn readState(self: Transport, allocator: std.mem.Allocator) !ipc.protocol.StateUpdate {
         return self.read_state(self.context, allocator);
+    }
+
+    fn readLatestState(self: Transport, allocator: std.mem.Allocator) !ipc.protocol.StateUpdate {
+        return self.read_latest_state(self.context, allocator);
     }
 
     fn sendCommand(
@@ -131,10 +136,18 @@ pub const ClientSession = struct {
     }
 
     pub fn readStateUpdate(self: *ClientSession) !void {
+        try self.applyStateUpdate(try self.transport.readLatestState(self.allocator));
+    }
+
+    pub fn applyStateUpdate(self: *ClientSession, update: ipc.protocol.StateUpdate) !void {
+        var pending_update: ?ipc.protocol.StateUpdate = update;
+        errdefer if (pending_update) |*pending| pending.deinit();
+
         const new_state_update = try self.allocator.create(ipc.protocol.StateUpdate);
         errdefer self.allocator.destroy(new_state_update);
 
-        new_state_update.* = try self.transport.readState(self.allocator);
+        new_state_update.* = pending_update.?;
+        pending_update = null;
         errdefer new_state_update.deinit();
 
         try self.model.replaceStatePreservingUI(
@@ -148,6 +161,17 @@ pub const ClientSession = struct {
     }
 };
 
+pub fn commandNeedsImmediateStateSync(action: ipc.protocol.Command) bool {
+    return switch (action) {
+        .switch_process, .stop_running, .list => false,
+        .start, .stop, .restart, .restart_running => true,
+    };
+}
+
+pub fn commandShouldRenderImmediately(action: ipc.protocol.Command) bool {
+    return action == .switch_process;
+}
+
 fn requiresSelectedProcess(action: ipc.protocol.Command) bool {
     return switch (action) {
         .start, .stop, .restart => true,
@@ -160,6 +184,7 @@ pub const IpcTransport = struct {
         return .{
             .context = client,
             .read_state = readState,
+            .read_latest_state = readLatestState,
             .send_command = sendCommand,
         };
     }
@@ -169,6 +194,11 @@ pub const IpcTransport = struct {
         return client.readState();
     }
 
+    fn readLatestState(context: *anyopaque, _: std.mem.Allocator) anyerror!ipc.protocol.StateUpdate {
+        const client: *ipc.client.Client = @ptrCast(@alignCast(context));
+        return client.readLatestState();
+    }
+
     fn sendCommand(
         context: *anyopaque,
         allocator: std.mem.Allocator,
@@ -176,8 +206,15 @@ pub const IpcTransport = struct {
         label: []const u8,
     ) anyerror!CommandResult {
         const client: *ipc.client.Client = @ptrCast(@alignCast(context));
-        _ = try client.sendCommand(action, label);
-        var response = try client.readResponse();
+        const request_id = try client.sendCommand(action, label);
+        if (action == .switch_process) {
+            return .{
+                .success = true,
+                .error_message = try allocator.dupe(u8, ""),
+            };
+        }
+
+        var response = try client.readResponseFor(request_id);
         defer response.deinit(client.allocator);
         return .{
             .success = response.success,
@@ -426,6 +463,7 @@ const FakeTransport = struct {
         return .{
             .context = self,
             .read_state = readState,
+            .read_latest_state = readState,
             .send_command = sendCommand,
         };
     }

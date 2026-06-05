@@ -224,17 +224,17 @@ fn serveCommandConnection(
         var response = try handler.handleCommand(allocator, request);
         defer response.deinit(allocator);
 
+        const line = try protocol.responseLine(allocator, response);
+        defer allocator.free(line);
+        try stream.writeAll(line);
+
         if (state_provider) |provider| {
-            if (response.success and shouldBroadcastState(request.action)) {
+            if (response.success and shouldBroadcastStateToRequester(request.action)) {
                 const state_line = try provider.stateLine(allocator);
                 defer allocator.free(state_line);
                 try stream.writeAll(state_line);
             }
         }
-
-        const line = try protocol.responseLine(allocator, response);
-        defer allocator.free(line);
-        try stream.writeAll(line);
 
         if (state_provider == null) return;
     }
@@ -242,6 +242,10 @@ fn serveCommandConnection(
 
 fn shouldBroadcastState(action: protocol.Command) bool {
     return action != .list;
+}
+
+fn shouldBroadcastStateToRequester(action: protocol.Command) bool {
+    return action != .list and action != .switch_process;
 }
 
 const StateClient = struct {
@@ -365,6 +369,64 @@ test "state monitor broadcasts its first sampled state" {
     try std.testing.expectEqualStrings(state_line, line);
 }
 
+test "state monitor does not echo state already broadcast except requester" {
+    const state_line = "{\"type\":\"state\",\"status\":\"selected\"}\n";
+    var provider = StaticStateProvider{ .line = state_line };
+    var stopped = std.atomic.Value(bool).init(false);
+    var server = StateCommandServer.init(
+        std.testing.allocator,
+        unusedCommandHandler(),
+        provider.provider(),
+        &stopped,
+        defaultPeerAuthorizer(),
+    );
+    defer {
+        stopped.store(true, .seq_cst);
+        server.closeAllClients();
+        server.deinit();
+    }
+
+    var requester_streams = try testSocketPair();
+    defer requester_streams[1].close();
+    var observer_streams = try testSocketPair();
+    defer observer_streams[1].close();
+
+    const requester = try std.testing.allocator.create(StateClient);
+    errdefer std.testing.allocator.destroy(requester);
+    errdefer requester.close();
+    requester.* = .{
+        .stream = requester_streams[0],
+        .write_timeout_ms = 200,
+    };
+    try server.clients.append(requester);
+
+    const observer = try std.testing.allocator.create(StateClient);
+    errdefer std.testing.allocator.destroy(observer);
+    errdefer observer.close();
+    observer.* = .{
+        .stream = observer_streams[0],
+        .write_timeout_ms = 200,
+    };
+    try server.clients.append(observer);
+
+    try server.broadcastStateExcept(requester);
+
+    const observer_line = try line_io.readTimeout(std.testing.allocator, observer_streams[1], 1024, 200);
+    defer std.testing.allocator.free(observer_line);
+    try std.testing.expectEqualStrings(state_line, observer_line);
+
+    try std.testing.expectError(
+        error.CommandTimeout,
+        line_io.readTimeout(std.testing.allocator, requester_streams[1], 1024, 50),
+    );
+
+    server.state_monitor_thread = try std.Thread.spawn(.{}, runStateMonitor, .{&server});
+    try std.testing.expectError(
+        error.CommandTimeout,
+        line_io.readTimeout(std.testing.allocator, requester_streams[1], 1024, 150),
+    );
+}
+
 fn testSocketPair() ![2]std.net.Stream {
     var fds: [2]std.c.fd_t = undefined;
     const rc = std.c.socketpair(
@@ -422,6 +484,8 @@ const StateCommandServer = struct {
     threads: std.array_list.Managed(std.Thread),
     state_monitor_thread: ?std.Thread = null,
     clients_mutex: std.Thread.Mutex = .{},
+    state_broadcast_mutex: std.Thread.Mutex = .{},
+    last_broadcast_state_line: ?[]const u8 = null,
 
     fn init(
         allocator: std.mem.Allocator,
@@ -452,6 +516,7 @@ const StateCommandServer = struct {
             self.allocator.destroy(client);
         }
         self.clients.deinit();
+        if (self.last_broadcast_state_line) |line| self.allocator.free(line);
     }
 
     fn serve(self: *StateCommandServer, socket_path: []const u8) !void {
@@ -520,30 +585,78 @@ const StateCommandServer = struct {
             var request = try protocol.parseCommandRequestLine(self.allocator, request_line);
             defer request.deinit(self.allocator);
 
+            const is_switch = request.action == .switch_process;
+            var state_broadcast_locked = is_switch;
+            if (state_broadcast_locked) self.state_broadcast_mutex.lock();
+            defer if (state_broadcast_locked) self.state_broadcast_mutex.unlock();
+
             var response = try self.handler.handleCommand(self.allocator, request);
             defer response.deinit(self.allocator);
 
-            if (response.success and shouldBroadcastState(request.action)) {
-                try self.broadcastState();
-            }
-
             const line = try protocol.responseLine(self.allocator, response);
             defer self.allocator.free(line);
+
+            if (is_switch) {
+                if (response.success) try self.broadcastStateExceptLocked(client);
+                self.state_broadcast_mutex.unlock();
+                state_broadcast_locked = false;
+            }
+
             try client.writeAll(line);
+
+            if (response.success and shouldBroadcastState(request.action) and !is_switch) {
+                try self.broadcastState();
+            }
         }
     }
 
     fn broadcastState(self: *StateCommandServer) !void {
+        self.state_broadcast_mutex.lock();
+        defer self.state_broadcast_mutex.unlock();
+
         const line = try self.state_provider.stateLine(self.allocator);
         defer self.allocator.free(line);
+        try self.rememberBroadcastStateLineLocked(line);
+        try self.broadcastStateLineExcept(line, null);
+    }
 
-        try self.broadcastStateLine(line);
+    fn broadcastStateExcept(self: *StateCommandServer, excluded: *StateClient) !void {
+        self.state_broadcast_mutex.lock();
+        defer self.state_broadcast_mutex.unlock();
+        try self.broadcastStateExceptLocked(excluded);
+    }
+
+    fn broadcastStateExceptLocked(self: *StateCommandServer, excluded: *StateClient) !void {
+        const line = try self.state_provider.stateLine(self.allocator);
+        defer self.allocator.free(line);
+        try self.rememberBroadcastStateLineLocked(line);
+        try self.broadcastStateLineExcept(line, excluded);
     }
 
     fn broadcastStateLine(self: *StateCommandServer, line: []const u8) !void {
+        self.state_broadcast_mutex.lock();
+        defer self.state_broadcast_mutex.unlock();
+        try self.rememberBroadcastStateLineLocked(line);
+        try self.broadcastStateLineExcept(line, null);
+    }
+
+    fn rememberBroadcastStateLineLocked(self: *StateCommandServer, line: []const u8) !void {
+        if (self.last_broadcast_state_line) |previous| {
+            if (std.mem.eql(u8, previous, line)) return;
+        }
+
+        const copy = try self.allocator.dupe(u8, line);
+        if (self.last_broadcast_state_line) |previous| self.allocator.free(previous);
+        self.last_broadcast_state_line = copy;
+    }
+
+    fn broadcastStateLineExcept(self: *StateCommandServer, line: []const u8, excluded: ?*StateClient) !void {
         self.clients_mutex.lock();
         defer self.clients_mutex.unlock();
         for (self.clients.items) |client| {
+            if (excluded) |skip| {
+                if (client == skip) continue;
+            }
             if (client.closed.load(.seq_cst)) continue;
             client.writeAll(line) catch |err| {
                 log.debug("dropping state broadcast to disconnected client: {s}", .{@errorName(err)});
@@ -552,21 +665,20 @@ const StateCommandServer = struct {
     }
 
     fn monitorStateChanges(self: *StateCommandServer) !void {
-        var last_line: ?[]const u8 = null;
-        defer if (last_line) |line| self.allocator.free(line);
-
         while (!self.stopped.load(.seq_cst)) {
             std.Thread.sleep(50 * std.time.ns_per_ms);
+
+            self.state_broadcast_mutex.lock();
+            defer self.state_broadcast_mutex.unlock();
 
             const line = try self.state_provider.stateLine(self.allocator);
             defer self.allocator.free(line);
 
-            if (last_line) |previous| {
+            if (self.last_broadcast_state_line) |previous| {
                 if (std.mem.eql(u8, previous, line)) continue;
-                self.allocator.free(previous);
             }
-            last_line = try self.allocator.dupe(u8, line);
-            try self.broadcastStateLine(line);
+            try self.rememberBroadcastStateLineLocked(line);
+            try self.broadcastStateLineExcept(line, null);
         }
     }
 };
