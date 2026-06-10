@@ -1,12 +1,5 @@
 const std = @import("std");
 
-pub const MessageKind = enum {
-    command,
-    response,
-    state,
-    unknown,
-};
-
 pub fn read(allocator: std.mem.Allocator, stream: std.net.Stream, max_len: usize) ![]const u8 {
     var out = std.array_list.Managed(u8).init(allocator);
     errdefer out.deinit();
@@ -52,18 +45,4 @@ pub fn readTimeout(
     }
 
     return error.LineTooLong;
-}
-
-pub fn messageKind(allocator: std.mem.Allocator, line: []const u8) !MessageKind {
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, line, .{});
-    defer parsed.deinit();
-
-    if (parsed.value != .object) return .unknown;
-    const type_value = parsed.value.object.get("type") orelse return .unknown;
-    if (type_value != .string) return .unknown;
-
-    if (std.mem.eql(u8, type_value.string, "command")) return .command;
-    if (std.mem.eql(u8, type_value.string, "response")) return .response;
-    if (std.mem.eql(u8, type_value.string, "state")) return .state;
-    return .unknown;
 }

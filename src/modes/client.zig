@@ -61,7 +61,7 @@ fn pollLoop(
 ) !void {
     var buffer: [64]u8 = undefined;
     while (true) {
-        if (try readAvailableStateUpdate(session, ipc_client)) {
+        if (try readAvailableSnapshotUpdate(session, ipc_client)) {
             try render(session, output);
             continue;
         }
@@ -83,7 +83,7 @@ fn pollLoop(
         if (ready == 0) continue;
 
         if ((poll_fds[1].revents & std.posix.POLL.IN) != 0) {
-            if (try readAvailableStateUpdate(session, ipc_client)) try render(session, output);
+            if (try readAvailableSnapshotUpdate(session, ipc_client)) try render(session, output);
         }
 
         if ((poll_fds[0].revents & std.posix.POLL.IN) != 0) {
@@ -92,12 +92,12 @@ fn pollLoop(
     }
 }
 
-fn readAvailableStateUpdate(
+fn readAvailableSnapshotUpdate(
     session: *tui.client_session.ClientSession,
     ipc_client: *ipc.client.Client,
 ) !bool {
-    const update = (try ipc_client.readLatestStateIfAvailable()) orelse return false;
-    try session.applyStateUpdate(update);
+    const update = (try ipc_client.readLatestSnapshotIfAvailable()) orelse return false;
+    try session.applySnapshotUpdate(update);
     return true;
 }
 
@@ -115,19 +115,15 @@ fn handleInput(
     while (index < n) {
         var key_buf: [1]u8 = undefined;
         if (tui.key_input.keyForInput(buffer[0..n], &index, &key_buf)) |key| {
-            const action = try session.handleKeyAction(key);
-            if (action) |value| {
-                if (tui.client_session.commandNeedsImmediateStateSync(value)) try session.readStateUpdate();
-                if (value == .stop_running) {
-                    should_render = true;
-                    try render(session, output);
-                    return true;
-                }
-                if (tui.client_session.commandShouldRenderImmediately(value)) {
-                    try render(session, output);
-                    should_render = false;
-                    continue;
-                }
+            const interaction = try session.handleKeyInteraction(key, .{});
+            if (interaction.stop) {
+                try render(session, output);
+                return true;
+            }
+            if (interaction.render_now) {
+                try render(session, output);
+                should_render = false;
+                continue;
             }
             should_render = true;
         }

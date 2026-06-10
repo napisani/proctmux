@@ -7,6 +7,7 @@ const modes = @import("../modes/root.zig");
 const terminal = @import("../terminal/root.zig");
 const test_ansi = @import("../test_support/ansi.zig");
 const test_io = @import("../test_support/io.zig");
+const test_ipc = @import("../test_support/ipc.zig");
 const unified = @import("../unified/root.zig");
 const version = @import("../version.zig");
 
@@ -346,15 +347,10 @@ test "app routes signal-list through config-derived socket" {
     defer dir.close();
     try dir.writeFile(.{ .sub_path = "proctmux.yaml", .data = "{}\n" });
 
-    const real_config_path = try dir.realpathAlloc(std.testing.allocator, "proctmux.yaml");
-    defer std.testing.allocator.free(real_config_path);
+    var loaded = try config.runtime.loadInDir(std.testing.allocator, dir, "");
+    defer loaded.deinit();
 
-    var cfg = config.schema.Config.empty(std.testing.allocator);
-    defer cfg.deinit();
-    try config.defaults.apply(&cfg, std.testing.allocator);
-    cfg.file_path = real_config_path;
-
-    const socket_path = try ipc.socket.createPathForConfig(std.testing.allocator, &cfg);
+    const socket_path = try ipc.socket.createPathForConfig(std.testing.allocator, &loaded.config);
     defer std.testing.allocator.free(socket_path);
     defer std.fs.deleteFileAbsolute(socket_path) catch {};
 
@@ -362,9 +358,13 @@ test "app routes signal-list through config-derived socket" {
     var server = try address.listen(.{});
     defer server.deinit();
 
-    var capture = OneShotCapture{};
-    var responded = std.atomic.Value(bool).init(false);
-    const thread = try std.Thread.spawn(.{}, runProbeTolerantSignalListResponseServer, .{ &server, &capture, &responded });
+    var server_result = test_ipc.ServerErrorCapture{};
+    const thread = try std.Thread.spawn(.{}, test_ipc.runSnapshotLineServer, .{
+        &server,
+        &server_result,
+        test_ipc.apiWorkerSnapshotLine,
+        2,
+    });
 
     var out = std.array_list.Managed(u8).init(std.testing.allocator);
     defer out.deinit();
@@ -376,11 +376,7 @@ test "app routes signal-list through config-derived socket" {
     try result;
 
     try std.testing.expectEqualStrings("NAME\tSTATUS\napi\trunning\nworker\tstopped\n", out.items);
-    if (capture.err) |err| return err;
-    try std.testing.expectEqualStrings(
-        "{\"type\":\"command\",\"request_id\":\"1\",\"action\":\"list\"}\n",
-        capture.requestLine(),
-    );
+    if (server_result.err) |err| return err;
 }
 
 test "app primary mode serves signal-list from loaded config" {
@@ -1222,67 +1218,6 @@ fn runPrimaryAppWithInput(state: *AppPrimaryInputRun) void {
 
     runInDirUntilStoppedWithInput(std.testing.allocator, dir, &.{}, test_io.BlockingInput.reader(state.input), test_io.NullOutput.writer(), state.stopped) catch |err| {
         state.err = err;
-    };
-}
-
-const OneShotCapture = struct {
-    request: [512]u8 = undefined,
-    request_len: usize = 0,
-    response: []const u8 =
-        "{\"type\":\"response\",\"request_id\":\"1\",\"success\":true,\"process_list\":[{\"index\":1,\"name\":\"api\",\"running\":true},{\"index\":2,\"name\":\"worker\",\"running\":false}]}\n",
-    err: ?anyerror = null,
-
-    fn requestLine(self: *const OneShotCapture) []const u8 {
-        return self.request[0..self.request_len];
-    }
-};
-
-fn runProbeTolerantSignalListResponseServer(
-    server: *std.net.Server,
-    capture: *OneShotCapture,
-    responded: *std.atomic.Value(bool),
-) void {
-    const first = server.accept() catch |err| {
-        capture.err = err;
-        return;
-    };
-    const first_thread = std.Thread.spawn(.{}, handleMaybeSignalCommand, .{ first, capture, responded }) catch |err| {
-        capture.err = err;
-        first.stream.close();
-        return;
-    };
-
-    const second = server.accept() catch |err| {
-        capture.err = err;
-        first_thread.join();
-        return;
-    };
-    handleMaybeSignalCommand(second, capture, responded);
-    first_thread.join();
-
-    if (!responded.load(.seq_cst)) capture.err = error.TestExpectedCommandConnection;
-}
-
-fn handleMaybeSignalCommand(
-    conn: std.net.Server.Connection,
-    capture: *OneShotCapture,
-    responded: *std.atomic.Value(bool),
-) void {
-    defer conn.stream.close();
-
-    var request: [512]u8 = undefined;
-    const len = conn.stream.read(&request) catch |err| {
-        capture.err = err;
-        return;
-    };
-    if (len == 0) return;
-    if (responded.swap(true, .seq_cst)) return;
-
-    @memcpy(capture.request[0..len], request[0..len]);
-    capture.request_len = len;
-    conn.stream.writeAll(capture.response) catch |err| {
-        capture.err = err;
-        return;
     };
 }
 

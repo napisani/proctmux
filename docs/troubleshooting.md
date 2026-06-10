@@ -8,7 +8,7 @@ Common issues, their causes, and how to fix them.
 
 **Problem:** The client TUI shows "Loading process list..." and never shows the actual process list.
 
-**Cause:** The client hasn't received the initial state update from the primary server via IPC. The client connects to the primary's Unix socket and waits for a `StateUpdate` message containing the full process list.
+**Cause:** The client hasn't received the initial snapshot from the primary server via IPC. The client connects to the primary's Unix socket and waits for a `SnapshotUpdate` message containing the client-visible process list.
 
 **Solutions:**
 
@@ -37,7 +37,7 @@ Common issues, their causes, and how to fix them.
 
 **Problem:** proctmux fails to start because the socket file already exists from a previous crashed session.
 
-**Cause:** The socket file in `/tmp/` was not cleaned up on crash. Normally proctmux removes and recreates the socket on startup via `os.RemoveAll` in `CreateSocket`.
+**Cause:** The socket file in `/tmp/` was not cleaned up on crash. Normally proctmux removes and recreates the socket on startup via `ipc.socket.createPathForConfig()`.
 
 **Solution:** The socket is automatically removed on startup in most cases. If it persists, manually delete the stale socket:
 
@@ -95,12 +95,12 @@ rm /tmp/proctmux-*.socket
 
 **Problem:** The client shows stale process state (e.g., a process shows as "running" when it has already stopped).
 
-**Cause:** The IPC update channel between the primary and client may be full. The channel is buffered with a capacity of 10 messages. If the client is slow to consume updates, newer updates are dropped.
+**Cause:** The client may have missed or lagged behind a snapshot broadcast, or the socket connection may have been closed after a write timeout.
 
 **Solutions:**
 
-- This typically resolves automatically on the next state change, since each update contains the full state.
-- Check the log file for `"updatesCh full, dropping state update"` warnings. Frequent occurrences may indicate a performance issue.
+- This typically resolves automatically on the next snapshot, since each snapshot contains the full client-visible state.
+- Check logs for disconnected-client or snapshot broadcast warnings.
 - Restart the client.
 
 ---

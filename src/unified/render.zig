@@ -195,17 +195,13 @@ fn appendServerHeader(
 }
 
 fn activeProcessLabel(model: *const tui.client_model.ClientModel) []const u8 {
-    for (model.process_views) |view| {
-        if (view.id == model.active_proc_id) return view.label;
-    }
-    return "";
+    const summary = model.activeProcessSummary() orelse return "";
+    return summary.label;
 }
 
 fn activeProcessStatus(model: *const tui.client_model.ClientModel) ?domain.process.ProcessStatus {
-    for (model.process_views) |view| {
-        if (view.id == model.active_proc_id) return view.status;
-    }
-    return null;
+    const summary = model.activeProcessSummary() orelse return null;
+    return summary.status;
 }
 
 fn statusText(status: domain.process.ProcessStatus) []const u8 {
@@ -555,7 +551,10 @@ test "frame clears stale content before pinned status bar" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    const model = try tui.client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    const model = try tui.client_model.ClientModel.init(std.testing.allocator, snapshot.view());
 
     var session: tui.client_session.ClientSession = undefined;
     session.allocator = std.testing.allocator;
@@ -608,7 +607,10 @@ test "frame renders help as full width overlay" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try tui.client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try tui.client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     model.show_help = true;
 
     var session: tui.client_session.ClientSession = undefined;

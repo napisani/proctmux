@@ -1,18 +1,18 @@
 pub const protocol = @import("protocol.zig");
+pub const interfaces = @import("interfaces.zig");
 pub const line = @import("line.zig");
-pub const command_codec = @import("command_codec.zig");
-pub const state_codec = @import("state_codec.zig");
 pub const socket = @import("socket.zig");
 pub const client = @import("client.zig");
 pub const server = @import("server.zig");
+pub const snapshot_broadcaster = @import("snapshot_broadcaster.zig");
 
 test {
     _ = protocol;
+    _ = interfaces;
     _ = line;
-    _ = command_codec;
-    _ = state_codec;
     _ = socket;
     _ = client;
     _ = server;
+    _ = snapshot_broadcaster;
     _ = @import("tests.zig");
 }

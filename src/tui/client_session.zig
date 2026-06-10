@@ -7,8 +7,8 @@ const client_model = @import("client_model.zig");
 
 pub const Transport = struct {
     context: *anyopaque,
-    read_state: *const fn (context: *anyopaque, allocator: std.mem.Allocator) anyerror!ipc.protocol.StateUpdate,
-    read_latest_state: *const fn (context: *anyopaque, allocator: std.mem.Allocator) anyerror!ipc.protocol.StateUpdate,
+    read_snapshot: *const fn (context: *anyopaque, allocator: std.mem.Allocator) anyerror!ipc.protocol.SnapshotUpdate,
+    read_latest_snapshot: *const fn (context: *anyopaque, allocator: std.mem.Allocator) anyerror!ipc.protocol.SnapshotUpdate,
     send_command: *const fn (
         context: *anyopaque,
         allocator: std.mem.Allocator,
@@ -16,12 +16,12 @@ pub const Transport = struct {
         label: []const u8,
     ) anyerror!CommandResult,
 
-    fn readState(self: Transport, allocator: std.mem.Allocator) !ipc.protocol.StateUpdate {
-        return self.read_state(self.context, allocator);
+    fn readSnapshot(self: Transport, allocator: std.mem.Allocator) !ipc.protocol.SnapshotUpdate {
+        return self.read_snapshot(self.context, allocator);
     }
 
-    fn readLatestState(self: Transport, allocator: std.mem.Allocator) !ipc.protocol.StateUpdate {
-        return self.read_latest_state(self.context, allocator);
+    fn readLatestSnapshot(self: Transport, allocator: std.mem.Allocator) !ipc.protocol.SnapshotUpdate {
+        return self.read_latest_snapshot(self.context, allocator);
     }
 
     fn sendCommand(
@@ -43,23 +43,32 @@ pub const CommandResult = struct {
     }
 };
 
+pub const KeyInteractionOptions = struct {
+    sync_selection_after_command: bool = false,
+};
+
+pub const KeyInteraction = struct {
+    handled_command: bool = false,
+    stop: bool = false,
+    render_now: bool = false,
+};
+
 pub const ClientSession = struct {
     allocator: std.mem.Allocator,
     transport: Transport,
-    state_update: *ipc.protocol.StateUpdate,
+    snapshot_update: *ipc.protocol.SnapshotUpdate,
     model: client_model.ClientModel,
 
     pub fn init(allocator: std.mem.Allocator, transport: Transport) !ClientSession {
-        const state_update = try allocator.create(ipc.protocol.StateUpdate);
-        errdefer allocator.destroy(state_update);
+        const snapshot_update = try allocator.create(ipc.protocol.SnapshotUpdate);
+        errdefer allocator.destroy(snapshot_update);
 
-        state_update.* = try transport.readState(allocator);
-        errdefer state_update.deinit();
+        snapshot_update.* = try transport.readSnapshot(allocator);
+        errdefer snapshot_update.deinit();
 
         var model = try client_model.ClientModel.init(
             allocator,
-            &state_update.state,
-            state_update.process_views,
+            snapshot_update.snapshot(),
         );
         errdefer model.deinit();
         model.no_color = std.process.hasEnvVarConstant("NO_COLOR");
@@ -67,24 +76,41 @@ pub const ClientSession = struct {
         return .{
             .allocator = allocator,
             .transport = transport,
-            .state_update = state_update,
+            .snapshot_update = snapshot_update,
             .model = model,
         };
     }
 
     pub fn deinit(self: *ClientSession) void {
         self.model.deinit();
-        self.state_update.deinit();
-        self.allocator.destroy(self.state_update);
+        self.snapshot_update.deinit();
+        self.allocator.destroy(self.snapshot_update);
     }
 
     pub fn handleKey(self: *ClientSession, key: []const u8) !void {
         _ = try self.handleKeyAction(key);
     }
 
+    pub fn handleKeyInteraction(
+        self: *ClientSession,
+        key: []const u8,
+        options: KeyInteractionOptions,
+    ) !KeyInteraction {
+        const action = (try self.handleKeyAction(key)) orelse return .{};
+        if (ipc.protocol.commandNeedsImmediateSnapshotSync(action)) {
+            try self.readSnapshotUpdate();
+            if (options.sync_selection_after_command) try self.syncSelectionAfterAction(action);
+        }
+        return .{
+            .handled_command = true,
+            .stop = action == .stop_running,
+            .render_now = ipc.protocol.commandShouldRenderImmediately(action),
+        };
+    }
+
     pub fn handleKeyAction(self: *ClientSession, key: []const u8) !?ipc.protocol.Command {
         if (try self.model.handleKey(key)) |intent| {
-            if (requiresSelectedProcess(intent.action) and intent.label.len == 0) {
+            if (ipc.protocol.commandRequiresSelectedProcess(intent.action) and intent.label.len == 0) {
                 try self.model.addMessage("no process selected");
                 return null;
             }
@@ -112,6 +138,13 @@ pub const ClientSession = struct {
         return null;
     }
 
+    fn syncSelectionAfterAction(self: *ClientSession, action: ipc.protocol.Command) !void {
+        switch (action) {
+            .start, .restart => try self.switchToActiveProcess(),
+            else => {},
+        }
+    }
+
     pub fn switchToActiveProcess(self: *ClientSession) !void {
         const label = self.model.activeProcessLabel();
         if (label.len == 0) return;
@@ -135,68 +168,47 @@ pub const ClientSession = struct {
         }
     }
 
-    pub fn readStateUpdate(self: *ClientSession) !void {
-        try self.applyStateUpdate(try self.transport.readLatestState(self.allocator));
+    pub fn readSnapshotUpdate(self: *ClientSession) !void {
+        try self.applySnapshotUpdate(try self.transport.readLatestSnapshot(self.allocator));
     }
 
-    pub fn applyStateUpdate(self: *ClientSession, update: ipc.protocol.StateUpdate) !void {
-        var pending_update: ?ipc.protocol.StateUpdate = update;
+    pub fn applySnapshotUpdate(self: *ClientSession, update: ipc.protocol.SnapshotUpdate) !void {
+        var pending_update: ?ipc.protocol.SnapshotUpdate = update;
         errdefer if (pending_update) |*pending| pending.deinit();
 
-        const new_state_update = try self.allocator.create(ipc.protocol.StateUpdate);
-        errdefer self.allocator.destroy(new_state_update);
+        const new_snapshot_update = try self.allocator.create(ipc.protocol.SnapshotUpdate);
+        errdefer self.allocator.destroy(new_snapshot_update);
 
-        new_state_update.* = pending_update.?;
+        new_snapshot_update.* = pending_update.?;
         pending_update = null;
-        errdefer new_state_update.deinit();
+        errdefer new_snapshot_update.deinit();
 
-        try self.model.replaceStatePreservingUI(
-            &new_state_update.state,
-            new_state_update.process_views,
-        );
+        try self.model.replaceSnapshotPreservingUI(new_snapshot_update.snapshot());
 
-        self.state_update.deinit();
-        self.allocator.destroy(self.state_update);
-        self.state_update = new_state_update;
+        self.snapshot_update.deinit();
+        self.allocator.destroy(self.snapshot_update);
+        self.snapshot_update = new_snapshot_update;
     }
 };
-
-pub fn commandNeedsImmediateStateSync(action: ipc.protocol.Command) bool {
-    return switch (action) {
-        .switch_process, .stop_running, .list => false,
-        .start, .stop, .restart, .restart_running => true,
-    };
-}
-
-pub fn commandShouldRenderImmediately(action: ipc.protocol.Command) bool {
-    return action == .switch_process;
-}
-
-fn requiresSelectedProcess(action: ipc.protocol.Command) bool {
-    return switch (action) {
-        .start, .stop, .restart => true,
-        else => false,
-    };
-}
 
 pub const IpcTransport = struct {
     pub fn transport(client: *ipc.client.Client) Transport {
         return .{
             .context = client,
-            .read_state = readState,
-            .read_latest_state = readLatestState,
+            .read_snapshot = readSnapshot,
+            .read_latest_snapshot = readLatestSnapshot,
             .send_command = sendCommand,
         };
     }
 
-    fn readState(context: *anyopaque, _: std.mem.Allocator) anyerror!ipc.protocol.StateUpdate {
+    fn readSnapshot(context: *anyopaque, _: std.mem.Allocator) anyerror!ipc.protocol.SnapshotUpdate {
         const client: *ipc.client.Client = @ptrCast(@alignCast(context));
-        return client.readState();
+        return client.readSnapshot();
     }
 
-    fn readLatestState(context: *anyopaque, _: std.mem.Allocator) anyerror!ipc.protocol.StateUpdate {
+    fn readLatestSnapshot(context: *anyopaque, _: std.mem.Allocator) anyerror!ipc.protocol.SnapshotUpdate {
         const client: *ipc.client.Client = @ptrCast(@alignCast(context));
-        return client.readLatestState();
+        return client.readLatestSnapshot();
     }
 
     fn sendCommand(
@@ -223,7 +235,7 @@ pub const IpcTransport = struct {
     }
 };
 
-test "client session initializes from transport state and dispatches key intents" {
+test "client session initializes from transport snapshot and dispatches key intents" {
     var cfg = try test_config.standardSessionConfig(std.testing.allocator);
     defer cfg.deinit();
 
@@ -232,14 +244,14 @@ test "client session initializes from transport state and dispatches key intents
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
-    const line = try ipc.protocol.stateLine(
+    const line = try test_ipc.snapshotLineFromAppState(
         std.testing.allocator,
         &app_state,
         fake_controller.controller(),
     );
     defer std.testing.allocator.free(line);
 
-    var fake = FakeTransport{ .state_line = line };
+    var fake = FakeTransport{ .snapshot_line = line };
     var session = try ClientSession.init(std.testing.allocator, FakeTransport.transport(&fake));
     defer session.deinit();
 
@@ -265,7 +277,7 @@ test "client session dispatches key intents through persistent IPC transport" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
-    const line = try ipc.protocol.stateLine(
+    const line = try test_ipc.snapshotLineFromAppState(
         std.testing.allocator,
         &app_state,
         fake_controller.controller(),
@@ -273,13 +285,13 @@ test "client session dispatches key intents through persistent IPC transport" {
     defer std.testing.allocator.free(line);
 
     var handler = test_ipc.FakeCommandHandler{};
-    var state_provider = test_ipc.FakeStateProvider{ .line = line };
+    var snapshot_provider = test_ipc.FakeSnapshotProvider{ .line = line };
     var stopped = std.atomic.Value(bool).init(false);
-    const thread = try std.Thread.spawn(.{}, ipc.server.serveCommandsAtPathWithState, .{
+    const thread = try std.Thread.spawn(.{}, ipc.server.serveCommandsAtPathWithSnapshots, .{
         std.testing.allocator,
         path,
         handler.handler(),
-        state_provider.provider(),
+        snapshot_provider.provider(),
         &stopped,
     });
     test_ipc.waitForSocketFile(path);
@@ -310,7 +322,7 @@ test "client session records command failures as messages without exiting" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
-    const line = try ipc.protocol.stateLine(
+    const line = try test_ipc.snapshotLineFromAppState(
         std.testing.allocator,
         &app_state,
         fake_controller.controller(),
@@ -318,7 +330,7 @@ test "client session records command failures as messages without exiting" {
     defer std.testing.allocator.free(line);
 
     var fake = FakeTransport{
-        .state_line = line,
+        .snapshot_line = line,
         .command_success = false,
         .command_error_message = "already running",
     };
@@ -342,14 +354,14 @@ test "client session records no process selected locally without IPC command" {
     app_state.current_proc_id = .none;
 
     var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
-    const line = try ipc.protocol.stateLine(
+    const line = try test_ipc.snapshotLineFromAppState(
         std.testing.allocator,
         &app_state,
         fake_controller.controller(),
     );
     defer std.testing.allocator.free(line);
 
-    var fake = FakeTransport{ .state_line = line };
+    var fake = FakeTransport{ .snapshot_line = line };
     var session = try ClientSession.init(std.testing.allocator, FakeTransport.transport(&fake));
     defer session.deinit();
 
@@ -361,7 +373,7 @@ test "client session records no process selected locally without IPC command" {
     try std.testing.expectEqualStrings("no process selected", session.model.message(0));
 }
 
-test "client session applies subsequent state updates to model" {
+test "client session applies subsequent snapshot updates to model" {
     var cfg = try test_config.standardSessionConfig(std.testing.allocator);
     defer cfg.deinit();
 
@@ -370,7 +382,7 @@ test "client session applies subsequent state updates to model" {
 
     var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
     app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
-    const first_line = try ipc.protocol.stateLine(
+    const first_line = try test_ipc.snapshotLineFromAppState(
         std.testing.allocator,
         &app_state,
         fake_controller.controller(),
@@ -378,7 +390,7 @@ test "client session applies subsequent state updates to model" {
     defer std.testing.allocator.free(first_line);
 
     app_state.current_proc_id = domain.process.ProcessId.fromInt(3);
-    const second_line = try ipc.protocol.stateLine(
+    const second_line = try test_ipc.snapshotLineFromAppState(
         std.testing.allocator,
         &app_state,
         fake_controller.controller(),
@@ -386,21 +398,21 @@ test "client session applies subsequent state updates to model" {
     defer std.testing.allocator.free(second_line);
 
     var fake = FakeTransport{
-        .state_line = first_line,
-        .next_state_line = second_line,
+        .snapshot_line = first_line,
+        .next_snapshot_line = second_line,
     };
     var session = try ClientSession.init(std.testing.allocator, FakeTransport.transport(&fake));
     defer session.deinit();
     try std.testing.expectEqual(domain.process.ProcessId.fromInt(1), session.model.active_proc_id);
 
-    try session.readStateUpdate();
+    try session.readSnapshotUpdate();
 
-    try std.testing.expectEqual(domain.process.ProcessId.fromInt(3), session.model.app_state.current_proc_id);
+    try std.testing.expectEqual(domain.process.ProcessId.fromInt(3), session.model.snapshot.currentProcessId());
     try std.testing.expectEqual(domain.process.ProcessId.fromInt(1), session.model.active_proc_id);
     try std.testing.expectEqual(@as(usize, 3), session.model.visibleCount());
 }
 
-test "client session preserves local ui state across state updates" {
+test "client session preserves local ui state across snapshot updates" {
     var cfg = try test_config.standardSessionConfig(std.testing.allocator);
     defer cfg.deinit();
 
@@ -409,7 +421,7 @@ test "client session preserves local ui state across state updates" {
 
     var fake_controller = test_ipc.FakeProcessController{ .running_id = domain.process.ProcessId.fromInt(2) };
     app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
-    const first_line = try ipc.protocol.stateLine(
+    const first_line = try test_ipc.snapshotLineFromAppState(
         std.testing.allocator,
         &app_state,
         fake_controller.controller(),
@@ -417,7 +429,7 @@ test "client session preserves local ui state across state updates" {
     defer std.testing.allocator.free(first_line);
 
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
-    const second_line = try ipc.protocol.stateLine(
+    const second_line = try test_ipc.snapshotLineFromAppState(
         std.testing.allocator,
         &app_state,
         fake_controller.controller(),
@@ -425,8 +437,8 @@ test "client session preserves local ui state across state updates" {
     defer std.testing.allocator.free(second_line);
 
     var fake = FakeTransport{
-        .state_line = first_line,
-        .next_state_line = second_line,
+        .snapshot_line = first_line,
+        .next_snapshot_line = second_line,
     };
     var session = try ClientSession.init(std.testing.allocator, FakeTransport.transport(&fake));
     defer session.deinit();
@@ -439,7 +451,7 @@ test "client session preserves local ui state across state updates" {
     _ = try session.model.handleKey("enter");
     _ = try session.model.handleKey("?");
 
-    try session.readStateUpdate();
+    try session.readSnapshotUpdate();
 
     try std.testing.expectEqualStrings("gamma", session.model.filterText());
     try std.testing.expect(!session.model.entering_filter_text);
@@ -450,9 +462,9 @@ test "client session preserves local ui state across state updates" {
 }
 
 const FakeTransport = struct {
-    state_line: []const u8,
-    next_state_line: ?[]const u8 = null,
-    state_read_count: usize = 0,
+    snapshot_line: []const u8,
+    next_snapshot_line: ?[]const u8 = null,
+    snapshot_read_count: usize = 0,
     command_success: bool = true,
     command_error_message: []const u8 = "",
     last_action: ?ipc.protocol.Command = null,
@@ -462,8 +474,8 @@ const FakeTransport = struct {
     fn transport(self: *FakeTransport) Transport {
         return .{
             .context = self,
-            .read_state = readState,
-            .read_latest_state = readState,
+            .read_snapshot = readSnapshot,
+            .read_latest_snapshot = readSnapshot,
             .send_command = sendCommand,
         };
     }
@@ -472,14 +484,14 @@ const FakeTransport = struct {
         return self.last_label_buf[0..self.last_label_len];
     }
 
-    fn readState(context: *anyopaque, allocator: std.mem.Allocator) anyerror!ipc.protocol.StateUpdate {
+    fn readSnapshot(context: *anyopaque, allocator: std.mem.Allocator) anyerror!ipc.protocol.SnapshotUpdate {
         const self: *FakeTransport = @ptrCast(@alignCast(context));
-        const line = if (self.state_read_count == 0)
-            self.state_line
+        const line = if (self.snapshot_read_count == 0)
+            self.snapshot_line
         else
-            self.next_state_line orelse self.state_line;
-        self.state_read_count += 1;
-        return ipc.protocol.parseStateLine(allocator, line);
+            self.next_snapshot_line orelse self.snapshot_line;
+        self.snapshot_read_count += 1;
+        return ipc.protocol.parseSnapshotLine(allocator, line);
     }
 
     fn sendCommand(

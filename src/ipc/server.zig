@@ -1,48 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const interfaces = @import("interfaces.zig");
 const line_io = @import("line.zig");
 const protocol = @import("protocol.zig");
+const snapshot_broadcaster = @import("snapshot_broadcaster.zig");
 
 const max_request_line = 1024 * 1024;
-const default_client_write_timeout_ms: u64 = 2000;
 var peer_credential_warning_logged = std.atomic.Value(bool).init(false);
 
-const log = std.log.scoped(.ipc_server);
-
-pub const CommandHandler = struct {
-    context: *anyopaque,
-    handle: *const fn (
-        context: *anyopaque,
-        allocator: std.mem.Allocator,
-        request: protocol.CommandRequest,
-    ) anyerror!protocol.Response,
-
-    fn handleCommand(
-        self: CommandHandler,
-        allocator: std.mem.Allocator,
-        request: protocol.CommandRequest,
-    ) !protocol.Response {
-        return self.handle(self.context, allocator, request);
-    }
-};
-
-pub const StateProvider = struct {
-    context: *anyopaque,
-    state_line: *const fn (context: *anyopaque, allocator: std.mem.Allocator) anyerror![]const u8,
-
-    fn stateLine(self: StateProvider, allocator: std.mem.Allocator) ![]const u8 {
-        return self.state_line(self.context, allocator);
-    }
-};
-
-pub const PeerAuthorizer = struct {
-    context: *anyopaque,
-    authorize: *const fn (context: *anyopaque, fd: std.posix.fd_t) anyerror!void,
-
-    fn authorizeStream(self: PeerAuthorizer, stream: std.net.Stream) !void {
-        try self.authorize(self.context, stream.handle);
-    }
-};
+pub const CommandHandler = interfaces.CommandHandler;
+pub const SnapshotProvider = interfaces.SnapshotProvider;
+pub const PeerAuthorizer = interfaces.PeerAuthorizer;
 
 const DefaultPeerAuthorizerContext = struct {};
 var default_peer_authorizer_context = DefaultPeerAuthorizerContext{};
@@ -71,60 +39,40 @@ pub fn serveOneCommandAtPathWithAuthorizer(
     try serveAtPath(allocator, socket_path, handler, .one_command, authorizer);
 }
 
-pub fn serveCommandsAtPath(
+pub fn serveCommandsAtPathWithSnapshots(
     allocator: std.mem.Allocator,
     socket_path: []const u8,
     handler: CommandHandler,
+    snapshot_provider: SnapshotProvider,
     stopped: *std.atomic.Value(bool),
 ) !void {
-    try serveAtPath(allocator, socket_path, handler, .{ .command_loop = stopped }, null);
-}
-
-pub fn serveCommandsAtPathWithAuthorizer(
-    allocator: std.mem.Allocator,
-    socket_path: []const u8,
-    handler: CommandHandler,
-    stopped: *std.atomic.Value(bool),
-    authorizer: PeerAuthorizer,
-) !void {
-    try serveAtPath(allocator, socket_path, handler, .{ .command_loop = stopped }, authorizer);
-}
-
-pub fn serveCommandsAtPathWithState(
-    allocator: std.mem.Allocator,
-    socket_path: []const u8,
-    handler: CommandHandler,
-    state_provider: StateProvider,
-    stopped: *std.atomic.Value(bool),
-) !void {
-    try serveAtPath(allocator, socket_path, handler, .{ .state_loop = .{
-        .provider = state_provider,
+    try serveAtPath(allocator, socket_path, handler, .{ .snapshot_loop = .{
+        .provider = snapshot_provider,
         .stopped = stopped,
     } }, null);
 }
 
-pub fn serveCommandsAtPathWithStateAndAuthorizer(
+pub fn serveCommandsAtPathWithSnapshotsAndAuthorizer(
     allocator: std.mem.Allocator,
     socket_path: []const u8,
     handler: CommandHandler,
-    state_provider: StateProvider,
+    snapshot_provider: SnapshotProvider,
     stopped: *std.atomic.Value(bool),
     authorizer: PeerAuthorizer,
 ) !void {
-    try serveAtPath(allocator, socket_path, handler, .{ .state_loop = .{
-        .provider = state_provider,
+    try serveAtPath(allocator, socket_path, handler, .{ .snapshot_loop = .{
+        .provider = snapshot_provider,
         .stopped = stopped,
     } }, authorizer);
 }
 
 const ServeMode = union(enum) {
     one_command,
-    command_loop: *std.atomic.Value(bool),
-    state_loop: StateLoop,
+    snapshot_loop: SnapshotLoop,
 };
 
-const StateLoop = struct {
-    provider: StateProvider,
+const SnapshotLoop = struct {
+    provider: SnapshotProvider,
     stopped: *std.atomic.Value(bool),
 };
 
@@ -138,29 +86,75 @@ fn serveAtPath(
     const authorizer = maybe_authorizer orelse defaultPeerAuthorizer();
 
     switch (mode) {
-        .state_loop => |state_loop| {
-            var state_server = StateCommandServer.init(
-                allocator,
-                handler,
-                state_loop.provider,
-                state_loop.stopped,
-                authorizer,
-            );
-            defer state_server.deinit();
-            try state_server.serve(socket_path);
-        },
-        .one_command => try serveCommandListener(allocator, socket_path, handler, authorizer, null),
-        .command_loop => |stopped| try serveCommandListener(allocator, socket_path, handler, authorizer, stopped),
+        .snapshot_loop => |snapshot_loop| try serveSnapshotListener(
+            allocator,
+            socket_path,
+            handler,
+            snapshot_loop.provider,
+            snapshot_loop.stopped,
+            authorizer,
+        ),
+        .one_command => try serveOneCommandListener(allocator, socket_path, handler, authorizer),
     }
 }
 
-fn serveCommandListener(
+fn serveOneCommandListener(
     allocator: std.mem.Allocator,
     socket_path: []const u8,
     handler: CommandHandler,
     authorizer: PeerAuthorizer,
-    stopped: ?*std.atomic.Value(bool),
 ) !void {
+    var listener = try listenAtSocketPath(socket_path);
+    defer listener.deinit();
+
+    const conn = try listener.accept();
+    authorizer.authorizeStream(conn.stream) catch |err| {
+        conn.stream.close();
+        return err;
+    };
+    try serveCommandConnection(allocator, conn.stream, handler);
+}
+
+fn serveSnapshotListener(
+    allocator: std.mem.Allocator,
+    socket_path: []const u8,
+    handler: CommandHandler,
+    snapshot_provider: SnapshotProvider,
+    stopped: *std.atomic.Value(bool),
+    authorizer: PeerAuthorizer,
+) !void {
+    var listener = try listenAtSocketPath(socket_path);
+    defer listener.deinit();
+
+    var broadcaster = snapshot_broadcaster.Broadcaster.init(
+        allocator,
+        handler,
+        snapshot_provider,
+        stopped,
+    );
+    defer broadcaster.deinit();
+    try broadcaster.start();
+
+    while (!stopped.load(.seq_cst)) {
+        const conn = listener.accept() catch |err| {
+            if (stopped.load(.seq_cst)) break;
+            return err;
+        };
+        if (stopped.load(.seq_cst)) {
+            conn.stream.close();
+            break;
+        }
+
+        authorizer.authorizeStream(conn.stream) catch {
+            conn.stream.close();
+            continue;
+        };
+
+        try broadcaster.addClient(conn.stream);
+    }
+}
+
+fn listenAtSocketPath(socket_path: []const u8) !std.net.Server {
     std.fs.deleteFileAbsolute(socket_path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
@@ -168,532 +162,30 @@ fn serveCommandListener(
 
     const address = try std.net.Address.initUnix(socket_path);
     var listener = try address.listen(.{});
-    defer listener.deinit();
+    errdefer listener.deinit();
     try setSocketPermissions(socket_path);
-
-    if (stopped == null) {
-        const conn = try listener.accept();
-        authorizer.authorizeStream(conn.stream) catch |err| {
-            conn.stream.close();
-            return err;
-        };
-        try serveCommandConnection(allocator, conn.stream, handler, null);
-        return;
-    }
-
-    const stop_signal = stopped.?;
-    while (!stop_signal.load(.seq_cst)) {
-        const conn = listener.accept() catch |err| {
-            if (stop_signal.load(.seq_cst)) break;
-            return err;
-        };
-        authorizer.authorizeStream(conn.stream) catch {
-            conn.stream.close();
-            continue;
-        };
-        serveCommandConnection(allocator, conn.stream, handler, null) catch |err| switch (err) {
-            error.EndOfStream, error.BrokenPipe, error.WriteFailed => {
-                if (stop_signal.load(.seq_cst)) break;
-            },
-            else => return err,
-        };
-    }
+    return listener;
 }
 
 fn serveCommandConnection(
     allocator: std.mem.Allocator,
     stream: std.net.Stream,
     handler: CommandHandler,
-    state_provider: ?StateProvider,
 ) !void {
     defer stream.close();
 
-    if (state_provider) |provider| {
-        const line = try provider.stateLine(allocator);
-        defer allocator.free(line);
-        try stream.writeAll(line);
-    }
+    const request_line = try line_io.read(allocator, stream, max_request_line);
+    defer allocator.free(request_line);
 
-    while (true) {
-        const request_line = try line_io.read(allocator, stream, max_request_line);
-        defer allocator.free(request_line);
+    const request = try protocol.parseCommandRequestLine(allocator, request_line);
+    defer protocol.deinitCommandRequest(allocator, request);
 
-        var request = try protocol.parseCommandRequestLine(allocator, request_line);
-        defer request.deinit(allocator);
+    var response = try handler.handleCommand(allocator, request);
+    defer response.deinit(allocator);
 
-        var response = try handler.handleCommand(allocator, request);
-        defer response.deinit(allocator);
-
-        const line = try protocol.responseLine(allocator, response);
-        defer allocator.free(line);
-        try stream.writeAll(line);
-
-        if (state_provider) |provider| {
-            if (response.success and shouldBroadcastStateToRequester(request.action)) {
-                const state_line = try provider.stateLine(allocator);
-                defer allocator.free(state_line);
-                try stream.writeAll(state_line);
-            }
-        }
-
-        if (state_provider == null) return;
-    }
-}
-
-fn shouldBroadcastState(action: protocol.Command) bool {
-    return action != .list;
-}
-
-fn shouldBroadcastStateToRequester(action: protocol.Command) bool {
-    return action != .list and action != .switch_process;
-}
-
-const StateClient = struct {
-    stream: std.net.Stream,
-    write_mutex: std.Thread.Mutex = .{},
-    closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    write_timeout_ms: u64 = default_client_write_timeout_ms,
-
-    fn close(self: *StateClient) void {
-        if (!self.closed.swap(true, .seq_cst)) self.stream.close();
-    }
-
-    fn writeAll(self: *StateClient, bytes: []const u8) !void {
-        self.write_mutex.lock();
-        defer self.write_mutex.unlock();
-        if (self.closed.load(.seq_cst)) return error.EndOfStream;
-        writeAllWithTimeout(self.stream, bytes, self.write_timeout_ms) catch |err| {
-            self.close();
-            return err;
-        };
-    }
-};
-
-fn writeAllWithTimeout(stream: std.net.Stream, bytes: []const u8, timeout_ms: u64) !void {
-    try setStreamWriteTimeoutMs(stream, timeout_ms);
-
-    var index: usize = 0;
-    while (index < bytes.len) {
-        const written = stream.write(bytes[index..]) catch |err| switch (err) {
-            error.WouldBlock => return error.WriteTimeout,
-            else => return err,
-        };
-        if (written == 0) return error.WriteFailed;
-        index += written;
-    }
-}
-
-fn setStreamWriteTimeoutMs(stream: std.net.Stream, timeout_ms: u64) !void {
-    const tv = std.posix.timeval{
-        .sec = @intCast(timeout_ms / 1000),
-        .usec = @intCast((timeout_ms % 1000) * 1000),
-    };
-    const rc = std.c.setsockopt(
-        stream.handle,
-        std.posix.SOL.SOCKET,
-        std.posix.SO.SNDTIMEO,
-        &tv,
-        @sizeOf(@TypeOf(tv)),
-    );
-    switch (std.posix.errno(rc)) {
-        .SUCCESS => return,
-        .DOM => return error.TimeoutTooBig,
-        else => return error.WriteFailed,
-    }
-}
-
-test "state client write times out and closes slow reader" {
-    var streams = try testSocketPair();
-    var client = StateClient{ .stream = streams[0] };
-    defer client.close();
-    defer streams[1].close();
-
-    client.write_timeout_ms = 20;
-
-    const payload = try std.testing.allocator.alloc(u8, 8 * 1024 * 1024);
-    defer std.testing.allocator.free(payload);
-    @memset(payload, 'x');
-
-    const started = std.time.milliTimestamp();
-    try std.testing.expectError(error.WriteTimeout, client.writeAll(payload));
-    const elapsed = std.time.milliTimestamp() - started;
-
-    try std.testing.expect(elapsed < 1000);
-    try std.testing.expect(client.closed.load(.seq_cst));
-}
-
-test "state client closes peer that disconnects before initial state write" {
-    var streams = try testSocketPair();
-    var client = StateClient{ .stream = streams[0] };
-    defer client.close();
-
-    streams[1].close();
-
-    try std.testing.expectError(error.WriteFailed, client.writeAll("initial\n"));
-    try std.testing.expect(client.closed.load(.seq_cst));
-}
-
-test "state monitor broadcasts its first sampled state" {
-    const state_line = "{\"type\":\"state\",\"status\":\"halted\"}\n";
-    var provider = StaticStateProvider{ .line = state_line };
-    var stopped = std.atomic.Value(bool).init(false);
-    var server = StateCommandServer.init(
-        std.testing.allocator,
-        unusedCommandHandler(),
-        provider.provider(),
-        &stopped,
-        defaultPeerAuthorizer(),
-    );
-    defer {
-        stopped.store(true, .seq_cst);
-        server.closeAllClients();
-        server.deinit();
-    }
-
-    var streams = try testSocketPair();
-    defer streams[1].close();
-
-    const client = try std.testing.allocator.create(StateClient);
-    errdefer std.testing.allocator.destroy(client);
-    errdefer client.close();
-    client.* = .{
-        .stream = streams[0],
-        .write_timeout_ms = 200,
-    };
-    try server.clients.append(client);
-
-    server.state_monitor_thread = try std.Thread.spawn(.{}, runStateMonitor, .{&server});
-
-    const line = try line_io.readTimeout(std.testing.allocator, streams[1], 1024, 500);
-    defer std.testing.allocator.free(line);
-    try std.testing.expectEqualStrings(state_line, line);
-}
-
-test "state monitor does not echo state already broadcast except requester" {
-    const state_line = "{\"type\":\"state\",\"status\":\"selected\"}\n";
-    var provider = StaticStateProvider{ .line = state_line };
-    var stopped = std.atomic.Value(bool).init(false);
-    var server = StateCommandServer.init(
-        std.testing.allocator,
-        unusedCommandHandler(),
-        provider.provider(),
-        &stopped,
-        defaultPeerAuthorizer(),
-    );
-    defer {
-        stopped.store(true, .seq_cst);
-        server.closeAllClients();
-        server.deinit();
-    }
-
-    var requester_streams = try testSocketPair();
-    defer requester_streams[1].close();
-    var observer_streams = try testSocketPair();
-    defer observer_streams[1].close();
-
-    const requester = try std.testing.allocator.create(StateClient);
-    errdefer std.testing.allocator.destroy(requester);
-    errdefer requester.close();
-    requester.* = .{
-        .stream = requester_streams[0],
-        .write_timeout_ms = 200,
-    };
-    try server.clients.append(requester);
-
-    const observer = try std.testing.allocator.create(StateClient);
-    errdefer std.testing.allocator.destroy(observer);
-    errdefer observer.close();
-    observer.* = .{
-        .stream = observer_streams[0],
-        .write_timeout_ms = 200,
-    };
-    try server.clients.append(observer);
-
-    try server.broadcastStateExcept(requester);
-
-    const observer_line = try line_io.readTimeout(std.testing.allocator, observer_streams[1], 1024, 200);
-    defer std.testing.allocator.free(observer_line);
-    try std.testing.expectEqualStrings(state_line, observer_line);
-
-    try std.testing.expectError(
-        error.CommandTimeout,
-        line_io.readTimeout(std.testing.allocator, requester_streams[1], 1024, 50),
-    );
-
-    server.state_monitor_thread = try std.Thread.spawn(.{}, runStateMonitor, .{&server});
-    try std.testing.expectError(
-        error.CommandTimeout,
-        line_io.readTimeout(std.testing.allocator, requester_streams[1], 1024, 150),
-    );
-}
-
-fn testSocketPair() ![2]std.net.Stream {
-    var fds: [2]std.c.fd_t = undefined;
-    const rc = std.c.socketpair(
-        @intCast(std.posix.AF.UNIX),
-        @intCast(std.posix.SOCK.STREAM),
-        0,
-        &fds,
-    );
-    if (rc != 0) return error.SocketPairFailed;
-
-    return .{
-        .{ .handle = fds[0] },
-        .{ .handle = fds[1] },
-    };
-}
-
-const StaticStateProvider = struct {
-    line: []const u8,
-
-    fn provider(self: *StaticStateProvider) StateProvider {
-        return .{
-            .context = self,
-            .state_line = stateLine,
-        };
-    }
-
-    fn stateLine(context: *anyopaque, allocator: std.mem.Allocator) anyerror![]const u8 {
-        const self: *StaticStateProvider = @ptrCast(@alignCast(context));
-        return allocator.dupe(u8, self.line);
-    }
-};
-
-fn unusedCommandHandler() CommandHandler {
-    return .{
-        .context = undefined,
-        .handle = unusedHandleCommand,
-    };
-}
-
-fn unusedHandleCommand(
-    _: *anyopaque,
-    _: std.mem.Allocator,
-    _: protocol.CommandRequest,
-) anyerror!protocol.Response {
-    unreachable;
-}
-
-const StateCommandServer = struct {
-    allocator: std.mem.Allocator,
-    handler: CommandHandler,
-    state_provider: StateProvider,
-    stopped: *std.atomic.Value(bool),
-    authorizer: PeerAuthorizer,
-    clients: std.array_list.Managed(*StateClient),
-    threads: std.array_list.Managed(std.Thread),
-    state_monitor_thread: ?std.Thread = null,
-    clients_mutex: std.Thread.Mutex = .{},
-    state_broadcast_mutex: std.Thread.Mutex = .{},
-    last_broadcast_state_line: ?[]const u8 = null,
-
-    fn init(
-        allocator: std.mem.Allocator,
-        handler: CommandHandler,
-        state_provider: StateProvider,
-        stopped: *std.atomic.Value(bool),
-        authorizer: PeerAuthorizer,
-    ) StateCommandServer {
-        return .{
-            .allocator = allocator,
-            .handler = handler,
-            .state_provider = state_provider,
-            .stopped = stopped,
-            .authorizer = authorizer,
-            .clients = std.array_list.Managed(*StateClient).init(allocator),
-            .threads = std.array_list.Managed(std.Thread).init(allocator),
-        };
-    }
-
-    fn deinit(self: *StateCommandServer) void {
-        self.closeAllClients();
-        if (self.state_monitor_thread) |thread| thread.join();
-        for (self.threads.items) |thread| thread.join();
-        self.threads.deinit();
-
-        for (self.clients.items) |client| {
-            client.close();
-            self.allocator.destroy(client);
-        }
-        self.clients.deinit();
-        if (self.last_broadcast_state_line) |line| self.allocator.free(line);
-    }
-
-    fn serve(self: *StateCommandServer, socket_path: []const u8) !void {
-        std.fs.deleteFileAbsolute(socket_path) catch |err| switch (err) {
-            error.FileNotFound => {},
-            else => return err,
-        };
-
-        const address = try std.net.Address.initUnix(socket_path);
-        var listener = try address.listen(.{});
-        defer listener.deinit();
-        try setSocketPermissions(socket_path);
-
-        self.state_monitor_thread = try std.Thread.spawn(.{}, runStateMonitor, .{self});
-
-        while (!self.stopped.load(.seq_cst)) {
-            const conn = listener.accept() catch |err| {
-                if (self.stopped.load(.seq_cst)) break;
-                return err;
-            };
-            if (self.stopped.load(.seq_cst)) {
-                conn.stream.close();
-                break;
-            }
-
-            self.authorizer.authorizeStream(conn.stream) catch {
-                conn.stream.close();
-                continue;
-            };
-
-            const client = try self.allocator.create(StateClient);
-            errdefer self.allocator.destroy(client);
-            client.* = .{ .stream = conn.stream };
-
-            self.clients_mutex.lock();
-            self.clients.append(client) catch |err| {
-                self.clients_mutex.unlock();
-                client.close();
-                return err;
-            };
-            self.clients_mutex.unlock();
-
-            const thread = try std.Thread.spawn(.{}, handleStateClient, .{ self, client });
-            self.threads.append(thread) catch |err| {
-                client.close();
-                return err;
-            };
-        }
-    }
-
-    fn closeAllClients(self: *StateCommandServer) void {
-        self.clients_mutex.lock();
-        defer self.clients_mutex.unlock();
-        for (self.clients.items) |client| client.close();
-    }
-
-    fn serveClient(self: *StateCommandServer, client: *StateClient) !void {
-        const initial_line = try self.state_provider.stateLine(self.allocator);
-        defer self.allocator.free(initial_line);
-        try client.writeAll(initial_line);
-
-        while (!self.stopped.load(.seq_cst)) {
-            const request_line = try line_io.read(self.allocator, client.stream, max_request_line);
-            defer self.allocator.free(request_line);
-
-            var request = try protocol.parseCommandRequestLine(self.allocator, request_line);
-            defer request.deinit(self.allocator);
-
-            const is_switch = request.action == .switch_process;
-            var state_broadcast_locked = is_switch;
-            if (state_broadcast_locked) self.state_broadcast_mutex.lock();
-            defer if (state_broadcast_locked) self.state_broadcast_mutex.unlock();
-
-            var response = try self.handler.handleCommand(self.allocator, request);
-            defer response.deinit(self.allocator);
-
-            const line = try protocol.responseLine(self.allocator, response);
-            defer self.allocator.free(line);
-
-            if (is_switch) {
-                if (response.success) try self.broadcastStateExceptLocked(client);
-                self.state_broadcast_mutex.unlock();
-                state_broadcast_locked = false;
-            }
-
-            try client.writeAll(line);
-
-            if (response.success and shouldBroadcastState(request.action) and !is_switch) {
-                try self.broadcastState();
-            }
-        }
-    }
-
-    fn broadcastState(self: *StateCommandServer) !void {
-        self.state_broadcast_mutex.lock();
-        defer self.state_broadcast_mutex.unlock();
-
-        const line = try self.state_provider.stateLine(self.allocator);
-        defer self.allocator.free(line);
-        try self.rememberBroadcastStateLineLocked(line);
-        try self.broadcastStateLineExcept(line, null);
-    }
-
-    fn broadcastStateExcept(self: *StateCommandServer, excluded: *StateClient) !void {
-        self.state_broadcast_mutex.lock();
-        defer self.state_broadcast_mutex.unlock();
-        try self.broadcastStateExceptLocked(excluded);
-    }
-
-    fn broadcastStateExceptLocked(self: *StateCommandServer, excluded: *StateClient) !void {
-        const line = try self.state_provider.stateLine(self.allocator);
-        defer self.allocator.free(line);
-        try self.rememberBroadcastStateLineLocked(line);
-        try self.broadcastStateLineExcept(line, excluded);
-    }
-
-    fn broadcastStateLine(self: *StateCommandServer, line: []const u8) !void {
-        self.state_broadcast_mutex.lock();
-        defer self.state_broadcast_mutex.unlock();
-        try self.rememberBroadcastStateLineLocked(line);
-        try self.broadcastStateLineExcept(line, null);
-    }
-
-    fn rememberBroadcastStateLineLocked(self: *StateCommandServer, line: []const u8) !void {
-        if (self.last_broadcast_state_line) |previous| {
-            if (std.mem.eql(u8, previous, line)) return;
-        }
-
-        const copy = try self.allocator.dupe(u8, line);
-        if (self.last_broadcast_state_line) |previous| self.allocator.free(previous);
-        self.last_broadcast_state_line = copy;
-    }
-
-    fn broadcastStateLineExcept(self: *StateCommandServer, line: []const u8, excluded: ?*StateClient) !void {
-        self.clients_mutex.lock();
-        defer self.clients_mutex.unlock();
-        for (self.clients.items) |client| {
-            if (excluded) |skip| {
-                if (client == skip) continue;
-            }
-            if (client.closed.load(.seq_cst)) continue;
-            client.writeAll(line) catch |err| {
-                log.debug("dropping state broadcast to disconnected client: {s}", .{@errorName(err)});
-            };
-        }
-    }
-
-    fn monitorStateChanges(self: *StateCommandServer) !void {
-        while (!self.stopped.load(.seq_cst)) {
-            std.Thread.sleep(50 * std.time.ns_per_ms);
-
-            self.state_broadcast_mutex.lock();
-            defer self.state_broadcast_mutex.unlock();
-
-            const line = try self.state_provider.stateLine(self.allocator);
-            defer self.allocator.free(line);
-
-            if (self.last_broadcast_state_line) |previous| {
-                if (std.mem.eql(u8, previous, line)) continue;
-            }
-            try self.rememberBroadcastStateLineLocked(line);
-            try self.broadcastStateLineExcept(line, null);
-        }
-    }
-};
-
-fn runStateMonitor(server: *StateCommandServer) void {
-    server.monitorStateChanges() catch |err| {
-        log.debug("state monitor stopped: {s}", .{@errorName(err)});
-    };
-}
-
-fn handleStateClient(server: *StateCommandServer, client: *StateClient) void {
-    server.serveClient(client) catch |err| {
-        log.debug("state client handler stopped: {s}", .{@errorName(err)});
-    };
-    client.close();
+    const line = try protocol.responseLine(allocator, response);
+    defer allocator.free(line);
+    try stream.writeAll(line);
 }
 
 fn authorizeDefaultPeer(_: *anyopaque, fd: std.posix.fd_t) !void {

@@ -4,6 +4,25 @@ const line_io = @import("../ipc/line.zig");
 const protocol = @import("../ipc/protocol.zig");
 const server = @import("../ipc/server.zig");
 
+pub const emptySnapshotLine =
+    "{\"type\":\"snapshot\",\"protocol_version\":1,\"current_process_id\":0,\"exiting\":false,\"ui\":{},\"processes\":[]}\n";
+
+pub const apiWorkerSnapshotLine =
+    "{\"type\":\"snapshot\",\"protocol_version\":1,\"current_process_id\":1,\"exiting\":false,\"ui\":{},\"processes\":[{\"id\":1,\"label\":\"api\",\"status\":\"running\",\"pid\":123,\"description\":\"\",\"docs\":\"\",\"categories\":[]},{\"id\":2,\"label\":\"worker\",\"status\":\"halted\",\"pid\":-1,\"description\":\"\",\"docs\":\"\",\"categories\":[]}]}\n";
+
+pub const selectedApiSnapshotLine =
+    "{\"type\":\"snapshot\",\"protocol_version\":1,\"current_process_id\":2,\"exiting\":false,\"ui\":{},\"processes\":[{\"id\":2,\"label\":\"api\",\"status\":\"running\",\"pid\":1002,\"description\":\"\",\"docs\":\"\",\"categories\":[]}]}\n";
+
+pub fn snapshotLineFromAppState(
+    allocator: std.mem.Allocator,
+    app_state: *const domain.state.AppState,
+    controller: domain.process.ProcessController,
+) ![]const u8 {
+    var snapshot = try domain.client_snapshot.fromAppState(allocator, app_state, controller);
+    defer snapshot.deinit(allocator);
+    return protocol.snapshotLine(allocator, snapshot.view());
+}
+
 pub const FakeProcessController = struct {
     status: domain.process.ProcessStatus = .halted,
     pid: i32 = -1,
@@ -28,18 +47,18 @@ pub const FakeProcessController = struct {
     fn getPID(context: *anyopaque, id: domain.process.ProcessId) i32 {
         const self: *FakeProcessController = @ptrCast(@alignCast(context));
         if (self.running_id) |running_id| {
-            return if (id == running_id) @intCast(1000 + id.toInt()) else -1;
+            if (id != running_id) return -1;
+            return if (self.pid >= 0) self.pid else @intCast(1000 + id.toInt());
         }
         return self.pid;
     }
 };
 
 pub const FakeCommandHandler = struct {
-    action: protocol.Command = .list,
+    action: protocol.Command = .start,
     label_buf: [64]u8 = undefined,
     label_len: usize = 0,
     call_count: usize = 0,
-    include_process_list: bool = true,
 
     pub fn handler(self: *FakeCommandHandler) server.CommandHandler {
         return .{
@@ -60,36 +79,30 @@ pub const FakeCommandHandler = struct {
         const self: *FakeCommandHandler = @ptrCast(@alignCast(context));
         self.action = request.action;
         self.call_count += 1;
-        @memcpy(self.label_buf[0..request.label.len], request.label);
-        self.label_len = request.label.len;
-
-        const process_list = if (self.include_process_list)
-            try oneItemProcessList(allocator, request.label)
-        else
-            try allocator.alloc(protocol.ProcessListItem, 0);
-        errdefer deinitProcessList(allocator, process_list);
+        const target = request.targetLabel();
+        @memcpy(self.label_buf[0..target.len], target);
+        self.label_len = target.len;
 
         return .{
-            .request_id = try allocator.dupe(u8, request.request_id),
+            .request_id = request.request_id,
             .success = true,
             .error_message = try allocator.dupe(u8, ""),
-            .process_list = process_list,
         };
     }
 };
 
-pub const FakeStateProvider = struct {
-    line: []const u8 = "{\"type\":\"state\",\"state\":{\"CurrentProcID\":0},\"process_views\":[]}\n",
+pub const FakeSnapshotProvider = struct {
+    line: []const u8 = emptySnapshotLine,
 
-    pub fn provider(self: *FakeStateProvider) server.StateProvider {
+    pub fn provider(self: *FakeSnapshotProvider) server.SnapshotProvider {
         return .{
             .context = self,
-            .state_line = stateLine,
+            .snapshot_line = snapshotLine,
         };
     }
 
-    fn stateLine(context: *anyopaque, allocator: std.mem.Allocator) anyerror![]const u8 {
-        const self: *FakeStateProvider = @ptrCast(@alignCast(context));
+    fn snapshotLine(context: *anyopaque, allocator: std.mem.Allocator) anyerror![]const u8 {
+        const self: *FakeSnapshotProvider = @ptrCast(@alignCast(context));
         return allocator.dupe(u8, self.line);
     }
 };
@@ -118,6 +131,55 @@ pub const ServerErrorCapture = struct {
     err: ?anyerror = null,
 };
 
+pub const successResponseLine =
+    "{\"type\":\"response\",\"protocol_version\":1,\"request_id\":1,\"success\":true,\"error\":\"\"}\n";
+
+pub const CommandCapture = struct {
+    request: [512]u8 = undefined,
+    request_len: usize = 0,
+    response: []const u8 = successResponseLine,
+    err: ?anyerror = null,
+
+    pub fn requestLine(self: *const CommandCapture) []const u8 {
+        return self.request[0..self.request_len];
+    }
+};
+
+pub fn runResponseCaptureServer(listener: *std.net.Server, capture: *CommandCapture) void {
+    const conn = listener.accept() catch |err| {
+        capture.err = err;
+        return;
+    };
+    defer conn.stream.close();
+
+    capture.request_len = conn.stream.read(&capture.request) catch |err| {
+        capture.err = err;
+        return;
+    };
+
+    conn.stream.writeAll(capture.response) catch |err| {
+        capture.err = err;
+        return;
+    };
+}
+
+pub fn runSnapshotLineServer(
+    listener: *std.net.Server,
+    result: *ServerErrorCapture,
+    line: []const u8,
+    count: usize,
+) void {
+    var served: usize = 0;
+    while (served < count) : (served += 1) {
+        const conn = listener.accept() catch |err| {
+            result.err = err;
+            return;
+        };
+        conn.stream.writeAll(line) catch {};
+        conn.stream.close();
+    }
+}
+
 pub fn unblockServer(path: []const u8) void {
     var stream = std.net.connectUnixSocket(path) catch return;
     stream.close();
@@ -144,23 +206,4 @@ pub fn readLineTimeout(
     timeout_ms: i32,
 ) ![]const u8 {
     return line_io.readTimeout(allocator, stream, 1024 * 1024, timeout_ms);
-}
-
-fn oneItemProcessList(
-    allocator: std.mem.Allocator,
-    label: []const u8,
-) ![]protocol.ProcessListItem {
-    const process_list = try allocator.alloc(protocol.ProcessListItem, 1);
-    errdefer allocator.free(process_list);
-    process_list[0] = .{
-        .name = try allocator.dupe(u8, label),
-        .running = true,
-        .index = 1,
-    };
-    return process_list;
-}
-
-fn deinitProcessList(allocator: std.mem.Allocator, items: []protocol.ProcessListItem) void {
-    for (items) |item| item.deinit(allocator);
-    allocator.free(items);
 }

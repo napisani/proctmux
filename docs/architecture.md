@@ -75,10 +75,10 @@ domain modules:
 | `src/config/runtime.zig` | Loads Project Config and applies discovery in one place |
 | `src/terminal/` | Raw terminal mode management, terminal size probing, and the narrow `ghostty_vt` wrapper |
 | `src/unified/` | Unified runtime loop, child-primary PTY adapter, in-process test adapter, split rendering, and server-pane output state |
-| `src/ipc/line.zig` | JSON-line reading, timeout reads, and message-kind detection |
-| `src/ipc/command_codec.zig` | Command request and response wire encoding/parsing |
-| `src/ipc/state_codec.zig` | State broadcast wire encoding/parsing |
-| `src/ipc/protocol.zig` | Compatibility export layer for existing callers |
+| `src/ipc/line.zig` | JSON-line reading and timeout reads |
+| `src/ipc/protocol.zig` | Versioned IPC Protocol DTOs plus snapshot/command/response encode/decode |
+| `src/ipc/client.zig` | Stateful IPC client connection, response matching, and latest-snapshot buffering |
+| `src/ipc/server.zig` | Command listener, stateful client threads, and snapshot broadcasts |
 | `src/proc/` | Process controller plus focused internals for environment, spawn/wait, output capture, and `on_kill` |
 | `src/test_support/` | Shared fake adapters and fixtures used by Zig tests |
 
@@ -113,14 +113,14 @@ domain.AppState.init()       -- src/domain/state.zig
 Primary Server               -- src/primary/
     |
     v
-IPC Server broadcast         -- src/ipc/server.zig
-    |                           (calls redact.StateForIPC to strip env vars)
+IPC Server snapshot          -- src/ipc/server.zig
+    |                           (encodes client-visible ClientSnapshot)
     v
 IPC Client read              -- src/ipc/client.zig
-    |                           (pushes StateUpdate onto buffered channel)
+    |                           (keeps latest SnapshotUpdate)
     v
 Client Session / Model       -- src/tui/
-    |                           (processes clientStateUpdateMsg)
+    |                           (replaces local ClientSnapshot)
     v
 TUI renderer                 -- src/tui/render.zig
     |                           (renders process list text and ANSI styles)
@@ -130,7 +130,7 @@ Terminal output
 
 ## Data Flow: Process Output
 
-Each managed process runs inside a PTY. Output flows through a ring buffer to the viewer (primary mode) or to unified-mode server-pane state. IPC state broadcasts carry process status and scrollback snapshots for clients; raw VT interpretation for the unified server pane is delegated to vendored `libghostty-vt` through `src/terminal/ghostty_vt.zig`.
+Each managed process runs inside a PTY. Output flows through a ring buffer to the viewer (primary mode) or to unified-mode server-pane state. IPC snapshots carry client-visible process status and UI metadata; process output does not travel over IPC. Raw VT interpretation for the unified server pane is delegated to vendored `libghostty-vt` through `src/terminal/ghostty_vt.zig`.
 
 ```
 Process stdout/stderr
@@ -197,10 +197,11 @@ TUI key input                -- src/tui/key_input.zig
 
 proctmux uses a JSON-over-Unix-socket protocol. The socket is created at `/tmp/proctmux-<hash>.socket` where `<hash>` is derived from the config file contents, ensuring distinct sockets per project.
 
-Two message patterns:
+Three message patterns:
 
-- **State broadcasts** (server to all clients): The server pushes a `{"type": "state", ...}` message containing the full `AppState` and computed `ProcessView` list whenever state changes (process start/stop/exit, selection change).
-- **Request/response** (client to server): A client sends `{"type": "command", "action": "start", "label": "my-proc", "request_id": "1"}` and receives a `{"type": "response", "request_id": "1", "success": true}`.
+- **Snapshots** (server to clients): The server pushes a `{"type": "snapshot", "protocol_version": 1, ...}` message containing the complete client-visible `ClientSnapshot`.
+- **Commands** (client to server): A client sends `{"type": "command", "protocol_version": 1, "action": "start", "target": "my-proc", "request_id": 1}`.
+- **Responses** (server to requesting client): The server replies with `{"type": "response", "protocol_version": 1, "request_id": 1, "success": true, "error": ""}`.
 
 See [ipc.md](ipc.md) for the full protocol reference.
 
@@ -210,13 +211,13 @@ Responsibilities are split across three layers:
 
 - **`ProcessController`** (`src/proc/controller.zig`) — owns process lifecycle orchestration and delegates environment construction, spawn/wait, output capture, and `on_kill` hooks to focused proc internals.
 - **`Primary Server`** (`src/primary/`) — owns application state. Coordinates process commands, updates `AppState`, triggers IPC broadcasts, and tracks the current process for stdin forwarding.
-- **`IPC Server`** (`src/ipc/server.zig`) — owns client connections. Accepts clients, authenticates peer UIDs, routes commands to the Primary Server, broadcasts state updates, and uses `ipc.line` plus codec modules for wire IO.
+- **`IPC Server`** (`src/ipc/server.zig`) — owns client connections. Accepts clients, authenticates peer UIDs, routes commands to the Primary Server, broadcasts snapshots, and uses `ipc.protocol` for versioned wire IO.
 
 ## Security Model
 
 - **Socket file permissions**: The Unix socket is created with mode `0600` (owner-only read/write).
 - **Peer UID verification**: On platforms that support it (Linux, macOS), the IPC server verifies that connecting clients have the same UID as the server process using `SO_PEERCRED` / `LOCAL_PEERCRED`. On unsupported platforms, the server logs a warning and relies on file permissions alone.
-- **Config redaction**: Before transmitting state over IPC, `src/redact/` strips environment variable values from process configs so that secrets defined in `env:` blocks are not sent to clients.
+- **Snapshot minimization**: IPC snapshots only contain client-visible fields. Process execution details and secret-bearing config fields are not part of the snapshot model.
 
 ## Concurrency Model
 
@@ -224,8 +225,8 @@ The Zig runtime uses `std.Thread`, atomics, mutexes, and Unix socket polling:
 
 - **Per-process output capture**: `src/proc/output.zig` reads PTY or pipe output and appends to the process ring buffer.
 - **Per-process exit watcher**: `src/proc/spawn.zig` waits for child exit and marks the process instance halted.
-- **IPC accept loop**: `src/ipc/server.zig` accepts Unix socket clients and serves command/state traffic.
-- **State broadcast**: The IPC server writes state messages to connected clients with a bounded write timeout.
+- **IPC accept loop**: `src/ipc/server.zig` accepts Unix socket clients and serves command/snapshot traffic.
+- **Snapshot broadcast**: The IPC server writes snapshot messages to connected clients with a bounded write timeout.
 - **Stdin forwarder**: `src/modes/primary.zig` reads stdin and forwards bytes to the currently selected process.
 - **Unified render loop**: `src/unified/runtime.zig` polls IPC state, terminal dimensions, and split rendering on one shared path for production and tests.
 

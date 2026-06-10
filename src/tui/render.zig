@@ -15,7 +15,8 @@ pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_mode
     try appendMessagesPanel(&out, model);
     try appendFilterPanel(&out, model);
 
-    if (model.filtered_views.len == 0) {
+    const processes = model.visibleProcesses();
+    if (processes.len == 0) {
         try out.appendSlice("No matching processes\n");
         return out.toOwnedSlice();
     }
@@ -23,39 +24,39 @@ pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_mode
     const process_start = selectedProcessWindowStart(
         model,
         renderedLineCount(out.items),
-        model.filtered_views.len,
+        processes.len,
     );
     const process_end = selectedProcessWindowEnd(model, renderedLineCount(out.items), process_start);
 
-    for (model.filtered_views[process_start..process_end], process_start..) |view, index| {
+    for (processes[process_start..process_end], process_start..) |summary, index| {
         const selected = if (model.active_proc_id.isNone())
             index == 0
         else
-            view.id == model.active_proc_id;
+            domain.process.ProcessId.fromInt(summary.id) == model.active_proc_id;
         if (selected) {
-            try out.appendSlice(model.app_state.config.style.pointer_char);
+            try out.appendSlice(model.snapshot.ui.style.pointer_char);
             try out.append(' ');
         } else {
             try out.appendSlice("  ");
         }
 
-        try appendStatusMarker(&out, &model.app_state.config.style, view.status, !model.no_color);
+        try appendStatusMarker(&out, &model.snapshot.ui.style, summary.status, !model.no_color);
         try out.append(' ');
-        if (model.app_state.config.layout.enable_debug_process_info) {
-            try out.appendSlice(view.label);
+        if (model.snapshot.ui.layout.enable_debug_process_info) {
+            try out.appendSlice(summary.label);
             try out.appendSlice(" [");
-            try out.appendSlice(domain.process.statusName(view.status));
-            try out.writer().print("] PID:{}", .{view.pid});
-            if (view.config.categories.items.len > 0) {
+            try out.appendSlice(domain.process.statusName(summary.status));
+            try out.writer().print("] PID:{}", .{summary.pid});
+            if (summary.categories.len > 0) {
                 try out.appendSlice(" [");
-                for (view.config.categories.items, 0..) |category, category_index| {
+                for (summary.categories, 0..) |category, category_index| {
                     if (category_index != 0) try out.append(',');
                     try out.appendSlice(category);
                 }
                 try out.append(']');
             }
         } else {
-            try out.appendSlice(view.label);
+            try out.appendSlice(summary.label);
         }
         try out.append('\n');
     }
@@ -66,7 +67,7 @@ pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_mode
 fn appendProcessHeader(out: *std.array_list.Managed(u8), model: *const client_model.ClientModel) !void {
     if (!model.show_panel_headers) return;
 
-    try out.writer().print("Processes {}/{}", .{ model.filtered_views.len, model.process_views.len });
+    try out.writer().print("Processes {}/{}", .{ model.visibleCount(), model.processCount() });
     if (model.show_only_running) try out.appendSlice("  running only");
     if (model.filterText().len > 0) try out.writer().print("  filter: {s}", .{model.filterText()});
     try out.append('\n');
@@ -93,17 +94,17 @@ fn selectedProcessWindowEnd(
     reserved_lines: usize,
     start: usize,
 ) usize {
-    if (model.term_height == 0) return model.filtered_views.len;
+    if (model.term_height == 0) return model.visibleCount();
     if (reserved_lines >= model.term_height) return start;
 
     const available_rows = model.term_height - reserved_lines;
-    return @min(start + available_rows, model.filtered_views.len);
+    return @min(start + available_rows, model.visibleCount());
 }
 
 fn selectedProcessIndex(model: *const client_model.ClientModel) usize {
     if (model.active_proc_id.isNone()) return 0;
-    for (model.filtered_views, 0..) |view, index| {
-        if (view.id == model.active_proc_id) return index;
+    for (model.visibleProcesses(), 0..) |summary, index| {
+        if (domain.process.ProcessId.fromInt(summary.id) == model.active_proc_id) return index;
     }
     return 0;
 }
@@ -151,7 +152,7 @@ fn countVisibleMessages(model: *const client_model.ClientModel, now_ms: i64) usi
 fn appendHelpPanel(out: *std.array_list.Managed(u8), model: *const client_model.ClientModel) !void {
     if (!model.show_help) return;
 
-    const keys = model.app_state.config.keybinding;
+    const keys = model.snapshot.ui.keybinding;
     try appendHelpEntry(out, keys.up, "move up", 4, 17);
     try appendHelpEntry(out, keys.start, "start process", 4, 23);
     try appendHelpEntry(out, keys.filter, "filter processes", 2, 25);
@@ -187,7 +188,7 @@ fn appendHelpPanel(out: *std.array_list.Managed(u8), model: *const client_model.
 
 fn appendHelpEntry(
     out: *std.array_list.Managed(u8),
-    keys: config.schema.StringList,
+    keys: domain.client_snapshot.StringList,
     label: []const u8,
     key_column_width: usize,
     group_width: usize,
@@ -203,17 +204,17 @@ fn appendHelpEntry(
     if (group_width > entry_width) try appendSpaces(out, group_width - entry_width);
 }
 
-fn appendBindingText(out: *std.array_list.Managed(u8), keys: config.schema.StringList) !void {
-    for (keys.items, 0..) |key, index| {
+fn appendBindingText(out: *std.array_list.Managed(u8), keys: domain.client_snapshot.StringList) !void {
+    for (keys, 0..) |key, index| {
         if (index >= 2) break;
         if (index != 0) try out.append('/');
         try out.appendSlice(formatKey(key));
     }
 }
 
-fn bindingDisplayWidth(keys: config.schema.StringList) usize {
+fn bindingDisplayWidth(keys: domain.client_snapshot.StringList) usize {
     var width: usize = 0;
-    for (keys.items, 0..) |key, index| {
+    for (keys, 0..) |key, index| {
         if (index >= 2) break;
         if (index != 0) width += 1;
         width += displayWidth(formatKey(key));
@@ -241,8 +242,8 @@ fn appendFilterPanel(out: *std.array_list.Managed(u8), model: *const client_mode
     try out.appendSlice(" (/ to edit, esc to clear)\n");
 }
 
-fn appendBinding(out: *std.array_list.Managed(u8), keys: config.schema.StringList, label: []const u8) !void {
-    for (keys.items, 0..) |key, index| {
+fn appendBinding(out: *std.array_list.Managed(u8), keys: domain.client_snapshot.StringList, label: []const u8) !void {
+    for (keys, 0..) |key, index| {
         if (index >= 2) break;
         if (index != 0) try out.append('/');
         try out.appendSlice(formatKey(key));
@@ -273,10 +274,10 @@ fn formatKey(key: []const u8) []const u8 {
 }
 
 fn appendSelectedDescription(out: *std.array_list.Managed(u8), model: *const client_model.ClientModel) !void {
-    if (model.app_state.config.layout.hide_process_description_panel) return;
+    if (model.snapshot.ui.layout.hide_process_description_panel) return;
 
-    const process = model.app_state.getProcessByID(model.active_proc_id) orelse return;
-    const description = std.mem.trim(u8, process.config.description, " \t\r\n");
+    const summary = model.activeProcessSummary() orelse return;
+    const description = std.mem.trim(u8, summary.description, " \t\r\n");
     if (description.len == 0) return;
 
     try appendWrapped(out, description, model.term_width);
@@ -346,7 +347,7 @@ fn statusMarker(status: domain.process.ProcessStatus) []const u8 {
 
 fn appendStatusMarker(
     out: *std.array_list.Managed(u8),
-    style: *const config.schema.StyleConfig,
+    style: *const domain.client_snapshot.UiStyleConfig,
     status: domain.process.ProcessStatus,
     colors_enabled: bool,
 ) !void {
@@ -373,7 +374,7 @@ pub fn renderHelpOverlay(
     errdefer out.deinit();
 
     var lines: usize = 0;
-    const keys = model.app_state.config.keybinding;
+    const keys = model.snapshot.ui.keybinding;
 
     try appendHelpOverlayLine(&out, &lines, height, "Help");
     try appendHelpOverlayLine(&out, &lines, height, "");
@@ -422,7 +423,7 @@ fn appendHelpOverlayBindingLine(
     out: *std.array_list.Managed(u8),
     lines: *usize,
     height: usize,
-    keys: config.schema.StringList,
+    keys: domain.client_snapshot.StringList,
     label: []const u8,
 ) !void {
     if (height != 0 and lines.* >= height) return;
@@ -448,7 +449,7 @@ fn appendHelpOverlayLiteralLine(
     lines.* += 1;
 }
 
-fn statusMarkerColor(style: *const config.schema.StyleConfig, status: domain.process.ProcessStatus) []const u8 {
+fn statusMarkerColor(style: *const domain.client_snapshot.UiStyleConfig, status: domain.process.ProcessStatus) []const u8 {
     return switch (status) {
         .running => style.status_running_color,
         .halting => style.status_halting_color,
@@ -524,7 +525,10 @@ test "process list renderer writes pointer status marker and labels" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     const rendered = try renderProcessList(std.testing.allocator, &model);
@@ -547,7 +551,10 @@ test "process list renderer colors status markers from config" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     const rendered = try renderProcessList(std.testing.allocator, &model);
@@ -567,7 +574,10 @@ test "process list renderer omits status colors when disabled" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
     model.no_color = true;
 
@@ -588,7 +598,10 @@ test "process list renderer adds compact header when enabled" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
     model.show_panel_headers = true;
 
@@ -608,7 +621,10 @@ test "process list renderer reports active filter in header" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
     model.show_panel_headers = true;
 
@@ -635,7 +651,10 @@ test "process list renderer keeps selected process visible inside terminal heigh
     app_state.current_proc_id = domain.process.ProcessId.fromInt(3);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
     model.show_panel_headers = true;
     model.term_height = 2;
@@ -656,7 +675,10 @@ test "process list renderer selects first row when active id is zero like legacy
     app_state.current_proc_id = .none;
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     const rendered = try renderProcessList(std.testing.allocator, &model);
@@ -682,7 +704,10 @@ test "process list renderer includes status pid and categories in debug mode" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     const rendered = try renderProcessList(std.testing.allocator, &model);
@@ -703,7 +728,10 @@ test "process list renderer shows friendly empty message" {
     defer app_state.deinit();
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("/");
@@ -729,7 +757,10 @@ test "process list renderer shows selected process description above list" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     const rendered = try renderProcessList(std.testing.allocator, &model);
@@ -753,7 +784,10 @@ test "process list renderer wraps selected process description to terminal width
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
     model.term_width = 12;
 
@@ -779,7 +813,10 @@ test "process list renderer hides selected process description when configured" 
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     const rendered = try renderProcessList(std.testing.allocator, &model);
@@ -802,7 +839,10 @@ test "process list renderer shows help panel when toggled" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("?");
@@ -832,7 +872,10 @@ test "help overlay renders full-width help content" {
     defer app_state.deinit();
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     const rendered = try renderHelpOverlay(std.testing.allocator, &model, 100, 30);
@@ -853,7 +896,10 @@ test "process list renderer shows only the five most recent messages" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     try model.addMessage("oldest message");
@@ -881,7 +927,10 @@ test "process list renderer wraps long messages with bullet indentation" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
     model.term_width = 10;
 
@@ -903,7 +952,10 @@ test "process list renderer hides expired messages before pruning" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     try model.addMessageAt("expired message", std.time.milliTimestamp() - client_model.message_timeout_ms - 1);
@@ -924,7 +976,10 @@ test "process list renderer shows focused filter prompt" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("/");
@@ -949,7 +1004,10 @@ test "process list renderer shows submitted filter indicator" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("/");
@@ -974,7 +1032,10 @@ test "process list renderer keeps filter prompt when no processes match" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardRenderViews(&cfg);
-    var model = try client_model.ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("/");

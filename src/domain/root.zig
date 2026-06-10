@@ -5,12 +5,14 @@ pub const process = @import("process.zig");
 pub const state = @import("state.zig");
 pub const fuzzy = @import("fuzzy.zig");
 pub const filter = @import("filter.zig");
+pub const client_snapshot = @import("client_snapshot.zig");
 
 test {
     _ = process;
     _ = state;
     _ = fuzzy;
     _ = filter;
+    _ = client_snapshot;
 }
 
 test "status names match public status strings" {

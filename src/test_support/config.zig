@@ -47,6 +47,24 @@ pub fn standardClientModelViews(cfg: *config.schema.Config) [3]domain.process.Pr
     };
 }
 
+pub fn snapshotFromViews(
+    allocator: std.mem.Allocator,
+    cfg: *const config.schema.Config,
+    current_proc_id: domain.process.ProcessId,
+    views: []const domain.process.ProcessView,
+) !domain.client_snapshot.BuiltClientSnapshot {
+    var summaries = try allocator.alloc(domain.client_snapshot.ProcessSummary, views.len);
+    errdefer allocator.free(summaries);
+    for (views, 0..) |view, index| {
+        summaries[index] = domain.client_snapshot.summaryFromView(view);
+    }
+    return .{ .value = .{
+        .current_process_id = current_proc_id.toInt(),
+        .ui = domain.client_snapshot.fromConfig(cfg),
+        .processes = summaries,
+    } };
+}
+
 pub fn putShellProcess(cfg: *config.schema.Config, label: []const u8, shell: []const u8) !void {
     try putShellProcessWithStopTimeout(cfg, label, shell, 0);
 }

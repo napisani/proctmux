@@ -18,9 +18,8 @@ pub const TimedMessage = struct {
 
 pub const ClientModel = struct {
     allocator: std.mem.Allocator,
-    app_state: *domain.state.AppState,
-    process_views: []const domain.process.ProcessView,
-    filtered_views: []domain.process.ProcessView,
+    snapshot: *const domain.client_snapshot.ClientSnapshot,
+    filtered_processes: []domain.client_snapshot.ProcessSummary,
     filter_text: std.array_list.Managed(u8),
     messages: std.array_list.Managed(TimedMessage),
     entering_filter_text: bool = false,
@@ -35,17 +34,15 @@ pub const ClientModel = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        app_state: *domain.state.AppState,
-        process_views: []const domain.process.ProcessView,
+        snapshot: *const domain.client_snapshot.ClientSnapshot,
     ) !ClientModel {
         var model = ClientModel{
             .allocator = allocator,
-            .app_state = app_state,
-            .process_views = process_views,
-            .filtered_views = try allocator.alloc(domain.process.ProcessView, 0),
+            .snapshot = snapshot,
+            .filtered_processes = try allocator.alloc(domain.client_snapshot.ProcessSummary, 0),
             .filter_text = std.array_list.Managed(u8).init(allocator),
             .messages = std.array_list.Managed(TimedMessage).init(allocator),
-            .active_proc_id = app_state.current_proc_id,
+            .active_proc_id = snapshot.currentProcessId(),
         };
         errdefer model.deinit();
         try model.rebuildProcessList();
@@ -53,7 +50,7 @@ pub const ClientModel = struct {
     }
 
     pub fn deinit(self: *ClientModel) void {
-        self.allocator.free(self.filtered_views);
+        self.allocator.free(self.filtered_processes);
         self.filter_text.deinit();
         for (self.messages.items) |message_entry| self.allocator.free(message_entry.text);
         self.messages.deinit();
@@ -102,47 +99,63 @@ pub const ClientModel = struct {
     }
 
     pub fn visibleCount(self: *const ClientModel) usize {
-        return self.filtered_views.len;
+        return self.filtered_processes.len;
     }
 
     pub fn visibleLabel(self: *const ClientModel, index: usize) []const u8 {
-        return self.filtered_views[index].label;
+        return self.filtered_processes[index].label;
     }
 
-    pub fn activeProcessLabel(self: *ClientModel) []const u8 {
+    pub fn visibleProcesses(self: *const ClientModel) []const domain.client_snapshot.ProcessSummary {
+        return self.filtered_processes;
+    }
+
+    pub fn processCount(self: *const ClientModel) usize {
+        return self.snapshot.processes.len;
+    }
+
+    pub fn processSummaries(self: *const ClientModel) []const domain.client_snapshot.ProcessSummary {
+        return self.snapshot.processes;
+    }
+
+    pub fn activeProcessSummary(self: *const ClientModel) ?domain.client_snapshot.ProcessSummary {
+        for (self.snapshot.processes) |summary| {
+            if (domain.process.ProcessId.fromInt(summary.id) == self.active_proc_id) return summary;
+        }
+        return null;
+    }
+
+    pub fn activeProcessLabel(self: *const ClientModel) []const u8 {
         return self.activeProcLabel();
     }
 
-    pub fn replaceStatePreservingUI(
+    pub fn replaceSnapshotPreservingUI(
         self: *ClientModel,
-        app_state: *domain.state.AppState,
-        process_views: []const domain.process.ProcessView,
+        snapshot: *const domain.client_snapshot.ClientSnapshot,
     ) !void {
-        const new_filtered_views = try domain.filter.filterProcesses(
+        const new_filtered_processes = try domain.client_snapshot.filteredProcesses(
             self.allocator,
-            app_state.config,
-            process_views,
+            snapshot,
             self.filter_text.items,
             self.show_only_running,
         );
 
-        self.allocator.free(self.filtered_views);
-        self.app_state = app_state;
-        self.process_views = process_views;
-        self.filtered_views = new_filtered_views;
+        self.allocator.free(self.filtered_processes);
+        self.snapshot = snapshot;
+        self.filtered_processes = new_filtered_processes;
     }
 
     pub fn handleKey(self: *ClientModel, key: []const u8) !?CommandIntent {
         if (self.entering_filter_text) {
             if (self.processListIntentForControlModifiedKey(key)) |intent| return intent;
 
-            if (matches(self.app_state.config.keybinding.submit_filter, key)) {
+            if (matches(self.snapshot.ui.keybinding.submit_filter, key)) {
                 self.entering_filter_text = false;
                 self.mode = .normal;
                 try self.applyFilterLocal();
                 return self.syncActiveSelection();
             }
-            if (matches(self.app_state.config.keybinding.filter, key)) {
+            if (matches(self.snapshot.ui.keybinding.filter, key)) {
                 self.entering_filter_text = false;
                 self.mode = .normal;
                 try self.rebuildProcessList();
@@ -170,7 +183,7 @@ pub const ClientModel = struct {
             return null;
         }
 
-        if (matches(self.app_state.config.keybinding.filter, key)) {
+        if (matches(self.snapshot.ui.keybinding.filter, key)) {
             self.entering_filter_text = true;
             self.mode = .filter;
             self.filter_text.clearRetainingCapacity();
@@ -178,33 +191,33 @@ pub const ClientModel = struct {
             try self.rebuildProcessList();
             return null;
         }
-        if (matches(self.app_state.config.keybinding.down, key)) {
+        if (matches(self.snapshot.ui.keybinding.down, key)) {
             self.moveSelection(1);
             return self.switchIntent();
         }
-        if (matches(self.app_state.config.keybinding.up, key)) {
+        if (matches(self.snapshot.ui.keybinding.up, key)) {
             self.moveSelection(-1);
             return self.switchIntent();
         }
-        if (matches(self.app_state.config.keybinding.toggle_running, key)) {
+        if (matches(self.snapshot.ui.keybinding.toggle_running, key)) {
             self.show_only_running = !self.show_only_running;
             try self.applyFilterLocal();
             return self.syncActiveSelection();
         }
-        if (matches(self.app_state.config.keybinding.start, key)) {
+        if (matches(self.snapshot.ui.keybinding.start, key)) {
             return self.commandIntent(.start);
         }
-        if (matches(self.app_state.config.keybinding.stop, key)) {
+        if (matches(self.snapshot.ui.keybinding.stop, key)) {
             return self.commandIntent(.stop);
         }
-        if (matches(self.app_state.config.keybinding.restart, key)) {
+        if (matches(self.snapshot.ui.keybinding.restart, key)) {
             return self.commandIntent(.restart);
         }
-        if (matches(self.app_state.config.keybinding.toggle_help, key)) {
+        if (matches(self.snapshot.ui.keybinding.toggle_help, key)) {
             self.show_help = !self.show_help;
             return null;
         }
-        if (matches(self.app_state.config.keybinding.quit, key)) {
+        if (matches(self.snapshot.ui.keybinding.quit, key)) {
             return .{
                 .action = .stop_running,
                 .label = "",
@@ -215,12 +228,12 @@ pub const ClientModel = struct {
 
     fn applyFilterLocal(self: *ClientModel) !void {
         try self.rebuildProcessList();
-        if (self.filtered_views.len == 0) {
+        if (self.filtered_processes.len == 0) {
             self.active_proc_id = .none;
             return;
         }
 
-        self.active_proc_id = self.filtered_views[0].id;
+        self.active_proc_id = domain.process.ProcessId.fromInt(self.filtered_processes[0].id);
     }
 
     fn syncActiveSelection(self: *ClientModel) ?CommandIntent {
@@ -237,7 +250,7 @@ pub const ClientModel = struct {
 
     fn processListIntentForControlModifiedKey(self: *ClientModel, key: []const u8) ?CommandIntent {
         const process_list_key = controlModifiedKey(key) orelse return null;
-        const bindings = &self.app_state.config.keybinding;
+        const bindings = &self.snapshot.ui.keybinding;
 
         if (self.navigationIntentForKey(process_list_key)) |intent| return intent;
         if (matches(bindings.start, process_list_key)) return self.commandIntent(.start);
@@ -252,7 +265,7 @@ pub const ClientModel = struct {
     }
 
     fn navigationIntentForKey(self: *ClientModel, key: []const u8) ?CommandIntent {
-        const bindings = &self.app_state.config.keybinding;
+        const bindings = &self.snapshot.ui.keybinding;
         if (matches(bindings.down, key)) {
             self.moveSelection(1);
             if (self.active_proc_id.isNone()) return null;
@@ -274,55 +287,54 @@ pub const ClientModel = struct {
     }
 
     fn moveSelection(self: *ClientModel, delta: i32) void {
-        if (self.filtered_views.len == 0) {
+        if (self.filtered_processes.len == 0) {
             self.active_proc_id = .none;
             return;
         }
-        if (self.filtered_views.len == 1) {
-            self.active_proc_id = self.filtered_views[0].id;
+        if (self.filtered_processes.len == 1) {
+            self.active_proc_id = domain.process.ProcessId.fromInt(self.filtered_processes[0].id);
             return;
         }
 
         var current_index: ?usize = null;
-        for (self.filtered_views, 0..) |view, index| {
-            if (view.id == self.active_proc_id) {
+        for (self.filtered_processes, 0..) |summary, index| {
+            if (domain.process.ProcessId.fromInt(summary.id) == self.active_proc_id) {
                 current_index = index;
                 break;
             }
         }
 
         const index = current_index orelse {
-            self.active_proc_id = self.filtered_views[0].id;
+            self.active_proc_id = domain.process.ProcessId.fromInt(self.filtered_processes[0].id);
             return;
         };
         const next_index = if (delta < 0 and index == 0)
-            self.filtered_views.len - 1
+            self.filtered_processes.len - 1
         else if (delta < 0)
             index - 1
         else
-            (index + 1) % self.filtered_views.len;
-        self.active_proc_id = self.filtered_views[next_index].id;
+            (index + 1) % self.filtered_processes.len;
+        self.active_proc_id = domain.process.ProcessId.fromInt(self.filtered_processes[next_index].id);
     }
 
-    fn activeProcLabel(self: *ClientModel) []const u8 {
-        if (self.app_state.getProcessByID(self.active_proc_id)) |proc| return proc.label;
-        return "";
+    fn activeProcLabel(self: *const ClientModel) []const u8 {
+        const summary = self.activeProcessSummary() orelse return "";
+        return summary.label;
     }
 
     fn rebuildProcessList(self: *ClientModel) !void {
-        self.allocator.free(self.filtered_views);
-        self.filtered_views = try domain.filter.filterProcesses(
+        self.allocator.free(self.filtered_processes);
+        self.filtered_processes = try domain.client_snapshot.filteredProcesses(
             self.allocator,
-            self.app_state.config,
-            self.process_views,
+            self.snapshot,
             self.filter_text.items,
             self.show_only_running,
         );
     }
 };
 
-fn matches(bindings: config.schema.StringList, key: []const u8) bool {
-    for (bindings.items) |binding| {
+fn matches(bindings: domain.client_snapshot.StringList, key: []const u8) bool {
+    for (bindings) |binding| {
         if (std.mem.eql(u8, binding, key)) return true;
     }
     return false;
@@ -356,7 +368,10 @@ test "client model enters filter mode with configured filter key" {
 
     var views = test_config.standardClientModelViews(&cfg);
 
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("/");
@@ -376,7 +391,10 @@ test "client model typing filter narrows list and selects first match" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("/");
@@ -407,7 +425,10 @@ test "client model backspace edits filter text" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("/");
@@ -431,7 +452,10 @@ test "client model control-modified process list keys work while typing filter" 
     app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("/");
@@ -485,7 +509,10 @@ test "client model navigates on special up and down keys while typing filter" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("/");
@@ -519,7 +546,10 @@ test "client model control modifier honors configured process list bindings" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("/");
@@ -548,7 +578,10 @@ test "client model ctrl arrows move selection while typing filter when arrow key
     app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("/");
@@ -577,7 +610,10 @@ test "client model down key moves selection and wraps within visible list" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(1);
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     const beta = try model.handleKey("j");
@@ -601,7 +637,10 @@ test "client model running-only toggle filters visible list and selects first ru
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     const intent = try model.handleKey("R");
@@ -624,7 +663,10 @@ test "client model process control keys target active process" {
     app_state.current_proc_id = domain.process.ProcessId.fromInt(2);
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     const start = try model.handleKey("s");
@@ -651,7 +693,10 @@ test "client model help key toggles help visibility" {
     defer app_state.deinit();
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     _ = try model.handleKey("?");
@@ -669,7 +714,10 @@ test "client model quit key emits stop-running intent" {
     defer app_state.deinit();
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     const intent = try model.handleKey("q");
@@ -686,7 +734,10 @@ test "client model prunes messages after five second timeout" {
     defer app_state.deinit();
 
     var views = test_config.standardClientModelViews(&cfg);
-    var model = try ClientModel.init(std.testing.allocator, &app_state, views[0..]);
+    var snapshot = try test_config.snapshotFromViews(std.testing.allocator, &cfg, app_state.current_proc_id, views[0..]);
+    defer snapshot.deinit(std.testing.allocator);
+
+    var model = try ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
     try model.addMessageAt("expired", 0);

@@ -285,15 +285,13 @@ const KeyHandling = struct {
 
 fn handleKey(state: InputLoop, key: []const u8) !KeyHandling {
     if (state.split.focusedPane() == .client) {
-        const action = try state.session.handleKeyAction(key);
-        if (action) |value| {
-            if (tui.client_session.commandNeedsImmediateStateSync(value)) {
-                try state.session.readStateUpdate();
-                if (state.sync_selection_after_command) try syncSelectionAfterAction(state.session, value);
-            }
+        const interaction = try state.session.handleKeyInteraction(key, .{
+            .sync_selection_after_command = state.sync_selection_after_command,
+        });
+        if (interaction.handled_command) {
             return .{
-                .stop = value == .stop_running,
-                .render_now = tui.client_session.commandShouldRenderImmediately(value),
+                .stop = interaction.stop,
+                .render_now = interaction.render_now,
             };
         }
 
@@ -303,16 +301,6 @@ fn handleKey(state: InputLoop, key: []const u8) !KeyHandling {
 
     try state.split.handleKey(key);
     return .{};
-}
-
-fn syncSelectionAfterAction(
-    session: *tui.client_session.ClientSession,
-    action: ipc.protocol.Command,
-) !void {
-    switch (action) {
-        .start, .restart => try session.switchToActiveProcess(),
-        else => {},
-    }
 }
 
 fn renderFrame(
@@ -364,8 +352,9 @@ fn processLabels(
     allocator: std.mem.Allocator,
     session: *const tui.client_session.ClientSession,
 ) ![][]const u8 {
-    const labels = try allocator.alloc([]const u8, session.model.process_views.len);
-    for (session.model.process_views, 0..) |view, index| labels[index] = view.label;
+    const summaries = session.model.processSummaries();
+    const labels = try allocator.alloc([]const u8, summaries.len);
+    for (summaries, 0..) |summary, index| labels[index] = summary.label;
     return labels;
 }
 
@@ -387,7 +376,7 @@ fn runRenderLoop(state: *RenderLoop) void {
         state.mutex.lock();
         defer state.mutex.unlock();
 
-        const state_changed = readPendingState(state.session, state.ipc_client) catch |err| {
+        const snapshot_changed = readPendingSnapshot(state.session, state.ipc_client) catch |err| {
             if (state.stopped.load(.seq_cst) or err == error.EndOfStream) break;
             state.result = .{ .failed = err };
             return;
@@ -400,7 +389,7 @@ fn runRenderLoop(state: *RenderLoop) void {
             state.result = .{ .failed = err };
             return;
         };
-        if (!state_changed and !resized and !output_changed) continue;
+        if (!snapshot_changed and !resized and !output_changed) continue;
 
         renderFrame(state.session, state.split, state.output_state, state.output) catch |err| {
             state.result = .{ .failed = err };
@@ -410,11 +399,11 @@ fn runRenderLoop(state: *RenderLoop) void {
     state.result = .completed;
 }
 
-fn readPendingState(
+fn readPendingSnapshot(
     session: *tui.client_session.ClientSession,
     ipc_client: *ipc.client.Client,
 ) !bool {
-    if (try readAvailableStateUpdate(session, ipc_client)) return true;
+    if (try readAvailableSnapshotUpdate(session, ipc_client)) return true;
 
     var poll_fds = [_]std.posix.pollfd{
         .{
@@ -427,15 +416,15 @@ fn readPendingState(
     if (ready == 0) return false;
     if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) return false;
 
-    return readAvailableStateUpdate(session, ipc_client);
+    return readAvailableSnapshotUpdate(session, ipc_client);
 }
 
-fn readAvailableStateUpdate(
+fn readAvailableSnapshotUpdate(
     session: *tui.client_session.ClientSession,
     ipc_client: *ipc.client.Client,
 ) !bool {
-    const update = (try ipc_client.readLatestStateIfAvailable()) orelse return false;
-    try session.applyStateUpdate(update);
+    const update = (try ipc_client.readLatestSnapshotIfAvailable()) orelse return false;
+    try session.applySnapshotUpdate(update);
     return true;
 }
 

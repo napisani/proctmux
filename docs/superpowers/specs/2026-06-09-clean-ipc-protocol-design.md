@@ -1,8 +1,8 @@
 # Clean IPC Protocol Design
 
-Date: 2026-06-09  
-Status: Proposed  
-Scope: Zig-only IPC protocol and client-visible state model  
+Date: 2026-06-09
+Status: Implemented in Zig IPC refactor
+Scope: Zig-only IPC protocol and client-visible state model
 Compatibility: intentionally breaking with the Go/archive protocol and current Zig state wire format
 
 ## Context
@@ -187,36 +187,36 @@ The primary server builds `ClientSnapshot` from `AppState + ProcessController`. 
 
 This keeps UI and IPC away from full `config.schema.Config` and prevents accidental exposure of process execution fields.
 
-### New wire module
+### Deepened IPC Protocol module
 
-Add a focused protocol module:
+Use one focused protocol module:
 
-- `src/ipc/wire.zig`
+- `src/ipc/protocol.zig`
 
 Responsibilities:
 
 - define wire message DTOs
 - encode snapshot/command/response JSON-lines
-- decode snapshot/command/response JSON-lines
+- decode snapshot/command/response JSON-lines through one `Message` union
 - validate `protocol_version`
 - map command action strings to enums
-- own golden tests for the wire protocol
+- own golden tests for the IPC Protocol
 
-The clean end state is one IPC protocol module. `command_codec.zig` and `state_codec.zig` should be deleted after callers move to `wire.zig`.
+The clean end state is one IPC Protocol module. `command_codec.zig`, `state_codec.zig`, and interim pass-through protocol layers are removed once callers move to `protocol.zig`.
 
 ### Server flow
 
 1. Primary state changes.
 2. IPC server asks the primary for a fresh `ClientSnapshot`.
-3. `wire.snapshotLine()` encodes the snapshot.
+3. `protocol.snapshotLine()` encodes the snapshot.
 4. Server broadcasts the snapshot line to connected clients.
 
 On a command:
 
-1. Server decodes `wire.CommandRequest`.
+1. Server decodes `protocol.Message.command`.
 2. Server validates action/target.
 3. Server calls primary command handling.
-4. Server writes `wire.Response`.
+4. Server writes `protocol.Response`.
 5. If state changed, server broadcasts a fresh snapshot.
 
 ### Client flow
@@ -275,7 +275,7 @@ Add a test that snapshot JSON does not contain sensitive/process-execution field
 
 ## Testing
 
-Add golden tests in `src/ipc/wire.zig` for:
+Add golden tests in `src/ipc/protocol.zig` for:
 
 1. snapshot encode
 2. snapshot decode
@@ -297,7 +297,7 @@ Add or update e2e coverage for:
 ## Migration Steps
 
 1. Add `domain.client_snapshot` with conversion from server `AppState + ProcessController`.
-2. Add `ipc.wire` and golden tests.
+2. Deepen `ipc.protocol` and add golden tests.
 3. Update IPC server to emit snapshot lines and parse new command requests.
 4. Update IPC client/session code to read snapshots and send new commands.
 5. Refactor TUI client model to consume `ClientSnapshot` instead of full `AppState`/`Config`.
