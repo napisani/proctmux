@@ -1,3 +1,6 @@
+//! Pseudo-terminal allocation and child process launching.
+//! PTY setup is isolated because it is platform-sensitive and because proctmux intentionally gives managed processes a real terminal interface.
+
 const std = @import("std");
 
 const default_rows: u16 = 24;
@@ -15,6 +18,8 @@ pub const Spawned = struct {
     master: std.fs.File,
 };
 
+/// Spawns a child attached to a PTY so managed commands behave as if they were
+/// running in a real terminal instead of a pipe.
 pub fn spawn(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
@@ -61,6 +66,8 @@ pub fn spawn(
     };
 }
 
+/// Disables parent-side PTY processing; child-side terminal behavior remains
+/// available through the slave end.
 pub fn configureRawMode(file: std.fs.File) !void {
     var raw = try std.posix.tcgetattr(file.handle);
 

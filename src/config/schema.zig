@@ -1,3 +1,6 @@
+//! Owned Project Config schema.
+//! Types in this module encode memory ownership conventions used by the loader, defaults, discovery, tests, and cleanup paths.
+
 const std = @import("std");
 
 pub const Allocator = std.mem.Allocator;
@@ -96,6 +99,8 @@ pub const GeneralConfig = struct {
     procs_from_package_json: bool = false,
 };
 
+/// Owned config for one managed process. String ownership is explicit because
+/// entries may originate from YAML, discovery, defaults, or tests.
 pub const ProcessConfig = struct {
     shell: []const u8 = "",
     cmd: StringList,
@@ -149,6 +154,8 @@ pub const ProcessConfig = struct {
     }
 };
 
+/// Complete Project Config after parsing/defaults/discovery. Callers should use
+/// `deinit` because nested maps and lists own their strings.
 pub const Config = struct {
     allocator: Allocator,
     file_path: []const u8 = "",

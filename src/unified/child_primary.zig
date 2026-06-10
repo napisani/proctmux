@@ -1,3 +1,6 @@
+//! Child primary process adapter for unified mode.
+//! The adapter launches the current executable in a PTY so the unified server pane observes the same terminal behavior as a standalone primary.
+
 const std = @import("std");
 const pty = @import("../proc/pty.zig");
 const tui = @import("../tui/root.zig");
@@ -9,6 +12,8 @@ pub const OutputCursor = struct {
     offset: u64 = 0,
 };
 
+/// Running child primary process for unified mode. It owns the PTY handle and a
+/// captured byte log consumed by the server-pane renderer.
 pub const ChildPrimary = struct {
     allocator: std.mem.Allocator,
     pid: std.posix.pid_t,
@@ -21,6 +26,8 @@ pub const ChildPrimary = struct {
     wait_thread: ?std.Thread = null,
     exited: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
+    /// Relaunches proctmux as a primary server inside a PTY. The fixed initial
+    /// size is corrected later by unified resize synchronization.
     pub fn init(
         allocator: std.mem.Allocator,
         argv: []const []const u8,

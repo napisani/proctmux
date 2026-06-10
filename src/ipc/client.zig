@@ -1,3 +1,6 @@
+//! Stateful IPC client connection.
+//! The client buffers interleaved Snapshot and Response messages so TUI sessions can match command responses without losing the latest server snapshot.
+
 const std = @import("std");
 const line_io = @import("line.zig");
 const protocol = @import("protocol.zig");
@@ -5,6 +8,9 @@ const protocol = @import("protocol.zig");
 const max_response_line = 1024 * 1024;
 const default_response_timeout_ms = 5000;
 
+/// Persistent client connection used by interactive TUI sessions. It preserves
+/// snapshots seen while waiting for command responses so UI state is never lost
+/// to message interleaving on the socket.
 pub const Client = struct {
     allocator: std.mem.Allocator,
     stream: std.net.Stream,
@@ -34,6 +40,8 @@ pub const Client = struct {
         self.stream.close();
     }
 
+    /// Sends a Process Command and returns the request id the caller should use
+    /// to match the eventual response.
     pub fn sendCommand(self: *Client, action: protocol.Command, label: []const u8) !u64 {
         const request_id = self.next_request_id;
         self.next_request_id += 1;
@@ -72,6 +80,8 @@ pub const Client = struct {
         }
     }
 
+    /// Drains all immediately available snapshots and returns the newest one.
+    /// This keeps render loops from replaying obsolete intermediate states.
     pub fn readLatestSnapshot(self: *Client) !protocol.SnapshotUpdate {
         var latest = try self.readSnapshot();
         errdefer latest.deinit();
@@ -181,6 +191,8 @@ pub const Client = struct {
         return self.waitForReadableData(0);
     }
 
+    /// Reads until the requested command response arrives, preserving any
+    /// interleaved snapshots for the next snapshot read.
     pub fn readResponseFor(self: *Client, expected_request_id: ?u64) !protocol.Response {
         while (true) {
             const line = try self.readLineWithTimeout(self.response_timeout_ms);

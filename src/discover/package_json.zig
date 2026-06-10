@@ -1,3 +1,6 @@
+//! package.json script discovery.
+//! Scripts become Process Config entries with predictable labels so JavaScript projects can be run without duplicating common commands in proctmux.yaml.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const makefile = @import("makefile.zig");

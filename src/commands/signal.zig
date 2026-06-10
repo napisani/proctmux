@@ -1,3 +1,6 @@
+//! Signal-command CLI behavior over IPC.
+//! Mutation commands send Process Commands and exit; `signal-list` is intentionally read-only and formats the initial Client Snapshot instead of requiring a list command in the protocol.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
@@ -9,6 +12,8 @@ pub const ProcessCommand = struct {
     label: []const u8 = "",
 };
 
+/// Parsed signal-command intent. Listing is separate from Process Commands so
+/// the IPC protocol does not need a request/response shape for process lists.
 pub const Plan = union(enum) {
     command: ProcessCommand,
     list,
@@ -82,6 +87,8 @@ pub fn runWithSender(
     }
 }
 
+/// Executes a signal command against an already-running Primary Server socket.
+/// List mode reads the initial Snapshot and never mutates server state.
 pub fn runWithSocketPath(
     allocator: std.mem.Allocator,
     socket_path: []const u8,
@@ -119,6 +126,7 @@ pub fn runWithConfig(
     try runWithSocketPath(allocator, socket_path, subcommand, args, output);
 }
 
+/// Formats the snapshot's process summaries for scripting-friendly output.
 pub fn formatProcessList(
     allocator: std.mem.Allocator,
     snapshot: *const domain.client_snapshot.ClientSnapshot,

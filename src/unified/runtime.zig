@@ -1,3 +1,6 @@
+//! Unified Runtime Mode event loops.
+//! The runtime coordinates child-primary startup, Client Session IPC, raw input, server-output capture, terminal resize, and split-frame rendering.
+
 const std = @import("std");
 const builtin = @import("builtin");
 const cli = @import("../cli/root.zig");
@@ -15,6 +18,8 @@ const server_output = @import("server_output.zig");
 
 const log = std.log.scoped(.unified_runtime);
 
+/// Runs Unified Mode, choosing the production child-process adapter or the
+/// in-process test adapter while sharing the same event-loop implementation.
 pub fn run(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
@@ -183,6 +188,8 @@ fn runInteractiveRuntime(runtime: RuntimeSession) !void {
     var output_state = try server_output.State.init(runtime.session.allocator, runtime.target);
     defer output_state.deinit();
 
+    // Input and render loops both touch ClientSession and split/output state;
+    // one mutex keeps terminal frames coherent without splitting ownership.
     var render_mutex = std.Thread.Mutex{};
     try renderFrame(runtime.session, runtime.split, &output_state, runtime.output);
     var render_run = RenderLoop{

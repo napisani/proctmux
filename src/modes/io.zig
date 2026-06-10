@@ -1,3 +1,6 @@
+//! Runtime input/output adapters.
+//! Production modes and tests share these small interfaces so interactive loops can be exercised without real stdin/stdout.
+
 const std = @import("std");
 
 pub const Input = struct {

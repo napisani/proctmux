@@ -1,3 +1,6 @@
+//! Narrow adapter around vendored libghostty-vt.
+//! Unified mode depends on this wrapper instead of coupling render logic directly to the external terminal-emulator API.
+
 const std = @import("std");
 const vt = @import("ghostty-vt");
 

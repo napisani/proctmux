@@ -1,3 +1,6 @@
+//! Stateful Snapshot broadcasting for connected IPC clients.
+//! This module concentrates client worker threads, publish ordering, requester exclusion, write timeouts, dedupe, and reaping so `ipc.server` stays focused on sockets.
+
 const std = @import("std");
 const interfaces = @import("interfaces.zig");
 const line_io = @import("line.zig");
@@ -8,6 +11,9 @@ const default_client_write_timeout_ms: u64 = 2000;
 
 const log = std.log.scoped(.ipc_snapshot_broadcaster);
 
+/// Owns stateful IPC clients after socket acceptance. The Interface stays small
+/// so socket authorization remains in `ipc.server` while broadcast lifecycle
+/// complexity has one owner and one test surface.
 pub const Broadcaster = struct {
     allocator: std.mem.Allocator,
     handler: interfaces.CommandHandler,
@@ -36,6 +42,8 @@ pub const Broadcaster = struct {
         };
     }
 
+    /// Starts the polling monitor that notices process-status changes not tied
+    /// to a command response, such as a child process exiting naturally.
     pub fn start(self: *Broadcaster) !void {
         self.snapshot_monitor_thread = try std.Thread.spawn(.{}, runSnapshotMonitor, .{self});
     }
@@ -59,6 +67,9 @@ pub const Broadcaster = struct {
         if (self.last_broadcast_snapshot_line) |line| self.allocator.free(line);
     }
 
+    /// Takes ownership of an accepted stream and serves it on a worker thread.
+    /// Finished workers are reaped opportunistically to keep short-lived signal
+    /// clients from accumulating until server shutdown.
     pub fn addClient(self: *Broadcaster, stream: std.net.Stream) !void {
         var stream_owned = true;
         errdefer if (stream_owned) stream.close();
@@ -81,6 +92,8 @@ pub const Broadcaster = struct {
         self.clients.appendAssumeCapacity(client);
         self.clients_mutex.unlock();
 
+        // Register the client before the worker starts so a fast initial
+        // snapshot write can still participate in shutdown and broadcast cleanup.
         const thread = std.Thread.spawn(.{}, handleSnapshotClient, .{ self, client }) catch |err| {
             self.removeClient(client);
             client.close();
@@ -112,6 +125,8 @@ pub const Broadcaster = struct {
                 continue;
             }
 
+            // Joining only after the worker has marked itself finished avoids
+            // blocking new accepts behind a slow or still-connected client.
             _ = self.workers.swapRemove(index);
             worker.thread.join();
             self.removeClient(worker.client);
@@ -120,6 +135,8 @@ pub const Broadcaster = struct {
         }
     }
 
+    /// Closes client streams to unblock readers/writers during server shutdown.
+    /// Worker joining remains in `deinit` so callers do not block accept-loop exit.
     pub fn closeAllClients(self: *Broadcaster) void {
         self.clients_mutex.lock();
         defer self.clients_mutex.unlock();
@@ -223,6 +240,8 @@ pub const Broadcaster = struct {
             const line = try self.snapshot_provider.snapshotLine(self.allocator);
             defer self.allocator.free(line);
 
+            // The monitor only publishes changed snapshots; command-triggered
+            // publishes intentionally notify clients even when bytes match.
             if (self.last_broadcast_snapshot_line) |previous| {
                 if (std.mem.eql(u8, previous, line)) continue;
             }

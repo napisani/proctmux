@@ -1,3 +1,6 @@
+//! Primary Server Process Command execution.
+//! This module converts IPC Process Commands into process lifecycle and selection changes while keeping response construction local to command semantics.
+
 const std = @import("std");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
@@ -5,11 +8,16 @@ const proc_mod = @import("../proc/root.zig");
 
 const log = std.log.scoped(.primary_command_runner);
 
+/// Executes Process Commands against Primary-owned state. The runner is kept
+/// concrete instead of callback-heavy so command semantics stay local to the
+/// Primary Server domain.
 pub const Runner = struct {
     state: *domain.state.AppState,
     controller: *proc_mod.controller.Controller,
     current_process_id: *std.atomic.Value(u32),
 
+    /// Handles one decoded IPC command and returns the response that should be
+    /// written to the requesting client.
     pub fn handleRequest(
         self: Runner,
         allocator: std.mem.Allocator,
@@ -86,6 +94,8 @@ pub const Runner = struct {
             }
         }
 
+        // Shutdown should make best effort across all processes; one stubborn
+        // process must not prevent stop attempts for the rest.
         stopProcessesConcurrently(allocator, stop_runs.items);
         reportStopFailures(stop_runs.items);
 

@@ -18,3 +18,28 @@
 - Makefile: shortcuts `build`, `run`, `test`, `test-e2e`, `test-all`, `dist`.
 - Cursor/Copilot: none found; if added in `.cursor/rules/`, `.cursorrules`, or `.github/copilot-instructions.md`, follow them.
 - CI: `.github/workflows/release.yml` builds release artifacts; tests run locally with `make test-all`.
+
+## Commenting Guidelines
+
+- Prefer **intent-based comments**: explain why code exists, what invariant it preserves, what tradeoff it encodes, or what external behavior it protects.
+- Prefer clearer code before adding comments. If a comment only explains confusing mechanics, first try better names, smaller functions, or clearer structure.
+- Avoid comments that merely narrate imperative code already visible in the implementation, such as “loop over processes” or “set the flag to true.”
+- Treat comments as maintained code. When behavior changes, update or remove comments that no longer describe the current intent.
+
+### Module Comments
+
+- Add module-level comments to relevant files, especially modules that own domain concepts, IPC protocol behavior, process lifecycle, terminal behavior, concurrency, memory ownership, or test harnesses.
+- In Zig modules, prefer `//!` at the top of the file.
+- Cover the Module’s responsibility, intended callers/use cases, important invariants, ownership boundaries, and non-obvious seams.
+- Include explicit non-goals when helpful: what this Module intentionally does not own.
+
+### Function and Type Comments
+
+- Use `///` for public functions/types when their contract is not obvious from the name/signature.
+- Explain caller obligations, ownership/lifetime expectations, error behavior, concurrency expectations, ordering constraints, or important side effects.
+- Private helper comments should be selective and explain intent, not mechanics.
+
+### Within-Function Comments
+
+- Add within-function comments only around important reasoning points: locking decisions, race avoidance, cleanup ordering, protocol compatibility, terminal quirks, memory ownership, or deliberately surprising behavior.
+- Keep comments lightweight and high-signal. A few comments that preserve design intent are better than broad narration.

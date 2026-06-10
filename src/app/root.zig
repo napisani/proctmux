@@ -1,3 +1,6 @@
+//! Application orchestration for CLI entrypoints.
+//! This module is the high-level router from parsed arguments and loaded Project Config into runtime modes, while keeping terminal restore and exit-code behavior centralized.
+
 const std = @import("std");
 const cli = @import("../cli/root.zig");
 const commands = @import("../commands/root.zig");
@@ -78,6 +81,8 @@ pub fn runInDirUntilStopped(
     try runInDirUntilStoppedWithInput(allocator, dir, args, EmptyInput.reader(), output, stopped);
 }
 
+/// Shared app runner used by production and tests. The explicit directory,
+/// input, output, and stop flag keep runtime side effects injectable.
 pub fn runInDirUntilStoppedWithInput(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,

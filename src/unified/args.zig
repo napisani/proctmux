@@ -1,3 +1,6 @@
+//! Unified-mode argument rewriting.
+//! The parent process relaunches proctmux as a child primary, so this module removes flags that only make sense for the parent unified runtime.
+
 const std = @import("std");
 const cli = @import("../cli/root.zig");
 const tui = @import("../tui/root.zig");

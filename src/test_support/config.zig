@@ -1,3 +1,6 @@
+//! Shared Project Config and Snapshot fixtures for tests.
+//! Fixtures here intentionally model common proctmux projects so tests focus on behavior instead of repetitive setup.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");

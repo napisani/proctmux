@@ -1,5 +1,10 @@
+//! Raw JSON-line socket reading helpers.
+//! This module intentionally knows nothing about protocol schemas; it only enforces newline framing, maximum line size, and optional read timeouts.
+
 const std = @import("std");
 
+/// Reads one newline-terminated frame. The returned slice includes the newline
+/// because protocol golden tests compare complete wire lines.
 pub fn read(allocator: std.mem.Allocator, stream: std.net.Stream, max_len: usize) ![]const u8 {
     var out = std.array_list.Managed(u8).init(allocator);
     errdefer out.deinit();
@@ -16,6 +21,8 @@ pub fn read(allocator: std.mem.Allocator, stream: std.net.Stream, max_len: usize
     return error.LineTooLong;
 }
 
+/// Timeout variant used by command responses and tests so a silent peer does
+/// not hang the caller indefinitely.
 pub fn readTimeout(
     allocator: std.mem.Allocator,
     stream: std.net.Stream,

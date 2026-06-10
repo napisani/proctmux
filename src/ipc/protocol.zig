@@ -1,3 +1,6 @@
+//! Canonical JSON-line IPC Protocol.
+//! All wire DTOs, version checks, encode/decode functions, and Process Command semantics live here so IPC schema changes have one test surface.
+
 const std = @import("std");
 const domain = @import("../domain/root.zig");
 
@@ -11,6 +14,8 @@ pub const DecodeError = error{
 
 pub const EncodeError = std.mem.Allocator.Error || std.Io.Writer.Error;
 
+/// Process Commands accepted over IPC and emitted by TUI/signal clients.
+/// The enum is intentionally small: process listing is modeled as Snapshot read.
 pub const Command = enum {
     start,
     stop,
@@ -20,6 +25,8 @@ pub const Command = enum {
     stop_running,
 };
 
+/// Wire command request after decoding. `target` is optional because bulk
+/// commands operate on all running processes instead of one process label.
 pub const CommandRequest = struct {
     request_id: u64,
     action: Command,
@@ -44,6 +51,8 @@ pub const Response = struct {
     }
 };
 
+/// Parsed Snapshot message plus a borrowed ClientSnapshot view into the parsed
+/// JSON arena. Callers must keep this object alive while using `snapshot()`.
 pub const SnapshotUpdate = struct {
     parsed: std.json.Parsed(SnapshotMessage),
     snapshot_value: domain.client_snapshot.ClientSnapshot,
@@ -57,6 +66,8 @@ pub const SnapshotUpdate = struct {
     }
 };
 
+/// Top-level decoded IPC message. Use this when a reader can legally observe
+/// interleaved snapshots and responses on the same connection.
 pub const Message = union(enum) {
     snapshot: SnapshotUpdate,
     command: CommandRequest,
@@ -151,6 +162,8 @@ pub fn commandRequiresSelectedProcess(command: Command) bool {
     };
 }
 
+/// Commands that mutate process runtime state need a prompt snapshot read so
+/// the TUI reflects start/stop/restart results without waiting for polling.
 pub fn commandNeedsImmediateSnapshotSync(command: Command) bool {
     return switch (command) {
         .start, .stop, .restart, .restart_running => true,
@@ -162,6 +175,8 @@ pub fn commandShouldRenderImmediately(command: Command) bool {
     return command == .switch_process;
 }
 
+/// Decodes one complete JSON line. The protocol is strict about unknown fields
+/// and versions so mixed or stale clients fail loudly instead of drifting.
 pub fn decodeLine(allocator: std.mem.Allocator, line: []const u8) DecodeError!Message {
     return switch (try messageType(allocator, line)) {
         .snapshot => .{ .snapshot = try parseSnapshotLine(allocator, line) },

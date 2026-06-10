@@ -1,3 +1,6 @@
+//! Signal Runtime Mode adapter.
+//! This mode loads Project Config, locates the Primary Server socket, and delegates command behavior to the signal command module.
+
 const std = @import("std");
 const commands = @import("../commands/root.zig");
 const config = @import("../config/root.zig");

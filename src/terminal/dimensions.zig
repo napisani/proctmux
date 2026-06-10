@@ -1,3 +1,6 @@
+//! Terminal size probing.
+//! A small fallback keeps rendering deterministic in tests or non-interactive environments where ioctl dimensions are unavailable.
+
 const std = @import("std");
 
 const default_terminal_width = 100;

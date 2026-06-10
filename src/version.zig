@@ -1,3 +1,6 @@
+//! Build-time version metadata.
+//! The generated version option is isolated here so CLI and packaging code can read one stable value.
+
 const std = @import("std");
 const options = @import("version_options");
 

@@ -1,3 +1,6 @@
+//! Test input/output adapters for runtime loops.
+//! These adapters make interactive modes deterministic by replacing blocking terminal IO with scripted readers and captured writers.
+
 const std = @import("std");
 const modes_io = @import("../modes/io.zig");
 

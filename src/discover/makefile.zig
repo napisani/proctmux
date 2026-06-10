@@ -1,3 +1,6 @@
+//! Makefile process discovery.
+//! The parser extracts likely user targets while avoiding targets that are internal, pattern-based, or unsuitable as long-running proctmux processes.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 

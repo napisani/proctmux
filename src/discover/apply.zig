@@ -1,3 +1,6 @@
+//! Discovery coordinator for Project Config augmentation.
+//! This module applies Makefile and package.json discovery in a single place so runtime startup does not know each discovery source.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const makefile = @import("makefile.zig");

@@ -1,3 +1,6 @@
+//! Runtime Process Controller.
+//! The controller owns active process instances, scrollback buffers, stop escalation, cleanup hooks, and the narrow status adapter used by snapshots.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
@@ -14,6 +17,9 @@ const default_stop_timeout_ms = 3000;
 
 pub const Instance = instance_mod.Instance;
 
+/// Owns currently running process instances. Callers interact through stable
+/// ProcessIds; all OS handles, scrollback, and cleanup hooks stay behind this
+/// Module's mutex-protected map.
 pub const Controller = struct {
     allocator: std.mem.Allocator,
     global_config: ?*const config.schema.Config,
@@ -49,6 +55,8 @@ pub const Controller = struct {
         self.processes.deinit();
     }
 
+    /// Starts a new process instance for `id`. The id must not already be
+    /// active; natural exits are cleaned up through `cleanupProcess` before reuse.
     pub fn startProcess(
         self: *Controller,
         id: domain.process.ProcessId,
@@ -94,6 +102,8 @@ pub const Controller = struct {
         return instance;
     }
 
+    /// Stops a running process with the configured signal escalation and then
+    /// releases the instance with user cleanup hooks enabled.
     pub fn stopProcess(self: *Controller, id: domain.process.ProcessId) !void {
         const instance = self.getInstance(id) orelse return error.ProcessNotFound;
 
@@ -109,6 +119,8 @@ pub const Controller = struct {
         try self.releaseProcess(id, instance, true);
     }
 
+    /// Releases an already-stopped instance without running `on_kill`; this path
+    /// is for natural exits and pre-start cleanup, not user-requested stops.
     pub fn cleanupProcess(self: *Controller, id: domain.process.ProcessId) !void {
         const instance = self.getInstance(id) orelse return;
         if (instance.isRunning()) return error.ProcessStillRunning;
@@ -135,6 +147,8 @@ pub const Controller = struct {
         _ = self.processes.remove(id);
         self.mutex.unlock();
 
+        // Run the hook after threads are joined and the map no longer exposes
+        // the instance, so a slow hook cannot make the process appear alive.
         const on_kill_result = if (run_on_kill)
             on_kill.execute(self.allocator, instance.config)
         else {};

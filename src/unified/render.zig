@@ -1,3 +1,6 @@
+//! Unified-mode frame renderer.
+//! This module composes the Client Session pane, server-output pane, focus/status bar, and terminal repaint sequences.
+
 const std = @import("std");
 const domain = @import("../domain/root.zig");
 const io = @import("../modes/io.zig");

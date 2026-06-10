@@ -1,3 +1,6 @@
+//! Core process domain types.
+//! These types give the rest of the codebase stable IDs, status names, and a narrow ProcessController adapter without exposing concrete process-controller internals.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 
@@ -9,6 +12,8 @@ pub const ProcessStatus = enum(u8) {
     exited = 4,
 };
 
+/// Stable domain identifier assigned from sorted Project Config order. `none`
+/// represents no selection and avoids sentinel integers in callers.
 pub const ProcessId = enum(u32) {
     none = 0,
     _,
@@ -54,6 +59,8 @@ pub const ProcessView = struct {
     config: *config.schema.ProcessConfig,
 };
 
+/// Narrow status adapter used by domain code that needs live process facts
+/// without depending on the concrete runtime controller.
 pub const ProcessController = struct {
     context: *anyopaque,
     get_process_status: *const fn (context: *anyopaque, id: ProcessId) ProcessStatus,
@@ -68,6 +75,7 @@ pub const ProcessController = struct {
     }
 };
 
+/// Combines static process config with optional live controller-derived status.
 pub fn toView(proc: Process, controller: ?ProcessController) ProcessView {
     const status = if (controller) |ctl| ctl.getProcessStatus(proc.id) else ProcessStatus.halted;
     const pid = if (controller) |ctl| ctl.getPID(proc.id) else -1;

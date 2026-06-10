@@ -1,3 +1,6 @@
+//! Primary-mode process output viewer.
+//! The viewer switches stdout to the selected process by atomically snapshotting scrollback and subscribing to live ring-buffer output.
+
 const std = @import("std");
 const domain = @import("../domain/root.zig");
 const ring = @import("../ring/root.zig");
@@ -29,6 +32,8 @@ pub const Output = struct {
     }
 };
 
+/// Primary-mode stdout viewer. At most one process is subscribed at a time so
+/// switching selection also changes which ring-buffer reader feeds stdout.
 pub const Viewer = struct {
     allocator: std.mem.Allocator,
     provider: ProcessProvider,
@@ -58,6 +63,8 @@ pub const Viewer = struct {
         return self.current_process_id;
     }
 
+    /// Switches the displayed process by atomically snapshotting scrollback and
+    /// subscribing to future output before writing anything to stdout.
     pub fn switchToProcess(self: *Viewer, process_id: domain.process.ProcessId) !void {
         try self.switchToProcessInternal(process_id, false);
     }

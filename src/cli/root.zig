@@ -1,3 +1,6 @@
+//! Command-line parsing for proctmux modes and signal subcommands.
+//! The parser intentionally produces small domain-shaped options so app startup can decide runtime behavior without re-reading raw argv.
+
 const std = @import("std");
 
 pub const Mode = enum {

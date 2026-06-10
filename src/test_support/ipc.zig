@@ -1,3 +1,6 @@
+//! IPC fakes and socket harness helpers for tests.
+//! This module concentrates protocol fixtures, fake command handlers, fake snapshot providers, and small socket servers used across IPC and command tests.
+
 const std = @import("std");
 const domain = @import("../domain/root.zig");
 const line_io = @import("../ipc/line.zig");

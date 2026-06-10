@@ -1,3 +1,6 @@
+//! OS process spawn and exit-watch helpers.
+//! This module owns the fork/exec boundary and child reaping so higher layers can reason in Process IDs and Instances.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const builder = @import("builder.zig");
@@ -23,6 +26,8 @@ pub const Started = struct {
     }
 };
 
+/// Crosses the OS process boundary and returns a started handle. Ownership is
+/// handed to `Controller` only after the Instance is fully constructed.
 pub fn start(
     allocator: std.mem.Allocator,
     proc_cfg: *const config.schema.ProcessConfig,
@@ -35,6 +40,8 @@ pub fn start(
         try startPty(allocator, proc_cfg, command_spec, env_map);
 }
 
+/// Exit watcher thread entrypoint. It records terminal status on the Instance;
+/// cleanup is still owned by Controller release paths.
 pub fn waitForExit(instance: *instance_mod.Instance) void {
     const status = instance.handle.wait() catch {
         instance.markExited(1);

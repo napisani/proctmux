@@ -1,3 +1,6 @@
+//! Client-visible Snapshot domain model.
+//! This module is the seam between process-owning server state and IPC/TUI clients: it includes UI metadata and process summaries while intentionally excluding execution config and secrets.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const process = @import("process.zig");
@@ -46,6 +49,8 @@ pub const UiConfig = struct {
     style: UiStyleConfig = .{},
 };
 
+/// Client-safe view of one configured process. Fields are intentionally limited
+/// to UI metadata and live status so snapshots can be shared without redaction.
 pub const ProcessSummary = struct {
     id: u32,
     label: []const u8,
@@ -56,6 +61,8 @@ pub const ProcessSummary = struct {
     categories: StringList = &.{},
 };
 
+/// Complete replacement state for Client Sessions.
+/// Snapshots are borrowed views unless wrapped in `BuiltClientSnapshot`.
 pub const ClientSnapshot = struct {
     current_process_id: u32 = 0,
     exiting: bool = false,
@@ -82,6 +89,8 @@ pub const BuiltClientSnapshot = struct {
     }
 };
 
+/// Builds the IPC/TUI-facing Snapshot from Primary-owned AppState plus live
+/// process-controller status. This is the only server-side projection path.
 pub fn fromAppState(
     allocator: std.mem.Allocator,
     app_state: *const state.AppState,
@@ -115,6 +124,8 @@ pub fn summaryFromView(view: process.ProcessView) ProcessSummary {
     };
 }
 
+/// Applies client-side process list filtering while preserving configured sort
+/// semantics for unscored filters. The returned slice is owned by the caller.
 pub fn filteredProcesses(
     allocator: std.mem.Allocator,
     snapshot: *const ClientSnapshot,

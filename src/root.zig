@@ -1,3 +1,6 @@
+//! Top-level library root for tests and shared build options.
+//! The application binary imports narrower modules, while the test target imports this root to exercise the whole runtime.
+
 const std = @import("std");
 
 pub const std_options: std.Options = .{

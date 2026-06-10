@@ -1,3 +1,6 @@
+//! Unified server-pane output state.
+//! This module converts primary output bytes into per-process terminal state so the server pane can redraw selected process output on demand.
+
 const std = @import("std");
 const domain = @import("../domain/root.zig");
 const primary = @import("../primary/root.zig");
@@ -12,6 +15,8 @@ pub const Target = union(enum) {
     in_process: *primary.Server,
 };
 
+/// Server-pane terminal state for unified mode. It tracks output by process so
+/// switching the selected process can redraw the correct terminal contents.
 pub const State = struct {
     allocator: std.mem.Allocator,
     target: Target,
@@ -75,6 +80,8 @@ pub const State = struct {
         self.processes.deinit();
     }
 
+    /// Renders the active server pane from either child-primary PTY bytes or an
+    /// in-process Primary Server, keeping tests and production on one path.
     pub fn renderText(
         self: *State,
         split: *const tui.split_model.Model,

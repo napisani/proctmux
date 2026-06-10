@@ -1,3 +1,6 @@
+//! Small fuzzy matching primitive for process labels and categories.
+//! The scoring favors ordered character matches and early label matches without pulling a larger fuzzy-search dependency into the TUI path.
+
 const std = @import("std");
 
 const first_char_match_bonus = 10;

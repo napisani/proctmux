@@ -1,3 +1,6 @@
+//! Implementation of `proctmux config-init`.
+//! This command writes the commented starter config and intentionally avoids runtime discovery or validation side effects.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 

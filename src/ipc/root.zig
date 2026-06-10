@@ -1,3 +1,6 @@
+//! IPC namespace.
+//! Runtime modules import this root to access protocol, socket, client, server, and testable IPC interfaces through one stable seam.
+
 pub const protocol = @import("protocol.zig");
 pub const interfaces = @import("interfaces.zig");
 pub const line = @import("line.zig");

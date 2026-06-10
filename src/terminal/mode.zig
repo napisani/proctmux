@@ -1,5 +1,10 @@
+//! Raw terminal mode lifecycle.
+//! This module owns saving/restoring terminal attributes so Runtime Modes can use raw input without leaking terminal state on exit.
+
 const std = @import("std");
 
+/// Saved terminal mode for restoration after raw input. Holding the original
+/// termios value here makes cleanup explicit at Runtime Mode boundaries.
 pub const Mode = struct {
     fd: std.posix.fd_t,
     original: ?std.posix.termios = null,

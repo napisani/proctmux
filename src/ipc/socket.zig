@@ -1,3 +1,6 @@
+//! Project socket path lifecycle.
+//! The socket hash is derived from Project Config so clients find the right Primary Server without a global registry or user-supplied port.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 
@@ -8,6 +11,8 @@ pub fn pathForConfig(allocator: std.mem.Allocator, cfg: *const config.schema.Con
     return std.fmt.allocPrint(allocator, "/tmp/proctmux-{s}.socket", .{hash});
 }
 
+/// Computes and clears the socket path a Primary Server is about to bind.
+/// Removing a stale file here keeps startup deterministic after crashes.
 pub fn createPathForConfig(allocator: std.mem.Allocator, cfg: *const config.schema.Config) ![]const u8 {
     const path = try pathForConfig(allocator, cfg);
     errdefer allocator.free(path);
@@ -20,6 +25,8 @@ pub fn createPathForConfig(allocator: std.mem.Allocator, cfg: *const config.sche
     return path;
 }
 
+/// Computes and verifies the socket path for clients. A successful return means
+/// the file exists and accepts a probe connection.
 pub fn getPathForConfig(allocator: std.mem.Allocator, cfg: *const config.schema.Config) ![]const u8 {
     const path = try pathForConfig(allocator, cfg);
     errdefer allocator.free(path);
@@ -30,6 +37,8 @@ pub fn getPathForConfig(allocator: std.mem.Allocator, cfg: *const config.schema.
     return path;
 }
 
+/// Waits for a Primary Server to create its socket during startup, polling the
+/// same probe used by `getPathForConfig`.
 pub fn waitPathForConfig(allocator: std.mem.Allocator, cfg: *const config.schema.Config) ![]const u8 {
     const path = try pathForConfig(allocator, cfg);
     errdefer allocator.free(path);

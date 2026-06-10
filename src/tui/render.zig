@@ -1,3 +1,6 @@
+//! TUI process-list renderer.
+//! Rendering reads ClientModel state and emits terminal text/ANSI styles without owning process lifecycle or IPC behavior.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
@@ -5,6 +8,8 @@ const test_ansi = @import("../test_support/ansi.zig");
 const test_config = @import("../test_support/config.zig");
 const client_model = @import("client_model.zig");
 
+/// Renders the process-list pane from local UI state and the current Client
+/// Snapshot. The renderer does not mutate model or perform IPC.
 pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_model.ClientModel) ![]const u8 {
     var out = std.array_list.Managed(u8).init(allocator);
     errdefer out.deinit();

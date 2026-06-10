@@ -1,3 +1,6 @@
+//! Process launch command builder.
+//! This module resolves mutually exclusive shell/cmd config into argv/env/cwd pieces without starting OS processes.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 
@@ -12,6 +15,8 @@ pub const CommandSpec = struct {
     }
 };
 
+/// Resolves process config into argv. `shell` and `cmd` are intentionally
+/// mutually exclusive so startup behavior is predictable.
 pub fn buildCommand(
     allocator: std.mem.Allocator,
     proc_cfg: *const config.schema.ProcessConfig,

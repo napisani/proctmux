@@ -1,3 +1,6 @@
+//! ANSI-aware test assertions.
+//! Rendering tests use these helpers to compare visible text without depending on every escape sequence byte.
+
 const std = @import("std");
 
 pub fn expectEqualPlain(allocator: std.mem.Allocator, expected: []const u8, rendered: []const u8) !void {

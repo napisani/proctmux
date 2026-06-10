@@ -1,3 +1,6 @@
+//! Process-owning Primary Server.
+//! The server owns AppState, ProcessController, Snapshot production, autostart, stdin forwarding, and the IPC command handler seam.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
@@ -9,6 +12,8 @@ const test_ipc = @import("../test_support/ipc.zig");
 
 const log = std.log.scoped(.primary);
 
+/// Process-owning server used by primary and unified modes. It is the only
+/// module that can mutate AppState and ProcessController together.
 pub const Server = struct {
     allocator: std.mem.Allocator,
     cfg: *config.schema.Config,
@@ -57,6 +62,8 @@ pub const Server = struct {
         };
     }
 
+    /// Produces client-visible snapshots on demand for IPC clients. The snapshot
+    /// projection deliberately excludes process execution config and secrets.
     pub fn snapshotProvider(self: *Server) ipc.server.SnapshotProvider {
         return .{
             .context = self,
@@ -64,6 +71,8 @@ pub const Server = struct {
         };
     }
 
+    /// Starts autostart processes before clients attach so initial snapshots
+    /// already reflect the configured startup state.
     pub fn startAutostartProcesses(self: *Server) void {
         for (self.state.processes.items) |*process| {
             if (process.config.autostart) self.startProcess(process) catch |err| {
@@ -72,6 +81,8 @@ pub const Server = struct {
         }
     }
 
+    /// Forwards raw terminal input to the selected process. Missing/stopped
+    /// processes are ignored because process selection can race with exits.
     pub fn sendInputToCurrentProcess(self: *Server, bytes: []const u8) !void {
         const id = self.currentProcessID();
         if (id.isNone()) return;

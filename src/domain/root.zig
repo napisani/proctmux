@@ -1,3 +1,6 @@
+//! Domain namespace and domain-level tests.
+//! This module provides a stable import seam for process, app state, filtering, fuzzy matching, and Client Snapshots.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 

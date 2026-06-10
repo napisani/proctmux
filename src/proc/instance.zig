@@ -1,3 +1,6 @@
+//! Mutable runtime record for one started process.
+//! An Instance ties together OS process handles, output capture state, scrollback, and cleanup ownership for a single launch.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");

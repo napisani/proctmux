@@ -1,9 +1,14 @@
+//! Local TUI model for process-list interaction.
+//! The model owns user-facing UI state such as filtering, selection, help, and transient messages; server-owned process data comes from Client Snapshots.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
 const test_config = @import("../test_support/config.zig");
 
+/// Command intent emitted by local key handling. The session decides whether it
+/// becomes IPC, which keeps the model free of transport concerns.
 pub const CommandIntent = struct {
     action: ipc.protocol.Command,
     label: []const u8,
@@ -16,6 +21,8 @@ pub const TimedMessage = struct {
     expires_at_ms: i64,
 };
 
+/// Local, client-owned UI state for the process list. Server-owned process data
+/// is borrowed from the latest Client Snapshot and replaced as a whole.
 pub const ClientModel = struct {
     allocator: std.mem.Allocator,
     snapshot: *const domain.client_snapshot.ClientSnapshot,
@@ -129,6 +136,8 @@ pub const ClientModel = struct {
         return self.activeProcLabel();
     }
 
+    /// Replaces server-provided data while preserving local UI choices such as
+    /// filter text, running-only mode, help visibility, and selection.
     pub fn replaceSnapshotPreservingUI(
         self: *ClientModel,
         snapshot: *const domain.client_snapshot.ClientSnapshot,
@@ -145,6 +154,8 @@ pub const ClientModel = struct {
         self.filtered_processes = new_filtered_processes;
     }
 
+    /// Applies one normalized key. Local UI keys are handled immediately;
+    /// process lifecycle keys return an intent for the Client Session to send.
     pub fn handleKey(self: *ClientModel, key: []const u8) !?CommandIntent {
         if (self.entering_filter_text) {
             if (self.processListIntentForControlModifiedKey(key)) |intent| return intent;
@@ -251,6 +262,9 @@ pub const ClientModel = struct {
     fn processListIntentForControlModifiedKey(self: *ClientModel, key: []const u8) ?CommandIntent {
         const process_list_key = controlModifiedKey(key) orelse return null;
         const bindings = &self.snapshot.ui.keybinding;
+
+        // Filter-entry mode still lets users control processes via ctrl+binding;
+        // otherwise text input would temporarily make the TUI unable to stop work.
 
         if (self.navigationIntentForKey(process_list_key)) |intent| return intent;
         if (matches(bindings.start, process_list_key)) return self.commandIntent(.start);

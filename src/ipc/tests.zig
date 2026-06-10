@@ -1,3 +1,6 @@
+//! IPC integration tests over real Unix sockets and protocol lines.
+//! These tests protect the public IPC seam rather than old internal codec compatibility.
+
 const std = @import("std");
 const domain = @import("../domain/root.zig");
 const config = @import("../config/root.zig");

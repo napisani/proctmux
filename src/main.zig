@@ -1,3 +1,6 @@
+//! Binary entrypoint.
+//! All substantial startup behavior is delegated to `app` so this file only owns allocator setup, logging setup, and process exit mapping.
+
 const std = @import("std");
 const app = @import("app/root.zig");
 

@@ -1,3 +1,6 @@
+//! Primary Runtime Mode.
+//! This mode starts the process-owning server, preserves terminal cleanup, and forwards raw stdin bytes to the currently selected process.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
@@ -7,6 +10,8 @@ const io = @import("io.zig");
 
 const log = std.log.scoped(.primary_mode);
 
+/// Runs the standalone Primary Mode until the shared stop flag is raised.
+/// Terminal raw-mode cleanup is kept in this mode because stdin is forwarded to PTYs.
 pub fn runUntilStopped(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,

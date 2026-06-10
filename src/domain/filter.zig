@@ -1,3 +1,6 @@
+//! Filtering and sorting for server-side ProcessView lists.
+//! Client Snapshot filtering has its own module because summaries are the client-visible shape; this file remains for internal process views.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const process = @import("process.zig");

@@ -1,3 +1,6 @@
+//! Terminal key-sequence decoder.
+//! Raw bytes from stdin are normalized into key names used by config bindings and TUI tests.
+
 const std = @import("std");
 
 const KeySequence = struct {
@@ -52,6 +55,8 @@ fn buildControlKeyNames() [27][]const u8 {
     }
 }
 
+/// Decodes one key from a raw input buffer and advances `index`. Returned names
+/// are the stable strings used in Project Config keybinding lists.
 pub fn keyForInput(bytes: []const u8, index: *usize, scratch: *[1]u8) ?[]const u8 {
     const current = index.*;
     const remaining = bytes[current..];

@@ -1,3 +1,6 @@
+//! Standalone client Runtime Mode.
+//! This mode discovers the primary socket, initializes raw terminal handling, and delegates interactive behavior to Client Session.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const ipc = @import("../ipc/root.zig");

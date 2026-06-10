@@ -1,3 +1,6 @@
+//! Configuration namespace and integration tests.
+//! Importers use this module as the stable seam for schema, defaults, loading, hashing, and generated config templates.
+
 const std = @import("std");
 
 pub const schema = @import("schema.zig");

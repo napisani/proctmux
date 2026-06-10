@@ -1,3 +1,6 @@
+//! Unix-socket IPC server entrypoints.
+//! This module owns socket lifecycle, permissions, and peer authorization; stateful Snapshot broadcasting is delegated to `snapshot_broadcaster`.
+
 const std = @import("std");
 const builtin = @import("builtin");
 const interfaces = @import("interfaces.zig");
@@ -15,6 +18,8 @@ pub const PeerAuthorizer = interfaces.PeerAuthorizer;
 const DefaultPeerAuthorizerContext = struct {};
 var default_peer_authorizer_context = DefaultPeerAuthorizerContext{};
 
+/// Production authorizer: prefer same-UID peer credentials and fall back to
+/// socket permissions only on platforms without credential support.
 pub fn defaultPeerAuthorizer() PeerAuthorizer {
     return .{
         .context = &default_peer_authorizer_context,
@@ -39,6 +44,8 @@ pub fn serveOneCommandAtPathWithAuthorizer(
     try serveAtPath(allocator, socket_path, handler, .one_command, authorizer);
 }
 
+/// Serves the stateful Primary Server IPC path: clients receive an initial
+/// Snapshot, then may send commands and receive broadcasts on the same stream.
 pub fn serveCommandsAtPathWithSnapshots(
     allocator: std.mem.Allocator,
     socket_path: []const u8,
@@ -150,6 +157,8 @@ fn serveSnapshotListener(
             continue;
         };
 
+        // After authorization the broadcaster owns the stream; this keeps
+        // connection lifetime separate from socket accept/permission concerns.
         try broadcaster.addClient(conn.stream);
     }
 }

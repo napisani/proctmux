@@ -1,3 +1,6 @@
+//! Client Session orchestration over a Snapshot transport.
+//! This module turns key intents into Process Commands, handles command errors, and applies server Snapshots while preserving local UI state.
+
 const std = @import("std");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
@@ -5,6 +8,8 @@ const test_config = @import("../test_support/config.zig");
 const test_ipc = @import("../test_support/ipc.zig");
 const client_model = @import("client_model.zig");
 
+/// Transport seam used by Client Session. Production uses `ipc.client.Client`;
+/// tests provide fake snapshots and command results without a socket.
 pub const Transport = struct {
     context: *anyopaque,
     read_snapshot: *const fn (context: *anyopaque, allocator: std.mem.Allocator) anyerror!ipc.protocol.SnapshotUpdate,
@@ -47,12 +52,16 @@ pub const KeyInteractionOptions = struct {
     sync_selection_after_command: bool = false,
 };
 
+/// Result of handling one key at the session layer. Runtime loops use this to
+/// decide whether to stop, repaint immediately, or keep polling.
 pub const KeyInteraction = struct {
     handled_command: bool = false,
     stop: bool = false,
     render_now: bool = false,
 };
 
+/// TUI-facing session that combines local ClientModel state with IPC Snapshot
+/// updates and Process Command transport.
 pub const ClientSession = struct {
     allocator: std.mem.Allocator,
     transport: Transport,
@@ -91,6 +100,8 @@ pub const ClientSession = struct {
         _ = try self.handleKeyAction(key);
     }
 
+    /// Handles a key and performs the command/snapshot synchronization policy
+    /// required for interactive clients and unified mode.
     pub fn handleKeyInteraction(
         self: *ClientSession,
         key: []const u8,
@@ -172,6 +183,8 @@ pub const ClientSession = struct {
         try self.applySnapshotUpdate(try self.transport.readLatestSnapshot(self.allocator));
     }
 
+    /// Takes ownership of a freshly parsed SnapshotUpdate and makes it the
+    /// model's backing server state after local UI preservation succeeds.
     pub fn applySnapshotUpdate(self: *ClientSession, update: ipc.protocol.SnapshotUpdate) !void {
         var pending_update: ?ipc.protocol.SnapshotUpdate = update;
         errdefer if (pending_update) |*pending| pending.deinit();
@@ -185,6 +198,8 @@ pub const ClientSession = struct {
 
         try self.model.replaceSnapshotPreservingUI(new_snapshot_update.snapshot());
 
+        // Only release the old parsed arena after the model has moved to the new
+        // snapshot; the model borrows strings from whichever update is current.
         self.snapshot_update.deinit();
         self.allocator.destroy(self.snapshot_update);
         self.snapshot_update = new_snapshot_update;
@@ -220,6 +235,10 @@ pub const IpcTransport = struct {
         const client: *ipc.client.Client = @ptrCast(@alignCast(context));
         const request_id = try client.sendCommand(action, label);
         if (action == .switch_process) {
+            // The server publishes the selection snapshot before responding to
+            // switch commands; treating the send as success avoids a deadlock
+            // where the client waits for a response after intentionally
+            // skipping its own selection broadcast.
             return .{
                 .success = true,
                 .error_message = try allocator.dupe(u8, ""),

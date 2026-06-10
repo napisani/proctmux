@@ -1,3 +1,6 @@
+//! In-process Primary adapter for unified tests.
+//! Tests use this seam to exercise unified runtime behavior without spawning another proctmux binary.
+
 const std = @import("std");
 const primary = @import("../primary/root.zig");
 const tui = @import("../tui/root.zig");

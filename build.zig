@@ -1,3 +1,6 @@
+//! Build script for the shipped proctmux binary and test target.
+//! The build keeps vendored terminal dependencies wired in one place so runtime modules can import narrow adapters instead of knowing build-system details.
+
 const std = @import("std");
 
 const TerminalArtifact = enum {

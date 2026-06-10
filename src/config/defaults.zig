@@ -1,3 +1,6 @@
+//! Default Project Config values shared by config loading and tests.
+//! Defaults live separately from schema types so the schema can describe shape while this module describes proctmux's chosen behavior.
+
 const schema = @import("schema.zig");
 
 pub const banner =

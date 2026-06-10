@@ -1,3 +1,6 @@
+//! Generated starter configuration text.
+//! This module is data-heavy by design: the comments in the YAML template are user-facing documentation, not implementation guidance.
+
 pub fn content() []const u8 {
     return 
     \\# Proctmux Configuration File

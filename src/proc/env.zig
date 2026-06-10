@@ -1,6 +1,11 @@
+//! Environment construction for child processes and hooks.
+//! Parent environment inheritance, PATH augmentation, and per-process overrides are resolved here to keep spawn paths deterministic.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 
+/// Builds the child environment from parent process state plus process config.
+/// Configured env values override inherited values after PATH augmentation.
 pub fn buildMap(
     allocator: std.mem.Allocator,
     proc_cfg: *const config.schema.ProcessConfig,

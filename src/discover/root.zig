@@ -1,3 +1,6 @@
+//! Discovery namespace and shared result types.
+//! Callers depend on this module rather than individual discovery sources when merging discovered processes into Project Config.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 

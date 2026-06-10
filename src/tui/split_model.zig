@@ -1,3 +1,6 @@
+//! Unified-mode split layout model.
+//! This module owns focus and pane sizing decisions so unified rendering can stay declarative.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 
@@ -35,6 +38,8 @@ pub const InputSink = struct {
     }
 };
 
+/// Focus and pane-size state for unified mode. Layout decisions live here so
+/// renderers can ask for sizes instead of recalculating split policy.
 pub const Model = struct {
     orientation: Orientation,
     app_config: *const config.schema.Config,
@@ -107,6 +112,8 @@ pub const Model = struct {
         }
     }
 
+    /// Recomputes pane sizes from terminal dimensions. Invalid dimensions are
+    /// ignored because resize probes may fail transiently during startup.
     pub fn resize(self: *Model, width: i32, height: i32) !void {
         if (width <= 0 or height <= 0) return;
 

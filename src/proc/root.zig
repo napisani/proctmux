@@ -1,3 +1,6 @@
+//! Process subsystem namespace and tests.
+//! This module exposes the controller plus focused internals used by Primary Server and process lifecycle tests.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");

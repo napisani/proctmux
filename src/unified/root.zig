@@ -1,3 +1,6 @@
+//! Unified-mode namespace.
+//! Importers use this root for argument rewriting, child primary adapters, rendering, runtime loops, and server-output state.
+
 pub const args = @import("args.zig");
 pub const child_primary = @import("child_primary.zig");
 pub const in_process_primary = @import("in_process_primary.zig");

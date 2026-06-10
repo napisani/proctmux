@@ -1,9 +1,14 @@
+//! User-configured cleanup hook execution.
+//! Hooks are intentionally separate from normal child spawn so stop cleanup has its own timeout and environment behavior.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const env = @import("env.zig");
 
 const default_timeout_ms = 30_000;
 
+/// Runs the configured cleanup hook, if any, with the same environment/cwd
+/// semantics as the managed process but with an independent timeout.
 pub fn execute(
     allocator: std.mem.Allocator,
     proc_cfg: *const config.schema.ProcessConfig,

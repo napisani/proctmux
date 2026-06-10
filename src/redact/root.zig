@@ -1,3 +1,6 @@
+//! Redaction helpers for safe diagnostic output.
+//! This module mirrors Project Config and process views while replacing secret-bearing values before they are logged or displayed in tests.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");

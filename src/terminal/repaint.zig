@@ -1,3 +1,6 @@
+//! ANSI repaint control sequences.
+//! Centralizing these escape strings keeps renderers explicit about terminal-side effects without duplicating byte literals.
+
 pub const hide_cursor = "\x1b[?25l";
 pub const show_cursor = "\x1b[?25h";
 pub const begin_synchronized_update = "\x1b[?2026h";

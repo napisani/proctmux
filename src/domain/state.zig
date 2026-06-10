@@ -1,3 +1,6 @@
+//! Primary-owned application state.
+//! AppState maps Project Config into ordered Process records and selected-process state; live runtime status is derived from the Process Controller, not stored here.
+
 const std = @import("std");
 const config = @import("../config/root.zig");
 const process = @import("process.zig");
@@ -7,6 +10,8 @@ pub const Mode = enum {
     filter,
 };
 
+/// Primary-owned process catalog and selected process. Runtime status remains
+/// derived from ProcessController so AppState does not become stale.
 pub const AppState = struct {
     allocator: std.mem.Allocator,
     config: *config.schema.Config,
@@ -14,6 +19,8 @@ pub const AppState = struct {
     current_proc_id: process.ProcessId = .none,
     exiting: bool = false,
 
+    /// Builds deterministic process ids from sorted config labels so clients
+    /// can compare snapshots across updates without depending on map order.
     pub fn init(allocator: std.mem.Allocator, cfg: *config.schema.Config) !AppState {
         var app = AppState{
             .allocator = allocator,

@@ -1,3 +1,6 @@
+//! YAML-to-Project-Config loader.
+//! This module owns validation, string ownership transfer, and warning collection so callers receive a ready-to-default config without depending on YAML parse internals.
+
 const std = @import("std");
 const yaml_mod = @import("yaml");
 const schema = @import("schema.zig");
@@ -60,6 +63,8 @@ pub fn loadDefaultInDir(allocator: schema.Allocator, dir: std.fs.Dir) !LoadedCon
     return error.ConfigFileNotFound;
 }
 
+/// Parses YAML into an owned Project Config plus non-fatal warnings. Ownership
+/// transfer happens here so callers can deinit the result without YAML context.
 pub fn loadFromSlice(allocator: schema.Allocator, source: []const u8, source_path: []const u8) !LoadedConfig {
     const arena = try allocator.create(std.heap.ArenaAllocator);
     errdefer allocator.destroy(arena);

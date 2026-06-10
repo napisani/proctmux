@@ -1,7 +1,12 @@
+//! Bounded scrollback ring buffer with live readers.
+//! The buffer preserves recent process output and supports atomic snapshot+subscription so viewers do not lose bytes while switching processes.
+
 const std = @import("std");
 
 const max_reader_queue = 100;
 
+/// Result of atomically reading scrollback and registering for future output.
+/// The caller owns `snapshot` and later removes `reader_id`.
 pub const SnapshotSubscription = struct {
     snapshot: []u8,
     reader_id: usize,
@@ -41,6 +46,8 @@ const Reader = struct {
     }
 };
 
+/// Fixed-capacity byte history with non-blocking live-reader queues.
+/// Slow readers drop live chunks rather than blocking process output capture.
 pub const RingBuffer = struct {
     allocator: std.mem.Allocator,
     buf: []u8,
@@ -135,6 +142,8 @@ pub const RingBuffer = struct {
         return null;
     }
 
+    /// Captures historical bytes and registers a live reader under one lock so
+    /// switching viewers cannot miss bytes between the two operations.
     pub fn snapshotAndSubscribe(self: *RingBuffer, allocator: std.mem.Allocator) !SnapshotSubscription {
         self.mutex.lock();
         defer self.mutex.unlock();

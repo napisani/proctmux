@@ -1,3 +1,6 @@
+//! Stable Project Config hashing for socket identity.
+//! Only fields that should distinguish running proctmux instances participate, so clients and primaries agree on a Unix socket path for the same effective project.
+
 const std = @import("std");
 const schema = @import("schema.zig");
 
