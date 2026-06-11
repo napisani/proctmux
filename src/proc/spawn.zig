@@ -65,7 +65,6 @@ fn startPty(
         resolveTerminalCols(proc_cfg),
     );
     errdefer spawned.master.close();
-    try pty.configureRawMode(spawned.master);
 
     return .{
         .handle = .{ .pty = .{
@@ -107,7 +106,9 @@ fn startPipe(
 }
 
 fn shouldUsePipeProcess() bool {
-    return std.process.hasEnvVarConstant("PROCTMUX_EMBEDDED_PRIMARY");
+    // Unified mode still needs managed processes to see a real TTY and merged
+    // stdout/stderr; pipe mode is reserved for explicit diagnostics only.
+    return std.process.hasEnvVarConstant("PROCTMUX_FORCE_PIPE_PROCESS");
 }
 
 fn resolveTerminalRows(proc_cfg: *const config.schema.ProcessConfig) u16 {

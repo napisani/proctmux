@@ -55,6 +55,7 @@ pub fn spawn(
     if (pid < 0) return error.PtySpawnFailed;
 
     if (pid == 0) {
+        configureChildTerminal() catch {};
         if (cwd_z) |path| std.posix.chdirZ(path.ptr) catch std.process.exit(127);
         std.posix.execveZ(argv_z.ptrs[0].?, argv_z.ptrs.ptr, envp.ptr) catch {};
         std.process.exit(127);
@@ -66,28 +67,12 @@ pub fn spawn(
     };
 }
 
-/// Disables parent-side PTY processing; child-side terminal behavior remains
-/// available through the slave end.
-pub fn configureRawMode(file: std.fs.File) !void {
-    var raw = try std.posix.tcgetattr(file.handle);
-
-    raw.iflag.IGNBRK = false;
-    raw.iflag.BRKINT = false;
-    raw.iflag.PARMRK = false;
-    raw.iflag.ISTRIP = false;
-    raw.iflag.INLCR = false;
-    raw.iflag.IGNCR = false;
-    raw.iflag.IXON = false;
-    raw.lflag.ECHONL = false;
-    raw.lflag.ICANON = false;
-    raw.lflag.ISIG = false;
-    raw.lflag.IEXTEN = false;
-    raw.cflag.CSIZE = .CS8;
-    raw.cflag.PARENB = false;
-    raw.cc[@intFromEnum(std.c.V.MIN)] = 1;
-    raw.cc[@intFromEnum(std.c.V.TIME)] = 0;
-
-    try std.posix.tcsetattr(file.handle, .FLUSH, raw);
+fn configureChildTerminal() !void {
+    // Shell/readline programs depend on canonical-mode erase; normalize it to
+    // the DEL byte sent by xterm-compatible Backspace keys.
+    var term = try std.posix.tcgetattr(std.posix.STDIN_FILENO);
+    term.cc[@intFromEnum(std.c.V.ERASE)] = 0x7f;
+    try std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, term);
 }
 
 const ResolvedArgv = struct {

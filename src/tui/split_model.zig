@@ -286,8 +286,8 @@ pub fn terminalInputForKey(key: []const u8) ?[]const u8 {
     if (key.len == 1) return key;
     if (std.mem.eql(u8, key, "enter")) return "\n";
     if (std.mem.eql(u8, key, "tab")) return "\t";
-    if (std.mem.eql(u8, key, "backspace")) return "\x08";
-    if (std.mem.eql(u8, key, "delete")) return "\x7f";
+    if (std.mem.eql(u8, key, "backspace")) return "\x7f";
+    if (std.mem.eql(u8, key, "delete")) return "\x1b[3~";
     if (std.mem.eql(u8, key, "esc")) return "\x1b";
     if (std.mem.eql(u8, key, "up")) return "\x1b[A";
     if (std.mem.eql(u8, key, "down")) return "\x1b[B";
@@ -480,8 +480,10 @@ test "split model forwards server-focused keys as terminal input" {
     try model.handleKey("up");
     try model.handleKey("ctrl+up");
     try model.handleKey("ctrl+down");
+    try model.handleKey("backspace");
+    try model.handleKey("delete");
 
-    try std.testing.expectEqualStrings("\x1b[A\x1b[1;5A\x1b[1;5B", capture.bytes());
+    try std.testing.expectEqualStrings("\x1b[A\x1b[1;5A\x1b[1;5B\x7f\x1b[3~", capture.bytes());
 }
 
 test "split model forwards server-focused control keys as terminal input" {

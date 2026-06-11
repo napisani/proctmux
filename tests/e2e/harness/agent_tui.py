@@ -117,6 +117,37 @@ class AgentTuiRunner:
         self.sessions.append(session_id)
         return Session(self, session_id, cfg_dir, cfg_path)
 
+    def start_primary(
+        self,
+        name: str,
+        config: str,
+        *,
+        cols: int = 120,
+        rows: int = 40,
+        no_color: bool = True,
+    ) -> "Session":
+        cfg_dir, cfg_path = self.write_config(name, config)
+        args = [
+            "run",
+            "--json",
+            "--cwd",
+            str(cfg_dir),
+            "--cols",
+            str(cols),
+            "--rows",
+            str(rows),
+            "--env",
+            "TERM=xterm-256color",
+        ]
+        if no_color:
+            args.extend(["--env", "NO_COLOR=1"])
+        args.extend([str(PROCTMUX_BIN), "--", "start", "-f", str(cfg_path)])
+
+        result = self.agent_json(args, timeout=20)
+        session_id = str(result["session_id"])
+        self.sessions.append(session_id)
+        return Session(self, session_id, cfg_dir, cfg_path)
+
     def start_primary_client(
         self,
         name: str,

@@ -140,7 +140,7 @@ fn keyForByte(byte: u8, scratch: *[1]u8) ?[]const u8 {
         '\t' => return "tab",
         0x1b => return "esc",
         0x08 => return "backspace",
-        0x7f => return "delete",
+        0x7f => return "backspace",
         else => {},
     }
 
@@ -237,6 +237,10 @@ test "key input maps terminal control bytes" {
     try std.testing.expectEqual(@as(usize, 1), index);
 
     index = 0;
+    try std.testing.expectEqualStrings("backspace", keyForInput("\x7f", &index, &scratch).?);
+    try std.testing.expectEqual(@as(usize, 1), index);
+
+    index = 0;
     const ctrl_d = keyForInput("\x04", &index, &scratch);
     try std.testing.expect(ctrl_d != null);
     try std.testing.expectEqualStrings("ctrl+d", ctrl_d.?);
@@ -268,6 +272,10 @@ test "key input maps terminal navigation and function sequences" {
 
     index = 0;
     try std.testing.expectEqualStrings("insert", keyForInput("\x1b[2~", &index, &scratch).?);
+    try std.testing.expectEqual(@as(usize, 4), index);
+
+    index = 0;
+    try std.testing.expectEqualStrings("delete", keyForInput("\x1b[3~", &index, &scratch).?);
     try std.testing.expectEqual(@as(usize, 4), index);
 
     index = 0;
