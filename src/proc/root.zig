@@ -133,7 +133,10 @@ test "controller starts process captures output and stops it" {
 
     try std.testing.expect(!ctl.isRunning(id));
     try std.testing.expectEqual(domain.process.ProcessStatus.halted, ctl.getProcessStatus(id));
-    try std.testing.expectError(error.ProcessNotFound, ctl.getScrollback(std.testing.allocator, id));
+
+    const retained = try ctl.getScrollback(std.testing.allocator, id);
+    defer std.testing.allocator.free(retained);
+    try std.testing.expect(std.mem.indexOf(u8, retained, "ready") != null);
 }
 
 test "controller rejects duplicate starts and missing stops" {
@@ -209,7 +212,10 @@ test "controller cleanup skips on kill hook after natural exit" {
     try ctl.cleanupProcess(id);
 
     try std.testing.expectError(error.FileNotFound, tmp.dir.access("on_kill.txt", .{}));
-    try std.testing.expectError(error.ProcessNotFound, ctl.getScrollback(std.testing.allocator, id));
+
+    const retained = try ctl.getScrollback(std.testing.allocator, id);
+    defer std.testing.allocator.free(retained);
+    try std.testing.expect(std.mem.indexOf(u8, retained, "done") != null);
 }
 
 test "controller deinit skips on kill hook after natural exit" {
@@ -239,6 +245,42 @@ test "controller deinit skips on kill hook after natural exit" {
     }
 
     try std.testing.expectError(error.FileNotFound, tmp.dir.access("on_kill.txt", .{}));
+}
+
+test "controller clears retained scrollback when process starts again" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const cwd = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(cwd);
+
+    var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
+    defer proc_cfg.deinit(std.testing.allocator);
+    proc_cfg.cwd = cwd;
+    proc_cfg.stop_timeout_ms = 500;
+    proc_cfg.shell = "n=0; if [ -f restart-buffer-count.txt ]; then n=$(cat restart-buffer-count.txt); fi; n=$((n + 1)); printf '%s' \"$n\" > restart-buffer-count.txt; printf 'RESTART_BUFFER_%s\\n' \"$n\"; sleep 5";
+
+    var ctl = controller.Controller.init(std.testing.allocator, null);
+    defer ctl.deinit();
+
+    const id = domain.process.ProcessId.fromInt(9);
+    _ = try ctl.startProcess(id, &proc_cfg);
+    try waitForScrollbackContains(&ctl, id, "RESTART_BUFFER_1");
+    try ctl.stopProcess(id);
+
+    const first = try ctl.getScrollback(std.testing.allocator, id);
+    defer std.testing.allocator.free(first);
+    try std.testing.expect(std.mem.indexOf(u8, first, "RESTART_BUFFER_1") != null);
+
+    _ = try ctl.startProcess(id, &proc_cfg);
+    try waitForScrollbackContains(&ctl, id, "RESTART_BUFFER_2");
+
+    const second = try ctl.getScrollback(std.testing.allocator, id);
+    defer std.testing.allocator.free(second);
+    try std.testing.expect(std.mem.indexOf(u8, second, "RESTART_BUFFER_2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second, "RESTART_BUFFER_1") == null);
+
+    try ctl.stopProcess(id);
 }
 
 test "controller starts process in pty and forwards input" {

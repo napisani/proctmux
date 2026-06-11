@@ -1,5 +1,6 @@
 //! Mutable runtime record for one started process.
-//! An Instance ties together OS process handles, output capture state, scrollback, and cleanup ownership for a single launch.
+//! An Instance ties together OS process handles, output capture state, and cleanup ownership for a single launch.
+//! Scrollback storage is controller-owned so output survives after the process handle is released.
 
 const std = @import("std");
 const config = @import("../config/root.zig");
@@ -84,7 +85,7 @@ pub const Instance = struct {
     config: *const config.schema.ProcessConfig,
     command_spec: builder.CommandSpec,
     handle: ProcessHandle,
-    scrollback: ring.RingBuffer,
+    scrollback: *ring.RingBuffer,
     output_thread: ?std.Thread = null,
     wait_thread: ?std.Thread = null,
     mutex: std.Thread.Mutex = .{},
@@ -94,7 +95,6 @@ pub const Instance = struct {
         if (self.output_thread) |thread| thread.join();
         if (self.wait_thread) |thread| thread.join();
         self.handle.deinit();
-        self.scrollback.deinit();
         self.command_spec.deinit(self.allocator);
     }
 

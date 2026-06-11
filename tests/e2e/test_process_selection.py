@@ -34,6 +34,43 @@ def test_process_switch_to_stopped_shows_only_placeholder(app: ProctmuxApp) -> N
         expect_not_contains(snap, stopped_stale_tail, "stale running-process output remained after selecting stopped process")
 
 
+@pytest.mark.go_name("TestUnified_ProcessSwitchToStoppedPreviousRunShowsLastOutput")
+def test_process_switch_to_stopped_previous_run_shows_last_output(app: ProctmuxApp) -> None:
+    alpha_token = "RUNNING_WHILE_STOPPED_RESELECTED"
+    stopped_token = "STOPPED_PROCESS_LAST_OUTPUT"
+    with app.unified(
+        "switch-stopped-retained",
+        f"""
+        layout:
+          placeholder_banner: "IDLE BANNER"
+        log_file: proctmux.log
+        procs:
+          alpha-running:
+            shell: "printf '{alpha_token}\\n'; sleep 60"
+            autostart: true
+          beta-stopped:
+            shell: "printf '{stopped_token}\\n'; sleep 60"
+            autostart: false
+        """,
+    ) as tui:
+        tui.wait_until("process list", lambda snap: "alpha-running" in snap.text and "beta-stopped" in snap.text)
+        tui.wait_for_text(alpha_token)
+        tui.type("j")
+        tui.wait_for_text("IDLE BANNER")
+        tui.type("s")
+        tui.wait_for_text(stopped_token)
+        tui.type("x")
+        tui.wait_until(
+            "stopped process retained output",
+            lambda snap: "▶ ■ beta-stopped" in snap.client_text and stopped_token in snap.server_text,
+        )
+        tui.type("k")
+        tui.wait_for_text(alpha_token)
+        tui.type("j")
+        snap = tui.wait_for_text(stopped_token)
+        expect_not_contains(snap, "IDLE BANNER", "placeholder remained after selecting stopped process with retained output")
+
+
 @pytest.mark.go_name("TestUnified_ProcessSwitchRunningToRunningShowsOnlyActiveOutput")
 def test_process_switch_running_to_running_shows_only_active_output(app: ProctmuxApp) -> None:
     running_stale_tail = "RUNNING_STALE_SUFFIX_abcdefghijklmnopqrstuvwxyz"

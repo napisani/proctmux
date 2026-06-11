@@ -1,5 +1,5 @@
 //! Runtime Process Controller.
-//! The controller owns active process instances, scrollback buffers, stop escalation, cleanup hooks, and the narrow status adapter used by snapshots.
+//! The controller owns active process instances, retained scrollback buffers, stop escalation, cleanup hooks, and the narrow status adapter used by snapshots.
 
 const std = @import("std");
 const config = @import("../config/root.zig");
@@ -17,13 +17,14 @@ const default_stop_timeout_ms = 3000;
 
 pub const Instance = instance_mod.Instance;
 
-/// Owns currently running process instances. Callers interact through stable
-/// ProcessIds; all OS handles, scrollback, and cleanup hooks stay behind this
-/// Module's mutex-protected map.
+/// Owns currently running process instances plus per-process scrollback history.
+/// Callers interact through stable ProcessIds; OS handles, retained output, and
+/// cleanup hooks stay behind this Module's mutex-protected maps.
 pub const Controller = struct {
     allocator: std.mem.Allocator,
     global_config: ?*const config.schema.Config,
     processes: std.AutoHashMap(domain.process.ProcessId, *Instance),
+    scrollbacks: std.AutoHashMap(domain.process.ProcessId, *ring.RingBuffer),
     mutex: std.Thread.Mutex = .{},
 
     pub fn init(
@@ -34,6 +35,7 @@ pub const Controller = struct {
             .allocator = allocator,
             .global_config = global_config,
             .processes = std.AutoHashMap(domain.process.ProcessId, *Instance).init(allocator),
+            .scrollbacks = std.AutoHashMap(domain.process.ProcessId, *ring.RingBuffer).init(allocator),
         };
     }
 
@@ -52,6 +54,13 @@ pub const Controller = struct {
                 self.cleanupProcess(id) catch {};
             }
         }
+
+        var scrollback_it = self.scrollbacks.valueIterator();
+        while (scrollback_it.next()) |scrollback| {
+            scrollback.*.deinit();
+            self.allocator.destroy(scrollback.*);
+        }
+        self.scrollbacks.deinit();
         self.processes.deinit();
     }
 
@@ -66,6 +75,8 @@ pub const Controller = struct {
         defer self.mutex.unlock();
 
         if (self.processes.contains(id)) return error.ProcessAlreadyExists;
+        const scrollback = try self.scrollbackForStartLocked(id);
+        scrollback.clear();
 
         const command_spec = (try builder.buildCommand(self.allocator, proc_cfg, self.global_config)) orelse {
             return error.InvalidProcessConfig;
@@ -82,7 +93,6 @@ pub const Controller = struct {
         var instance = try self.allocator.create(Instance);
         errdefer self.allocator.destroy(instance);
 
-        const scrollback = try ring.RingBuffer.init(self.allocator, default_scrollback_capacity);
         instance.* = .{
             .allocator = self.allocator,
             .id = id,
@@ -194,8 +204,8 @@ pub const Controller = struct {
     }
 
     pub fn getScrollback(self: *Controller, allocator: std.mem.Allocator, id: domain.process.ProcessId) ![]u8 {
-        const instance = self.getInstance(id) orelse return error.ProcessNotFound;
-        return instance.scrollback.bytes(allocator);
+        const scrollback = self.getScrollbackBuffer(id) orelse return error.ProcessNotFound;
+        return scrollback.bytes(allocator);
     }
 
     pub fn sendBytes(self: *Controller, id: domain.process.ProcessId, bytes: []const u8) !void {
@@ -208,6 +218,24 @@ pub const Controller = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         return self.processes.get(id);
+    }
+
+    fn getScrollbackBuffer(self: *Controller, id: domain.process.ProcessId) ?*ring.RingBuffer {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.scrollbacks.get(id);
+    }
+
+    fn scrollbackForStartLocked(self: *Controller, id: domain.process.ProcessId) !*ring.RingBuffer {
+        if (self.scrollbacks.get(id)) |scrollback| return scrollback;
+
+        const scrollback = try self.allocator.create(ring.RingBuffer);
+        errdefer self.allocator.destroy(scrollback);
+        scrollback.* = try ring.RingBuffer.init(self.allocator, default_scrollback_capacity);
+        errdefer scrollback.deinit();
+
+        try self.scrollbacks.put(id, scrollback);
+        return scrollback;
     }
 };
 
