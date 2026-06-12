@@ -22,7 +22,9 @@ jobs:
         uses: cachix/install-nix-action@v31
 
       - name: Run release verification
-        run: nix develop --command make test-all
+        run: |
+          VERSION_NO_V=${GITHUB_REF_NAME#v}
+          nix develop --command make test-all BUILD_FLAGS="--global-cache-dir .zig-cache/global -Dversion=$VERSION_NO_V"
 
   # Build for multiple platforms
   build:
