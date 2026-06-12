@@ -18,14 +18,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
 
       - name: Run release verification
         run: |
           VERSION_NO_V=${GITHUB_REF_NAME#v}
-          nix shell github:NixOS/nixpkgs/d1c15b7d5806069da59e819999d70e1cec0760bf#zig_0_15 github:NixOS/nixpkgs/d1c15b7d5806069da59e819999d70e1cec0760bf#gnumake \
-            -c make test BUILD_FLAGS="--global-cache-dir .zig-cache/global -Dversion=$VERSION_NO_V"
+          make test BUILD_FLAGS="--global-cache-dir .zig-cache/global -Dversion=$VERSION_NO_V"
 
   # Build for multiple platforms
   build:
@@ -52,13 +53,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
 
       - name: Build binary
-        run: |
-          nix shell github:NixOS/nixpkgs/d1c15b7d5806069da59e819999d70e1cec0760bf#zig_0_15 github:NixOS/nixpkgs/d1c15b7d5806069da59e819999d70e1cec0760bf#gnumake \
-            -c make build-release-artifact TARGET=${{ matrix.target }} ARTIFACT_NAME=${{ matrix.artifact_name }} VERSION=${{ github.ref_name }}
+        run: make build-release-artifact TARGET=${{ matrix.target }} ARTIFACT_NAME=${{ matrix.artifact_name }} VERSION=${{ github.ref_name }}
 
       - name: Smoke test binary
         shell: bash
