@@ -97,14 +97,6 @@ fn addGhosttyVtModule(
         .tables_path = uucode_tables,
         .build_config_path = uucode_build_config,
     }).module("uucode");
-    const host_uucode = b.dependency("uucode", .{
-        .target = b.graph.host,
-        .optimize = .Debug,
-        .tables_path = uucode_tables,
-        .build_config_path = uucode_build_config,
-    }).module("uucode");
-
-    const unicode_tables = addGhosttyUnicodeTables(b, host_uucode);
     const terminal_options = addGhosttyTerminalOptions(b);
     const build_options = addGhosttyBuildOptions(b);
 
@@ -118,48 +110,12 @@ fn addGhosttyVtModule(
     vt.addOptions("terminal_options", terminal_options);
     vt.addOptions("build_options", build_options);
     vt.addAnonymousImport("unicode_tables", .{
-        .root_source_file = unicode_tables.props,
+        .root_source_file = b.path("third_party/libghostty-vt/src/unicode/generated/ghostty-unicode-props.zig"),
     });
     vt.addAnonymousImport("symbols_tables", .{
-        .root_source_file = unicode_tables.symbols,
+        .root_source_file = b.path("third_party/libghostty-vt/src/unicode/generated/ghostty-unicode-symbols.zig"),
     });
     return vt;
-}
-
-fn addGhosttyUnicodeTables(
-    b: *std.Build,
-    host_uucode: *std.Build.Module,
-) struct {
-    props: std.Build.LazyPath,
-    symbols: std.Build.LazyPath,
-} {
-    const props_exe = b.addExecutable(.{
-        .name = "ghostty-props-unigen",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("third_party/libghostty-vt/src/unicode/props_uucode.zig"),
-            .target = b.graph.host,
-            .optimize = .Debug,
-        }),
-    });
-    props_exe.root_module.addImport("uucode", host_uucode);
-
-    const symbols_exe = b.addExecutable(.{
-        .name = "ghostty-symbols-unigen",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("third_party/libghostty-vt/src/unicode/symbols_uucode.zig"),
-            .target = b.graph.host,
-            .optimize = .Debug,
-        }),
-    });
-    symbols_exe.root_module.addImport("uucode", host_uucode);
-
-    const props_run = b.addRunArtifact(props_exe);
-    const symbols_run = b.addRunArtifact(symbols_exe);
-    const files = b.addWriteFiles();
-    return .{
-        .props = files.addCopyFile(props_run.captureStdOut(), "ghostty-unicode-props.zig"),
-        .symbols = files.addCopyFile(symbols_run.captureStdOut(), "ghostty-unicode-symbols.zig"),
-    };
 }
 
 fn addGhosttyTerminalOptions(b: *std.Build) *std.Build.Step.Options {
