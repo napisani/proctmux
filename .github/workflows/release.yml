@@ -10,28 +10,10 @@ on:
       - 'v*'
 
 jobs:
-  # Run tests first
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
-
-      - name: Run release verification
-        run: |
-          VERSION_NO_V=${GITHUB_REF_NAME#v}
-          make test BUILD_FLAGS="--global-cache-dir .zig-cache/global -Dversion=$VERSION_NO_V"
-
-  # Build for multiple platforms
+  # Build for multiple platforms. Local release-create runs the full unit/e2e
+  # gate before pushing tags; CI focuses on reproducible artifacts and smoke tests.
   build:
     name: Build Artifacts
-    needs: test
     strategy:
       matrix:
         include:
