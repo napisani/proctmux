@@ -1,26 +1,26 @@
 class Proctmux < Formula
   desc "Terminal process manager with interactive TUI"
   homepage "https://github.com/napisani/proctmux"
-  version "0.1.9"
+  version "0.2.6"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/napisani/proctmux/releases/download/v#{version}/proctmux-darwin-arm64.tar.gz"
-      sha256 "5c76e57f2d6debdad35abfdc13106ba27f347c25f6ae43c1a79d3392e897d220"
+      sha256 "4ef261d6157679a5fee6c83afb457c36f4c732e81e07aa62b15da53cf973843a"
     else
       url "https://github.com/napisani/proctmux/releases/download/v#{version}/proctmux-darwin-amd64.tar.gz"
-      sha256 "07f2b58e9e636c7676960d471b0159bddb4ccc5e4fc24beb9a2400b02ac9ba0d"
+      sha256 "8ccfc30a096a52cef98899a57c231e306e8d8d0e2bc4ae12e0f8887cbeca1a25"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
       url "https://github.com/napisani/proctmux/releases/download/v#{version}/proctmux-linux-arm64.tar.gz"
-      sha256 "04fc88c04d2cc9928e4b6f15e26c39b55c85abf867761ce2d4a9417046e4e684"
+      sha256 "db4b67451f5fccc3daa42795af39406b1a3cf5679a68867be54657646596fc0e"
     else
       url "https://github.com/napisani/proctmux/releases/download/v#{version}/proctmux-linux-amd64.tar.gz"
-      sha256 "4fa73d562ab8e2eedf8caed6791332af4d926387e764c87033000010665f115a"
+      sha256 "79189bc517b774d7b563490b8a46593f6b58afe89752760368acdabd1fb87375"
     end
   end
 
