@@ -1,0 +1,185 @@
+general:
+  kill_existing_session: true
+layout:
+  # hide or show the window second from the bottom that shows the full command name and the description
+  hide_process_description_panel: true 
+  # hide the process list when focus moves to the output pane in unified mode
+  hide_process_list_when_unfocused: true
+  # the prompt_toolkit width of the sidebar (containing all the process names)
+  processes_list_width: 31
+  # whether to sort the process list alphabetically
+  sort_process_list_alpha: false 
+
+  # whether to sort the process list with running processes first 
+  sort_process_list_running_first: true
+  # whether to show debug infomration in the process list itself 
+  enable_debug_process_info: false 
+style:
+  #foreground color of the process in the process list when it is selected
+  selected_process_color: 'ansiblack'
+  #background color of the process in the process list when it is selected
+  selected_process_bg_color: 'ansimagenta'
+  #foregroud color of the process in the process list when it is not selected
+  unselected_process_color: 'ansiblue'
+  #foregroud color of the process list status when the status is RUNNING
+  status_running_color: 'ansigreen'
+  #foregroud color of the process list status when the status is STOPPED
+  status_stopped_color: 'ansired'
+  #the color of the right panel (terminal panel) when no terminal is created/selected yet
+  placeholder_terminal_bg_color: '#1a1b26'
+  #character used to indicate the current selection
+  pointer_char: '▶'
+  #override default style classes
+  #https://github.com/prompt-toolkit/python-prompt-toolkit/blob/master/src/prompt_toolkit/styles/defaults.py
+  style_classes:
+    cursor-line: 'underline'
+  #one of: monochrome | ansicolors | 256colors | truecolors
+  color_level: 'truecolors'
+keybinding:
+  # a map of app actions to their respective key bindings.
+  # each key combo in an action list is an alias for the same action.
+  # IE up is fired when 'j' or the 'up arrow' is pressed
+  # All modifiers for a keybinding should be included in the same list element IE: switch focus - 'c-w' (Control-W)
+  quit:
+    - q
+  filter:
+    - /
+  submit_filter:
+    - enter
+  start:
+    - s
+  stop:
+    - x
+  up:
+    - up
+    - k
+  down:
+    - down
+    - j
+  toggle_running:
+    - 'R'
+  toggle_help:
+    - '?'
+  focus_server:
+    - 'ctrl+s'
+  focus_client:
+    - 'ctrl+a'
+shell_cmd:
+  # this is the command used for all 'procs' that are defined with a 'shell' property.
+  # by default the configured "$SHELL" environment variable will be used.
+  - '/bin/bash'
+  - '-c'
+
+# if this property is defined, the app will log all debug, info, error level logs to the designated file
+enable_mouse: true
+procs:
+  "test ansi":
+    shell: "while true; do echo -e '\\033[31mRed\\033[0m \\033[32mGreen\\033[0m \\033[33mYellow\\033[0m \\033[34mBlue\\033[0m'; sleep 1; done"
+    autostart: true
+    description: 'Test ANSI color codes'
+    terminal_rows: 24
+    terminal_cols: 80
+  "test on-kill":
+    shell: "echo 'Process running...' && sleep 60"
+    autostart: false
+    description: 'Test on-kill command functionality'
+    on_kill:
+      - '/bin/bash'
+      - '-c'
+      - 'echo "ON-KILL TRIGGERED at $(date)" >> /tmp/on-kill-test.log'
+  "tail log":
+    shell: "tail -f /tmp/proctmux.log"
+    autostart: false
+    description: 'tail the app log'
+    meta_tags:
+      - 'follow'
+      - '-f'
+    categories:
+      - 'echo'
+
+  "interactive name":
+    shell: "echo 'Hello, what is your name?' && read name && echo \"Nice to meet you, $name!\""
+    autostart: false
+    description: 'Interactive prompt that asks for your name and greets you'
+    categories:
+      - 'interactive'
+      - 'echo'
+
+  "print envs":
+    shell: "echo $SOME_TEST"
+    description: 'this command will print env vars that are configured in the child pid'
+    docs: |
+      <b>echo an env var set in the child pid</b>
+      <style fg="ansigreen">first an env var is set in the child pid</style>
+      <style fg="ansiblue">then the var is printed</style>
+    # environment variables before the command/shell is invoked
+    env:
+      SOME_TEST: "AAAAAA"
+    categories:
+      - 'environment'
+      - 'context'
+      - 'echo'
+  "vim":
+    shell: "vim"
+    autostart: false
+    autofocus: true
+    description: 'start vim'
+  "long running print":
+    shell: "echo 'some text here' && sleep 3 && echo 'still running'  && sleep 3 && echo 'final text'"
+    autostart: true 
+    description: 'print a using sleeps in between'
+    categories:
+      - 'echo'
+  "print1-10":
+    shell: "for i in {1..10}; do echo $i; sleep 3; done"
+    autostart: false
+    description: 'print numbers 1 to 10 with a sleep in between'
+    categories:
+      - 'echo'
+  "print colors":
+    shell: "./print_colors.sh"
+    # used to change the directory that the command/process is started from
+    cwd: "/Users/nick/code/procmux-tui"
+    autostart: false
+    description: 'test terminal colors'
+    meta_tags:
+      - 'scheme'
+      - 'rgb'
+  "just echo":
+    # an example of using a specific CMD list instead of a shell string
+    cmd:
+      - '/bin/bash'
+      - '-c'
+      - 'echo "DONE!"'
+    autostart: false
+    description: 'run using cmd property'
+    categories:
+      - 'echo'
+  "interpolation":
+    shell: "echo '<first_echo:some default>' && echo '<second_echo>'"
+    autostart: false 
+    description: 'test interpolation'
+ 
+  "fast output":
+    shell: "for i in $(seq 1 5000); do echo \"[$(date +%H:%M:%S.%N)] line $i: the quick brown fox jumps over the lazy dog\"; done; echo '--- done ---'; sleep 600"
+    autostart: false
+    description: 'Rapid stdout to test terminal flashing fix'
+    categories:
+      - 'diagnostic'
+
+  "intentional failure":
+    cmd:
+      - "/bin/bash"
+      - "-c"
+      - "echo 'triggering failure' >&2; exit 1"
+    autostart: false
+    description: 'intentional failure to surface error messages'
+    categories:
+      - 'diagnostic'
+      - 'error'
+
+signal_server:
+
+  enable: true
+log_file: "/tmp/proctmux.log"
+stdout_debug_log_file: "/tmp/proctmux_stdout.log"

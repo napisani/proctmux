@@ -1,0 +1,13 @@
+target/
+.worktrees/
+.zig-cache/
+zig-out/
+*.swp
+.swn
+.swl
+.swm
+.swo
+bin/
+./result
+__pycache__/
+.understand-anything/
