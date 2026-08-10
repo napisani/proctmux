@@ -2,7 +2,7 @@
   description = "Flake for developing zig-yaml";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-24.11";
     flake-utils.url = "github:numtide/flake-utils";
     zig.url = "github:mitchellh/zig-overlay";
     zls.url = "github:zigtools/zls/f91b2e1e305e5d5bd3725aea90f9f9bfb3dce055";
