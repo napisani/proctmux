@@ -1,0 +1,137 @@
+name: Release
+
+permissions:
+  contents: write
+
+# Trigger on any tag push (e.g., v1.0.0, v1.2.3, etc.)
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  # Build for multiple platforms. Local release-create runs the full unit/e2e
+  # gate before pushing tags; CI focuses on reproducible artifacts and smoke tests.
+  build:
+    name: Build Artifacts
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-linux-gnu
+            artifact_name: proctmux-linux-amd64
+          - os: ubuntu-24.04-arm
+            target: aarch64-linux-gnu
+            artifact_name: proctmux-linux-arm64
+          - os: macos-15-intel
+            target: x86_64-macos
+            artifact_name: proctmux-darwin-amd64
+          - os: macos-15
+            target: aarch64-macos
+            artifact_name: proctmux-darwin-arm64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build binary
+        run: make build-release-artifact TARGET=${{ matrix.target }} ARTIFACT_NAME=${{ matrix.artifact_name }} VERSION=${{ github.ref_name }}
+
+      - name: Smoke test binary
+        shell: bash
+        run: |
+          expected="proctmux ${GITHUB_REF_NAME#v}"
+          actual="$(bin/${{ matrix.artifact_name }} --version)"
+          if [ "$actual" != "$expected" ]; then
+            echo "expected: $expected" >&2
+            echo "actual:   $actual" >&2
+            exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: bin/${{ matrix.artifact_name }}
+          retention-days: 1
+
+  # Create GitHub release and upload artifacts
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create tarball archives (for Unix platforms)
+        run: |
+          cd artifacts
+          for dir in proctmux-*; do
+            if [ -d "$dir" ]; then
+              tar -czf "${dir}.tar.gz" -C "$dir" .
+            fi
+          done
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          ## What's New
+
+          Release ${{ github.ref_name }}
+
+          This is the first release backed by the Zig implementation. Install
+          paths, binary names, and package names are unchanged.
+
+          ### Installation
+
+          Download the appropriate binary for your platform below:
+
+          - **Linux (amd64)**: `proctmux-linux-amd64.tar.gz`
+          - **Linux (arm64)**: `proctmux-linux-arm64.tar.gz`
+          - **macOS (Intel)**: `proctmux-darwin-amd64.tar.gz`
+          - **macOS (Apple Silicon)**: `proctmux-darwin-arm64.tar.gz`
+
+          **Note:** proctmux is designed for Unix-like systems (Linux, macOS, BSD). Windows is not currently supported.
+
+          ### Quick Start
+
+          ```bash
+          # Extract the archive
+          tar -xzf proctmux-*.tar.gz
+
+          # Make executable
+          chmod +x proctmux-*
+
+          # Run
+          ./proctmux-*
+          ```
+
+          See the [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full documentation.
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/proctmux-linux-amd64.tar.gz
+            artifacts/proctmux-linux-arm64.tar.gz
+            artifacts/proctmux-darwin-amd64.tar.gz
+            artifacts/proctmux-darwin-arm64.tar.gz
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

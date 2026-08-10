@@ -1,0 +1,5 @@
+general:
+  procs_from_make_targets: "unterminated
+procs:
+  demo:
+    shell: "sleep 1"

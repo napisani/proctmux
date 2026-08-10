@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "agent-tui": {
+      "source": "pproenca/agent-tui",
+      "sourceType": "github",
+      "skillPath": "skills/agent-tui/SKILL.md",
+      "computedHash": "51918c47355b93c0aa51e90e2e5eb2d15a6f2578d4890229c5832e883705802e"
+    },
+    "tui-design": {
+      "source": "hyperb1iss/hyperskills",
+      "sourceType": "github",
+      "skillPath": "skills/tui-design/SKILL.md",
+      "computedHash": "92b969f3473842ee731e0c7a5c571e3b89e5dac7da81be5e635e1715b0084e6e"
+    },
+    "zig-best-practices": {
+      "source": "0xbigboss/claude-code",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/zig-best-practices/SKILL.md",
+      "computedHash": "2066ad212238ab5b8216db478fb19e54e3ed2b2837e0d438e86ba0f717bb0d67"
+    }
+  }
+}

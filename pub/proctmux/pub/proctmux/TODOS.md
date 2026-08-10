@@ -1,0 +1,3 @@
+- bolster the api interface so that external pickers can be implemented
+- neovim picker support
+- unified mode with hidden process list
