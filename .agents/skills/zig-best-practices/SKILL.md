@@ -5,7 +5,7 @@ description: Use when reading or writing Zig files (.zig, build.zig, build.zig.z
 
 # Zig Best Practices
 
-Follows type-first, functional, and error handling patterns from CLAUDE.md. This skill covers Zig-specific idioms only.
+Follows type-first, functional, and error handling patterns from AGENTS.md. This skill covers Zig-specific idioms only.
 
 ## Type System Patterns
 
