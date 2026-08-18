@@ -4,12 +4,12 @@
 const std = @import("std");
 const config = @import("../config/root.zig");
 
+/// The controller's real adapter only ever distinguishes `running`/`halted`
+/// (see `proc/controller.zig`'s `getProcessStatus`); do not add more states
+/// here without a producer that actually emits them.
 pub const ProcessStatus = enum(u8) {
-    unknown = 0,
     running = 1,
-    halting = 2,
     halted = 3,
-    exited = 4,
 };
 
 /// Stable domain identifier assigned from sorted Project Config order. `none`
@@ -38,10 +38,7 @@ pub fn processIdFromIndex(index: usize) ProcessId {
 pub fn statusName(status: ProcessStatus) []const u8 {
     return switch (status) {
         .running => "Running",
-        .halting => "Halting",
         .halted => "Halted",
-        .exited => "Exited",
-        .unknown => "Unknown",
     };
 }
 

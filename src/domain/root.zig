@@ -20,10 +20,7 @@ test {
 
 test "status names match public status strings" {
     try std.testing.expectEqualStrings("Running", process.statusName(.running));
-    try std.testing.expectEqualStrings("Halting", process.statusName(.halting));
     try std.testing.expectEqualStrings("Halted", process.statusName(.halted));
-    try std.testing.expectEqualStrings("Exited", process.statusName(.exited));
-    try std.testing.expectEqualStrings("Unknown", process.statusName(.unknown));
 }
 
 test "process command prefers shell and quotes cmd args like legacy behavior" {

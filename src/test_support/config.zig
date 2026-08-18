@@ -30,7 +30,7 @@ pub fn standardRenderViews(cfg: *config.schema.Config) [3]domain.process.Process
     return .{
         .{ .id = domain.process.ProcessId.fromInt(1), .label = "alpha-api", .status = .halted, .pid = -1, .config = cfg.procs.getPtr("alpha-api").? },
         .{ .id = domain.process.ProcessId.fromInt(2), .label = "beta-worker", .status = .running, .pid = 1234, .config = cfg.procs.getPtr("beta-worker").? },
-        .{ .id = domain.process.ProcessId.fromInt(3), .label = "gamma-db", .status = .exited, .pid = -1, .config = cfg.procs.getPtr("gamma-db").? },
+        .{ .id = domain.process.ProcessId.fromInt(3), .label = "gamma-db", .status = .halted, .pid = -1, .config = cfg.procs.getPtr("gamma-db").? },
     };
 }
 

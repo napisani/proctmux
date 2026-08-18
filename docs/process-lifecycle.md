@@ -109,8 +109,8 @@ Process status is defined in `src/domain/process.zig`:
 |---|---|
 | `Running` | Process has a valid OS process handle and is executing. |
 | `Halted` | Process is not running -- either never started, was stopped, or has exited. |
-| `Halting` | Transitional state while a stop is in progress. |
-| `Exited` | Defined in the enum but not currently distinguished from `Halted` by the controller. |
+
+The enum previously also defined `Halting`, `Exited`, and `Unknown` states, but no controller ever produced them, so they were removed. Add a state back here only once a producer actually needs to distinguish it from `Halted`.
 
 State is **derived live** from the `ProcessController` each time it is queried (`src/proc/controller.zig`). There is no stored status field -- the controller checks whether the process instance is still running. State is recomputed and broadcast to clients after every start, stop, or restart operation.
 

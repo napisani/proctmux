@@ -345,8 +345,7 @@ fn appendWrappedBulletLine(out: *std.array_list.Managed(u8), text: []const u8, w
 fn statusMarker(status: domain.process.ProcessStatus) []const u8 {
     return switch (status) {
         .running => "●",
-        .halting => "◐",
-        .halted, .exited, .unknown => "■",
+        .halted => "■",
     };
 }
 
@@ -457,8 +456,7 @@ fn appendHelpOverlayLiteralLine(
 fn statusMarkerColor(style: *const domain.client_snapshot.UiStyleConfig, status: domain.process.ProcessStatus) []const u8 {
     return switch (status) {
         .running => style.status_running_color,
-        .halting => style.status_halting_color,
-        .halted, .exited, .unknown => style.status_stopped_color,
+        .halted => style.status_stopped_color,
     };
 }
 

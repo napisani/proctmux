@@ -210,10 +210,7 @@ fn activeProcessStatus(model: *const tui.client_model.ClientModel) ?domain.proce
 fn statusText(status: domain.process.ProcessStatus) []const u8 {
     return switch (status) {
         .running => "running",
-        .halting => "halting",
         .halted => "halted",
-        .exited => "exited",
-        .unknown => "unknown",
     };
 }
 
