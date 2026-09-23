@@ -2,6 +2,7 @@
 //! All wire DTOs, version checks, encode/decode functions, and Process Command semantics live here so IPC schema changes have one test surface.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const domain = @import("../domain/root.zig");
 
 pub const current_protocol_version: u32 = 1;
@@ -275,7 +276,7 @@ pub fn deinitCommandRequest(allocator: std.mem.Allocator, request: CommandReques
 fn jsonLine(allocator: std.mem.Allocator, value: anytype) EncodeError![]const u8 {
     var out = std.array_list.Managed(u8).init(allocator);
     errdefer out.deinit();
-    try out.writer().print("{f}\n", .{std.json.fmt(value, .{ .emit_null_optional_fields = false })});
+    try platform.appendPrint(&out, "{f}\n", .{std.json.fmt(value, .{ .emit_null_optional_fields = false })});
     return out.toOwnedSlice();
 }
 

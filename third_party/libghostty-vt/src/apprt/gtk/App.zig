@@ -13,6 +13,8 @@ const CoreApp = @import("../../App.zig");
 const Application = @import("class/application.zig").Application;
 const Surface = @import("Surface.zig");
 const ipcNewWindow = @import("ipc/new_window.zig").newWindow;
+const ipcNewTab = @import("ipc/new_tab.zig").newTab;
+const ipcToggleQuickTerminal = @import("ipc/toggle_quick_terminal.zig").toggleQuickTerminal;
 
 const log = std.log.scoped(.gtk);
 
@@ -84,6 +86,8 @@ pub fn performIpc(
 ) !bool {
     switch (action) {
         .new_window => return try ipcNewWindow(alloc, target, value),
+        .new_tab => return try ipcNewTab(alloc, target, value),
+        .toggle_quick_terminal => return try ipcToggleQuickTerminal(alloc, target),
     }
 }
 

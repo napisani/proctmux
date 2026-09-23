@@ -2,6 +2,7 @@
 //! This module owns the fork/exec boundary and child reaping so higher layers can reason in Process IDs and Instances.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 const builder = @import("builder.zig");
 const instance_mod = @import("instance.zig");
@@ -32,7 +33,7 @@ pub fn start(
     allocator: std.mem.Allocator,
     proc_cfg: *const config.schema.ProcessConfig,
     command_spec: builder.CommandSpec,
-    env_map: *std.process.EnvMap,
+    env_map: *std.process.Environ.Map,
 ) !Started {
     return if (shouldUsePipeProcess())
         try startPipe(allocator, proc_cfg, command_spec, env_map)
@@ -54,7 +55,7 @@ fn startPty(
     allocator: std.mem.Allocator,
     proc_cfg: *const config.schema.ProcessConfig,
     command_spec: builder.CommandSpec,
-    env_map: *const std.process.EnvMap,
+    env_map: *const std.process.Environ.Map,
 ) !Started {
     const spawned = try pty.spawn(
         allocator,
@@ -78,17 +79,19 @@ fn startPipe(
     allocator: std.mem.Allocator,
     proc_cfg: *const config.schema.ProcessConfig,
     command_spec: builder.CommandSpec,
-    env_map: *std.process.EnvMap,
+    env_map: *const std.process.Environ.Map,
 ) !Started {
-    var child = std.process.Child.init(command_spec.argv, allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.pgid = 0;
-    if (proc_cfg.cwd.len > 0) child.cwd = proc_cfg.cwd;
-    child.env_map = env_map;
-    try child.spawn();
-    errdefer _ = child.kill() catch null;
+    _ = allocator;
+    var child = try std.process.spawn(platform.io(), .{
+        .argv = command_spec.argv,
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .ignore,
+        .pgid = 0,
+        .cwd = if (proc_cfg.cwd.len > 0) .{ .path = proc_cfg.cwd } else .inherit,
+        .environ_map = env_map,
+    });
+    errdefer child.kill(platform.io());
 
     const stdin = child.stdin.?;
     child.stdin = null;
@@ -97,7 +100,7 @@ fn startPipe(
 
     return .{
         .handle = .{ .pipe = .{
-            .pid = @intCast(child.id),
+            .pid = @intCast(child.id.?),
             .child = child,
             .stdin = stdin,
             .stdout = stdout,
@@ -108,7 +111,7 @@ fn startPipe(
 fn shouldUsePipeProcess() bool {
     // Unified mode still needs managed processes to see a real TTY and merged
     // stdout/stderr; pipe mode is reserved for explicit diagnostics only.
-    return std.process.hasEnvVarConstant("PROCTMUX_FORCE_PIPE_PROCESS");
+    return platform.hasEnvVar("PROCTMUX_FORCE_PIPE_PROCESS");
 }
 
 fn resolveTerminalRows(proc_cfg: *const config.schema.ProcessConfig) u16 {

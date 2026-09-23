@@ -2,6 +2,7 @@
 //! Only fields that should distinguish running proctmux instances participate, so clients and primaries agree on a Unix socket path for the same effective project.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const schema = @import("schema.zig");
 
 pub fn toHash(allocator: schema.Allocator, cfg: *const schema.Config) ![]const u8 {
@@ -101,13 +102,13 @@ fn writeBool(buf: *std.array_list.Managed(u8), key: []const u8, value: bool) !vo
 }
 
 fn writeInt(buf: *std.array_list.Managed(u8), key: []const u8, value: i32) !void {
-    try buf.writer().print("{s}={}\n", .{ key, value });
+    try platform.appendPrint(buf, "{s}={}\n", .{ key, value });
 }
 
 fn writeStringList(buf: *std.array_list.Managed(u8), key: []const u8, list: schema.StringList) !void {
-    try buf.writer().print("{s}#len={}\n", .{ key, list.items.len });
+    try platform.appendPrint(buf, "{s}#len={}\n", .{ key, list.items.len });
     for (list.items, 0..) |item, i| {
-        try buf.writer().print("{s}[{}]#len={}: {s}\n", .{ key, i, item.len, item });
+        try platform.appendPrint(buf, "{s}[{}]#len={}: {s}\n", .{ key, i, item.len, item });
     }
 }
 
@@ -119,9 +120,9 @@ fn writeStringMap(allocator: schema.Allocator, buf: *std.array_list.Managed(u8),
     while (it.next()) |entry| : (index += 1) keys[index] = entry.key_ptr.*;
     std.mem.sort([]const u8, keys, {}, lessThanString);
 
-    try buf.writer().print("{s}#len={}\n", .{ key, keys.len });
+    try platform.appendPrint(buf, "{s}#len={}\n", .{ key, keys.len });
     for (keys) |map_key| {
-        try buf.writer().print("{s}.{s}={s}\n", .{ key, map_key, map.get(map_key).? });
+        try platform.appendPrint(buf, "{s}.{s}={s}\n", .{ key, map_key, map.get(map_key).? });
     }
 }
 

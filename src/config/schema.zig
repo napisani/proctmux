@@ -17,8 +17,68 @@ pub const Warning = struct {
 };
 
 pub const StringList = std.array_list.Managed([]const u8);
-pub const StringMap = std.StringArrayHashMap([]const u8);
-pub const ProcessMap = std.StringArrayHashMap(ProcessConfig);
+pub const StringMap = ManagedStringMap([]const u8);
+pub const ProcessMap = ManagedStringMap(ProcessConfig);
+
+fn ManagedStringMap(comptime Value: type) type {
+    const Unmanaged = std.StringArrayHashMapUnmanaged(Value);
+
+    return struct {
+        allocator: Allocator,
+        unmanaged: Unmanaged = .empty,
+
+        const Self = @This();
+
+        pub fn init(allocator: Allocator) Self {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.unmanaged.deinit(self.allocator);
+            self.* = undefined;
+        }
+
+        pub fn count(self: Self) usize {
+            return self.unmanaged.count();
+        }
+
+        pub fn get(self: Self, key: []const u8) ?Value {
+            return self.unmanaged.get(key);
+        }
+
+        pub fn getPtr(self: *Self, key: []const u8) ?*Value {
+            return self.unmanaged.getPtr(key);
+        }
+
+        pub fn contains(self: Self, key: []const u8) bool {
+            return self.unmanaged.contains(key);
+        }
+
+        pub fn put(self: *Self, key: []const u8, value: Value) !void {
+            return self.unmanaged.put(self.allocator, key, value);
+        }
+
+        pub fn getOrPut(self: *Self, key: []const u8) !Unmanaged.GetOrPutResult {
+            return self.unmanaged.getOrPut(self.allocator, key);
+        }
+
+        pub fn remove(self: *Self, key: []const u8) bool {
+            return self.unmanaged.swapRemove(key);
+        }
+
+        pub fn iterator(self: Self) Unmanaged.Iterator {
+            return self.unmanaged.iterator();
+        }
+
+        pub fn keyIterator(self: Self) Unmanaged.KeyIterator {
+            return self.unmanaged.keyIterator();
+        }
+
+        pub fn valueIterator(self: Self) Unmanaged.ValueIterator {
+            return self.unmanaged.valueIterator();
+        }
+    };
+}
 
 pub const KeybindingConfig = struct {
     quit: StringList,

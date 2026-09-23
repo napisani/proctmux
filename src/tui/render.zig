@@ -2,6 +2,7 @@
 //! Rendering reads ClientModel state and emits terminal text/ANSI styles without owning process lifecycle or IPC behavior.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
 const test_ansi = @import("../test_support/ansi.zig");
@@ -51,7 +52,7 @@ pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_mode
             try out.appendSlice(summary.label);
             try out.appendSlice(" [");
             try out.appendSlice(domain.process.statusName(summary.status));
-            try out.writer().print("] PID:{}", .{summary.pid});
+            try platform.appendPrint(&out, "] PID:{}", .{summary.pid});
             if (summary.categories.len > 0) {
                 try out.appendSlice(" [");
                 for (summary.categories, 0..) |category, category_index| {
@@ -72,9 +73,9 @@ pub fn renderProcessList(allocator: std.mem.Allocator, model: *const client_mode
 fn appendProcessHeader(out: *std.array_list.Managed(u8), model: *const client_model.ClientModel) !void {
     if (!model.show_panel_headers) return;
 
-    try out.writer().print("Processes {}/{}", .{ model.visibleCount(), model.processCount() });
+    try platform.appendPrint(out, "Processes {}/{}", .{ model.visibleCount(), model.processCount() });
     if (model.show_only_running) try out.appendSlice("  running only");
-    if (model.filterText().len > 0) try out.writer().print("  filter: {s}", .{model.filterText()});
+    if (model.filterText().len > 0) try platform.appendPrint(out, "  filter: {s}", .{model.filterText()});
     try out.append('\n');
 }
 
@@ -128,7 +129,7 @@ fn renderedLineCount(text: []const u8) usize {
 fn appendMessagesPanel(out: *std.array_list.Managed(u8), model: *const client_model.ClientModel) !void {
     if (model.messageCount() == 0) return;
 
-    const now_ms = std.time.milliTimestamp();
+    const now_ms = platform.milliTimestamp();
     const visible_count = countVisibleMessages(model, now_ms);
     if (visible_count == 0) return;
 
@@ -306,7 +307,7 @@ fn appendWrapped(out: *std.array_list.Managed(u8), text: []const u8, width: usiz
         try out.appendSlice(std.mem.trim(u8, remaining[0..break_at], " "));
         first_line = false;
 
-        remaining = std.mem.trimLeft(u8, remaining[break_at..], " ");
+        remaining = std.mem.trimStart(u8, remaining[break_at..], " ");
     }
 
     if (remaining.len > 0) {
@@ -358,7 +359,7 @@ fn appendStatusMarker(
     const color = statusMarkerColor(style, status);
     if (colors_enabled) {
         if (ansiForegroundCode(color)) |code| {
-            try out.writer().print("\x1b[{}m{s}\x1b[0m", .{ code, statusMarker(status) });
+            try platform.appendPrint(out, "\x1b[{}m{s}\x1b[0m", .{ code, statusMarker(status) });
             return;
         }
     }
@@ -961,7 +962,7 @@ test "process list renderer hides expired messages before pruning" {
     var model = try client_model.ClientModel.init(std.testing.allocator, snapshot.view());
     defer model.deinit();
 
-    try model.addMessageAt("expired message", std.time.milliTimestamp() - client_model.message_timeout_ms - 1);
+    try model.addMessageAt("expired message", platform.milliTimestamp() - client_model.message_timeout_ms - 1);
 
     const rendered = try renderProcessList(std.testing.allocator, &model);
     defer std.testing.allocator.free(rendered);

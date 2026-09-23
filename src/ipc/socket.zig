@@ -2,6 +2,7 @@
 //! The socket hash is derived from Project Config so clients find the right Primary Server without a global registry or user-supplied port.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 
 pub fn pathForConfig(allocator: std.mem.Allocator, cfg: *const config.schema.Config) ![]const u8 {
@@ -17,7 +18,7 @@ pub fn createPathForConfig(allocator: std.mem.Allocator, cfg: *const config.sche
     const path = try pathForConfig(allocator, cfg);
     errdefer allocator.free(path);
 
-    std.fs.deleteFileAbsolute(path) catch |err| switch (err) {
+    platform.fs.deleteFileAbsolute(path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
@@ -31,7 +32,7 @@ pub fn getPathForConfig(allocator: std.mem.Allocator, cfg: *const config.schema.
     const path = try pathForConfig(allocator, cfg);
     errdefer allocator.free(path);
 
-    try std.fs.accessAbsolute(path, .{});
+    try platform.fs.accessAbsolute(path, .{});
     try probePath(path);
 
     return path;
@@ -48,11 +49,11 @@ pub fn waitPathForConfig(allocator: std.mem.Allocator, cfg: *const config.schema
 }
 
 pub fn waitPath(path: []const u8, total_ms: u64, poll_ms: u64) !void {
-    const start = std.time.milliTimestamp();
+    const start = platform.milliTimestamp();
     const deadline = start + @as(i64, @intCast(total_ms));
 
-    while (std.time.milliTimestamp() < deadline) {
-        std.fs.accessAbsolute(path, .{}) catch {
+    while (platform.milliTimestamp() < deadline) {
+        platform.fs.accessAbsolute(path, .{}) catch {
             sleepMs(poll_ms);
             continue;
         };
@@ -68,10 +69,10 @@ pub fn waitPath(path: []const u8, total_ms: u64, poll_ms: u64) !void {
 }
 
 pub fn probePath(path: []const u8) !void {
-    var stream = try std.net.connectUnixSocket(path);
+    var stream = try platform.net.connectUnixSocket(path);
     defer stream.close();
 }
 
 fn sleepMs(ms: u64) void {
-    std.Thread.sleep(ms * std.time.ns_per_ms);
+    platform.sleepNanoseconds(ms * std.time.ns_per_ms);
 }

@@ -2,6 +2,7 @@
 //! Unified mode depends on this wrapper instead of coupling render logic directly to the external terminal-emulator API.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const vt = @import("ghostty-vt");
 
 pub const Terminal = struct {
@@ -19,10 +20,10 @@ pub const Terminal = struct {
         errdefer allocator.destroy(inner);
 
         inner.render_state = .empty;
-        inner.terminal = try vt.Terminal.init(allocator, .{
+        inner.terminal = try vt.Terminal.init(platform.io(), allocator, .{
             .cols = @intCast(@max(cols, 1)),
             .rows = @intCast(@max(rows, 1)),
-            .max_scrollback = 10_000,
+            .max_scrollback_lines = 10_000,
         });
         errdefer inner.terminal.deinit(allocator);
 
@@ -42,11 +43,10 @@ pub const Terminal = struct {
     }
 
     pub fn resize(self: *Terminal, cols: u16, rows: u16) !void {
-        try self.inner.terminal.resize(
-            self.allocator,
-            @intCast(@max(cols, 1)),
-            @intCast(@max(rows, 1)),
-        );
+        try self.inner.terminal.resize(self.allocator, .{
+            .cols = @intCast(@max(cols, 1)),
+            .rows = @intCast(@max(rows, 1)),
+        });
     }
 
     pub fn write(self: *Terminal, bytes: []const u8) !void {
@@ -128,10 +128,10 @@ fn appendRenderedRow(out: *std.array_list.Managed(u8), cells: std.MultiArrayList
             continue;
         }
 
-        try out.writer().print("{u}", .{cp});
+        try platform.appendPrint(out, "{u}", .{cp});
         if (raw.hasGrapheme()) {
             for (graphemes[index]) |grapheme_cp| {
-                try out.writer().print("{u}", .{grapheme_cp});
+                try platform.appendPrint(out, "{u}", .{grapheme_cp});
             }
         }
     }
@@ -141,7 +141,7 @@ fn appendRenderedRow(out: *std.array_list.Managed(u8), cells: std.MultiArrayList
 
 fn styleForCell(raw: anytype, styles: []const vt.Style, index: usize) vt.Style {
     return switch (raw.content_tag) {
-        .bg_color_palette => .{ .bg_color = .{ .palette = raw.content.color_palette } },
+        .bg_color_palette => .{ .bg_color = .{ .palette = raw.content.color_palette.data } },
         .bg_color_rgb => .{ .bg_color = .{ .rgb = .{
             .r = raw.content.color_rgb.r,
             .g = raw.content.color_rgb.g,
@@ -199,7 +199,7 @@ fn appendPaletteColor(out: *std.array_list.Managed(u8), idx: u8, target: ColorTa
     switch (target) {
         .foreground => try appendPaletteSgr(out, idx, 30, 90, 38),
         .background => try appendPaletteSgr(out, idx, 40, 100, 48),
-        .underline => try out.writer().print("\x1b[58;5;{}m", .{idx}),
+        .underline => try platform.appendPrint(out, "\x1b[58;5;{}m", .{idx}),
     }
 }
 
@@ -215,7 +215,7 @@ fn appendPaletteSgr(
     } else if (idx < 16) {
         try appendSgr(out, bright_base + idx - 8);
     } else {
-        try out.writer().print("\x1b[{};5;{}m", .{ extended_prefix, idx });
+        try platform.appendPrint(out, "\x1b[{};5;{}m", .{ extended_prefix, idx });
     }
 }
 
@@ -225,11 +225,11 @@ fn appendRgbColor(out: *std.array_list.Managed(u8), rgb: anytype, target: ColorT
         .background => 48,
         .underline => 58,
     };
-    try out.writer().print("\x1b[{};2;{};{};{}m", .{ prefix, rgb.r, rgb.g, rgb.b });
+    try platform.appendPrint(out, "\x1b[{};2;{};{};{}m", .{ prefix, rgb.r, rgb.g, rgb.b });
 }
 
 fn appendSgr(out: *std.array_list.Managed(u8), code: u8) !void {
-    try out.writer().print("\x1b[{}m", .{code});
+    try platform.appendPrint(out, "\x1b[{}m", .{code});
 }
 
 test "ghostty vt renders plain text" {

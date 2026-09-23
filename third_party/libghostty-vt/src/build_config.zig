@@ -37,8 +37,8 @@ pub const ExeEntrypoint = enum {
     ghostty,
 };
 
-pub const version: std.SemanticVersion = .{ .major = 0, .minor = 1, .patch = 0 };
-pub const version_string = "0.1.0";
+pub const version: std.SemanticVersion = .{ .major = 0, .minor = 1, .patch = 0, .pre = "dev" };
+pub const version_string = "0.1.0-dev";
 pub const release_channel: ReleaseChannel = .tip;
 pub const mode_string = @tagName(@import("builtin").mode);
 pub const artifact: Artifact = .lib;

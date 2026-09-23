@@ -33,12 +33,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       - name: Build binary
         run: make build-release-artifact TARGET=${{ matrix.target }} ARTIFACT_NAME=${{ matrix.artifact_name }} VERSION=${{ github.ref_name }}
@@ -55,7 +55,7 @@ jobs:
           fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: bin/${{ matrix.artifact_name }}
@@ -68,10 +68,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 

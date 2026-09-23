@@ -2,6 +2,7 @@
 //! This module concentrates protocol fixtures, fake command handlers, fake snapshot providers, and small socket servers used across IPC and command tests.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const domain = @import("../domain/root.zig");
 const line_io = @import("../ipc/line.zig");
 const protocol = @import("../ipc/protocol.zig");
@@ -148,7 +149,7 @@ pub const CommandCapture = struct {
     }
 };
 
-pub fn runResponseCaptureServer(listener: *std.net.Server, capture: *CommandCapture) void {
+pub fn runResponseCaptureServer(listener: *platform.net.Server, capture: *CommandCapture) void {
     const conn = listener.accept() catch |err| {
         capture.err = err;
         return;
@@ -167,7 +168,7 @@ pub fn runResponseCaptureServer(listener: *std.net.Server, capture: *CommandCapt
 }
 
 pub fn runSnapshotLineServer(
-    listener: *std.net.Server,
+    listener: *platform.net.Server,
     result: *ServerErrorCapture,
     line: []const u8,
     count: usize,
@@ -184,28 +185,28 @@ pub fn runSnapshotLineServer(
 }
 
 pub fn unblockServer(path: []const u8) void {
-    var stream = std.net.connectUnixSocket(path) catch return;
+    var stream = platform.net.connectUnixSocket(path) catch return;
     stream.close();
 }
 
 pub fn waitForSocketFile(path: []const u8) void {
     var attempts: usize = 0;
     while (attempts < 200) : (attempts += 1) {
-        std.fs.accessAbsolute(path, .{}) catch {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+        platform.fs.accessAbsolute(path, .{}) catch {
+            platform.sleepNanoseconds(5 * std.time.ns_per_ms);
             continue;
         };
         return;
     }
 }
 
-pub fn readLine(allocator: std.mem.Allocator, stream: std.net.Stream) ![]const u8 {
+pub fn readLine(allocator: std.mem.Allocator, stream: platform.net.Stream) ![]const u8 {
     return line_io.read(allocator, stream, 1024 * 1024);
 }
 
 pub fn readLineTimeout(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: platform.net.Stream,
     timeout_ms: i32,
 ) ![]const u8 {
     return line_io.readTimeout(allocator, stream, 1024 * 1024, timeout_ms);

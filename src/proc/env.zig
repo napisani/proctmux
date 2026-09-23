@@ -2,6 +2,7 @@
 //! Parent environment inheritance, PATH augmentation, and per-process overrides are resolved here to keep spawn paths deterministic.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 
 /// Builds the child environment from parent process state plus process config.
@@ -9,8 +10,8 @@ const config = @import("../config/root.zig");
 pub fn buildMap(
     allocator: std.mem.Allocator,
     proc_cfg: *const config.schema.ProcessConfig,
-) !std.process.EnvMap {
-    var env_map = try std.process.getEnvMap(allocator);
+) !std.process.Environ.Map {
+    var env_map = try platform.currentEnvironmentMap(allocator);
     errdefer env_map.deinit();
 
     if (proc_cfg.add_path.items.len > 0) {

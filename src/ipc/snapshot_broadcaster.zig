@@ -2,6 +2,7 @@
 //! This module concentrates client worker threads, publish ordering, requester exclusion, write timeouts, dedupe, and reaping so `ipc.server` stays focused on sockets.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const interfaces = @import("interfaces.zig");
 const line_io = @import("line.zig");
 const protocol = @import("protocol.zig");
@@ -22,8 +23,8 @@ pub const Broadcaster = struct {
     clients: std.array_list.Managed(*SnapshotClient),
     workers: std.array_list.Managed(ClientWorker),
     snapshot_monitor_thread: ?std.Thread = null,
-    clients_mutex: std.Thread.Mutex = .{},
-    snapshot_broadcast_mutex: std.Thread.Mutex = .{},
+    clients_mutex: std.Io.Mutex = .init,
+    snapshot_broadcast_mutex: std.Io.Mutex = .init,
     last_broadcast_snapshot_line: ?[]const u8 = null,
 
     pub fn init(
@@ -70,27 +71,27 @@ pub const Broadcaster = struct {
     /// Takes ownership of an accepted stream and serves it on a worker thread.
     /// Finished workers are reaped opportunistically to keep short-lived signal
     /// clients from accumulating until server shutdown.
-    pub fn addClient(self: *Broadcaster, stream: std.net.Stream) !void {
+    pub fn addClient(self: *Broadcaster, stream: platform.net.Stream) !void {
         var stream_owned = true;
         errdefer if (stream_owned) stream.close();
 
         self.reapFinishedClients();
         try self.workers.ensureUnusedCapacity(1);
-        self.clients_mutex.lock();
+        self.clients_mutex.lockUncancelable(platform.io());
         self.clients.ensureUnusedCapacity(1) catch |err| {
-            self.clients_mutex.unlock();
+            self.clients_mutex.unlock(platform.io());
             return err;
         };
-        self.clients_mutex.unlock();
+        self.clients_mutex.unlock(platform.io());
 
         const client = try self.allocator.create(SnapshotClient);
         errdefer self.allocator.destroy(client);
         client.* = .{ .stream = stream };
         stream_owned = false;
 
-        self.clients_mutex.lock();
+        self.clients_mutex.lockUncancelable(platform.io());
         self.clients.appendAssumeCapacity(client);
-        self.clients_mutex.unlock();
+        self.clients_mutex.unlock(platform.io());
 
         // Register the client before the worker starts so a fast initial
         // snapshot write can still participate in shutdown and broadcast cleanup.
@@ -106,8 +107,8 @@ pub const Broadcaster = struct {
     }
 
     fn removeClient(self: *Broadcaster, client: *SnapshotClient) void {
-        self.clients_mutex.lock();
-        defer self.clients_mutex.unlock();
+        self.clients_mutex.lockUncancelable(platform.io());
+        defer self.clients_mutex.unlock(platform.io());
         for (self.clients.items, 0..) |item, index| {
             if (item == client) {
                 _ = self.clients.swapRemove(index);
@@ -138,8 +139,8 @@ pub const Broadcaster = struct {
     /// Closes client streams to unblock readers/writers during server shutdown.
     /// Worker joining remains in `deinit` so callers do not block accept-loop exit.
     pub fn closeAllClients(self: *Broadcaster) void {
-        self.clients_mutex.lock();
-        defer self.clients_mutex.unlock();
+        self.clients_mutex.lockUncancelable(platform.io());
+        defer self.clients_mutex.unlock(platform.io());
         for (self.clients.items) |client| client.close();
     }
 
@@ -157,8 +158,8 @@ pub const Broadcaster = struct {
 
             const is_switch = request.action == .switch_process;
             var snapshot_broadcast_locked = is_switch;
-            if (snapshot_broadcast_locked) self.snapshot_broadcast_mutex.lock();
-            defer if (snapshot_broadcast_locked) self.snapshot_broadcast_mutex.unlock();
+            if (snapshot_broadcast_locked) self.snapshot_broadcast_mutex.lockUncancelable(platform.io());
+            defer if (snapshot_broadcast_locked) self.snapshot_broadcast_mutex.unlock(platform.io());
 
             var response = try self.handler.handleCommand(self.allocator, request);
             defer response.deinit(self.allocator);
@@ -168,7 +169,7 @@ pub const Broadcaster = struct {
 
             if (is_switch) {
                 if (response.success) try self.publishCommandSnapshotExceptLocked(client);
-                self.snapshot_broadcast_mutex.unlock();
+                self.snapshot_broadcast_mutex.unlock(platform.io());
                 snapshot_broadcast_locked = false;
             }
 
@@ -184,8 +185,8 @@ pub const Broadcaster = struct {
         // Successful Process Commands publish the current Snapshot even when it is
         // byte-for-byte unchanged; the monitor uses the remembered line only to
         // avoid echoing that same Snapshot again on its next polling tick.
-        self.snapshot_broadcast_mutex.lock();
-        defer self.snapshot_broadcast_mutex.unlock();
+        self.snapshot_broadcast_mutex.lockUncancelable(platform.io());
+        defer self.snapshot_broadcast_mutex.unlock(platform.io());
 
         const line = try self.snapshot_provider.snapshotLine(self.allocator);
         defer self.allocator.free(line);
@@ -194,8 +195,8 @@ pub const Broadcaster = struct {
     }
 
     fn publishCommandSnapshotExcept(self: *Broadcaster, excluded: *SnapshotClient) !void {
-        self.snapshot_broadcast_mutex.lock();
-        defer self.snapshot_broadcast_mutex.unlock();
+        self.snapshot_broadcast_mutex.lockUncancelable(platform.io());
+        defer self.snapshot_broadcast_mutex.unlock(platform.io());
         try self.publishCommandSnapshotExceptLocked(excluded);
     }
 
@@ -217,8 +218,8 @@ pub const Broadcaster = struct {
     }
 
     fn writeSnapshotLineToClientsExcept(self: *Broadcaster, line: []const u8, excluded: ?*SnapshotClient) !void {
-        self.clients_mutex.lock();
-        defer self.clients_mutex.unlock();
+        self.clients_mutex.lockUncancelable(platform.io());
+        defer self.clients_mutex.unlock(platform.io());
         for (self.clients.items) |client| {
             if (excluded) |skip| {
                 if (client == skip) continue;
@@ -232,10 +233,10 @@ pub const Broadcaster = struct {
 
     fn monitorSnapshotChanges(self: *Broadcaster) !void {
         while (!self.stopped.load(.seq_cst)) {
-            std.Thread.sleep(50 * std.time.ns_per_ms);
+            platform.sleepNanoseconds(50 * std.time.ns_per_ms);
 
-            self.snapshot_broadcast_mutex.lock();
-            defer self.snapshot_broadcast_mutex.unlock();
+            self.snapshot_broadcast_mutex.lockUncancelable(platform.io());
+            defer self.snapshot_broadcast_mutex.unlock(platform.io());
 
             const line = try self.snapshot_provider.snapshotLine(self.allocator);
             defer self.allocator.free(line);
@@ -257,8 +258,8 @@ const ClientWorker = struct {
 };
 
 const SnapshotClient = struct {
-    stream: std.net.Stream,
-    write_mutex: std.Thread.Mutex = .{},
+    stream: platform.net.Stream,
+    write_mutex: std.Io.Mutex = .init,
     closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     finished: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     write_timeout_ms: u64 = default_client_write_timeout_ms,
@@ -268,8 +269,8 @@ const SnapshotClient = struct {
     }
 
     fn writeAll(self: *SnapshotClient, bytes: []const u8) !void {
-        self.write_mutex.lock();
-        defer self.write_mutex.unlock();
+        self.write_mutex.lockUncancelable(platform.io());
+        defer self.write_mutex.unlock(platform.io());
         if (self.closed.load(.seq_cst)) return error.EndOfStream;
         writeAllWithTimeout(self.stream, bytes, self.write_timeout_ms) catch |err| {
             self.close();
@@ -292,7 +293,7 @@ fn handleSnapshotClient(server: *Broadcaster, client: *SnapshotClient) void {
     client.finished.store(true, .seq_cst);
 }
 
-fn writeAllWithTimeout(stream: std.net.Stream, bytes: []const u8, timeout_ms: u64) !void {
+fn writeAllWithTimeout(stream: platform.net.Stream, bytes: []const u8, timeout_ms: u64) !void {
     try setStreamWriteTimeoutMs(stream, timeout_ms);
 
     var index: usize = 0;
@@ -306,7 +307,7 @@ fn writeAllWithTimeout(stream: std.net.Stream, bytes: []const u8, timeout_ms: u6
     }
 }
 
-fn setStreamWriteTimeoutMs(stream: std.net.Stream, timeout_ms: u64) !void {
+fn setStreamWriteTimeoutMs(stream: platform.net.Stream, timeout_ms: u64) !void {
     const tv = std.posix.timeval{
         .sec = @intCast(timeout_ms / 1000),
         .usec = @intCast((timeout_ms % 1000) * 1000),
@@ -337,9 +338,9 @@ test "snapshot client write times out and closes slow reader" {
     defer std.testing.allocator.free(payload);
     @memset(payload, 'x');
 
-    const started = std.time.milliTimestamp();
+    const started = platform.milliTimestamp();
     try std.testing.expectError(error.WriteTimeout, client.writeAll(payload));
-    const elapsed_ms = std.time.milliTimestamp() - started;
+    const elapsed_ms = platform.milliTimestamp() - started;
 
     try std.testing.expect(elapsed_ms < 1000);
     try std.testing.expect(client.closed.load(.seq_cst));
@@ -505,12 +506,12 @@ fn waitForOnlyWorkerFinished(broadcaster: *Broadcaster) !void {
     while (attempts < 200) : (attempts += 1) {
         if (broadcaster.workers.items.len == 1 and
             broadcaster.workers.items[0].client.finished.load(.seq_cst)) return;
-        std.Thread.sleep(5 * std.time.ns_per_ms);
+        platform.sleepNanoseconds(5 * std.time.ns_per_ms);
     }
     return error.WorkerDidNotFinish;
 }
 
-fn testSocketPair() ![2]std.net.Stream {
+fn testSocketPair() ![2]platform.net.Stream {
     var fds: [2]std.c.fd_t = undefined;
     const rc = std.c.socketpair(
         @intCast(std.posix.AF.UNIX),

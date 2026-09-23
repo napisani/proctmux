@@ -2,33 +2,34 @@
 //! This command writes the commented starter config and intentionally avoids runtime discovery or validation side effects.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 
 const default_output_path = "proctmux.yaml";
 
 pub fn run(args: []const []const u8) ![]const u8 {
-    return runInDir(std.fs.cwd(), args);
+    return runInDir(platform.fs.cwd(), args);
 }
 
-pub fn runInDir(dir: std.fs.Dir, args: []const []const u8) ![]const u8 {
+pub fn runInDir(dir: platform.fs.Dir, args: []const []const u8) ![]const u8 {
     const output_path = try parseOutputPath(args);
 
-    if (std.fs.path.dirname(output_path)) |parent| {
+    if (platform.fs.path.dirname(output_path)) |parent| {
         if (!std.mem.eql(u8, parent, ".") and parent.len > 0) {
-            try dir.makePath(parent);
+            try dir.createDirPath(platform.io(), parent);
         }
     }
 
-    dir.access(output_path, .{}) catch |err| switch (err) {
+    dir.access(platform.io(), output_path, .{}) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
     if (exists(dir, output_path)) return error.FileAlreadyExists;
 
-    try dir.writeFile(.{
+    try dir.writeFile(platform.io(), .{
         .sub_path = output_path,
         .data = config.template.content(),
-        .flags = .{ .exclusive = true, .mode = 0o644 },
+        .flags = .{ .exclusive = true, .permissions = .fromMode(0o644) },
     });
 
     return output_path;
@@ -43,8 +44,8 @@ fn parseOutputPath(args: []const []const u8) ![]const u8 {
     return default_output_path;
 }
 
-fn exists(dir: std.fs.Dir, path: []const u8) bool {
-    dir.access(path, .{}) catch |err| switch (err) {
+fn exists(dir: platform.fs.Dir, path: []const u8) bool {
+    dir.access(platform.io(), path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return false,
     };
@@ -58,7 +59,7 @@ test "config-init writes default proctmux yaml" {
     const created = try runInDir(tmp.dir, &.{"config-init"});
     try std.testing.expectEqualStrings("proctmux.yaml", created);
 
-    const contents = try tmp.dir.readFileAlloc(std.testing.allocator, "proctmux.yaml", 1024 * 1024);
+    const contents = try tmp.dir.readFileAlloc(platform.io(), "proctmux.yaml", std.testing.allocator, .limited(1024 * 1024));
     defer std.testing.allocator.free(contents);
     try std.testing.expect(std.mem.indexOf(u8, contents, "# Proctmux Configuration File") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "shell_cmd:") != null);
@@ -71,7 +72,7 @@ test "config-init writes requested nested path" {
     const created = try runInDir(tmp.dir, &.{ "config-init", "nested/proctmux.yaml" });
     try std.testing.expectEqualStrings("nested/proctmux.yaml", created);
 
-    const contents = try tmp.dir.readFileAlloc(std.testing.allocator, "nested/proctmux.yaml", 1024 * 1024);
+    const contents = try tmp.dir.readFileAlloc(platform.io(), "nested/proctmux.yaml", std.testing.allocator, .limited(1024 * 1024));
     defer std.testing.allocator.free(contents);
     try std.testing.expect(std.mem.indexOf(u8, contents, "procs:") != null);
 }
@@ -80,7 +81,7 @@ test "config-init refuses overwrite empty path and extra args" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{ .sub_path = "exists.yaml", .data = "already here" });
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "exists.yaml", .data = "already here" });
 
     try std.testing.expectError(error.FileAlreadyExists, runInDir(tmp.dir, &.{ "config-init", "exists.yaml" }));
     try std.testing.expectError(error.EmptyOutputPath, runInDir(tmp.dir, &.{ "config-init", "" }));
@@ -92,7 +93,7 @@ test "config-init generated yaml loads through active config parser" {
     defer tmp.cleanup();
 
     _ = try runInDir(tmp.dir, &.{"config-init"});
-    const contents = try tmp.dir.readFileAlloc(std.testing.allocator, "proctmux.yaml", 1024 * 1024);
+    const contents = try tmp.dir.readFileAlloc(platform.io(), "proctmux.yaml", std.testing.allocator, .limited(1024 * 1024));
     defer std.testing.allocator.free(contents);
 
     var loaded = try config.load.loadFromSlice(std.testing.allocator, contents, "proctmux.yaml");

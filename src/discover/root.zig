@@ -3,10 +3,17 @@
 
 const std = @import("std");
 const config = @import("../config/root.zig");
+const source = @import("source.zig");
 
+pub const Source = source.Source;
 pub const makefile = @import("makefile.zig");
 pub const package_json = @import("package_json.zig");
 pub const apply_mod = @import("apply.zig");
+
+pub const builtin_sources = [_]Source{
+    .{ .name = "Makefile", .enabled = makefile.enabled, .discover = makefile.discover },
+    .{ .name = "package.json", .enabled = package_json.enabled, .discover = package_json.discover },
+};
 
 test {
     _ = makefile;
@@ -71,18 +78,16 @@ test "manager command construction matches legacy behavior" {
     try std.testing.expectEqualStrings("npm run dev", npm);
 }
 
-test "discovery apply merges enabled sources and preserves manual process" {
+test "discovery applies registered sources and preserves manual process" {
     var cfg = config.schema.Config.empty(std.testing.allocator);
     defer cfg.deinit();
-    cfg.general.procs_from_make_targets = true;
-    cfg.general.procs_from_package_json = true;
 
     var manual = config.schema.ProcessConfig.empty(std.testing.allocator);
     manual.shell = "make build";
     manual.description = "custom";
     try cfg.procs.put(try std.testing.allocator.dupe(u8, "make:build"), manual);
 
-    try apply_mod.apply(std.testing.allocator, &cfg, "testdata/phase2/discovery");
+    try apply_mod.applyAll(std.testing.allocator, &cfg, "testdata/phase2/discovery", &builtin_sources);
 
     try std.testing.expectEqualStrings("custom", cfg.procs.get("make:build").?.description);
     try std.testing.expect(cfg.procs.get("make:test") != null);
@@ -90,10 +95,42 @@ test "discovery apply merges enabled sources and preserves manual process" {
     try std.testing.expect(cfg.procs.get("pnpm:build") != null);
 }
 
-test "discovery apply respects disabled sources" {
+fn alwaysEnabled(general: *const config.schema.GeneralConfig) bool {
+    _ = general;
+    return true;
+}
+
+fn injectedSource(allocator: std.mem.Allocator, cwd: []const u8) !config.schema.ProcessMap {
+    _ = cwd;
+    var procs = config.schema.ProcessMap.init(allocator);
+    var proc = config.schema.ProcessConfig.empty(allocator);
+    proc.owns_scalar_strings = true;
+    proc.shell = try allocator.dupe(u8, "echo injected");
+    try procs.put(try allocator.dupe(u8, "injected"), proc);
+    return procs;
+}
+
+fn alwaysDisabled(general: *const config.schema.GeneralConfig) bool {
+    _ = general;
+    return false;
+}
+
+test "enabled discovery application skips disabled sources" {
     var cfg = config.schema.Config.empty(std.testing.allocator);
     defer cfg.deinit();
 
-    try apply_mod.apply(std.testing.allocator, &cfg, "testdata/phase2/discovery");
+    const sources = [_]Source{.{ .name = "test", .enabled = alwaysDisabled, .discover = injectedSource }};
+    try apply_mod.applyEnabled(std.testing.allocator, &cfg, "testdata/phase2/config", &sources);
+
     try std.testing.expectEqual(@as(usize, 0), cfg.procs.count());
+}
+
+test "discovery accepts an injected source without coordinator changes" {
+    var cfg = config.schema.Config.empty(std.testing.allocator);
+    defer cfg.deinit();
+
+    const sources = [_]Source{.{ .name = "test", .enabled = alwaysEnabled, .discover = injectedSource }};
+    try apply_mod.applyAll(std.testing.allocator, &cfg, "testdata/phase2/config", &sources);
+
+    try std.testing.expect(cfg.procs.contains("injected"));
 }

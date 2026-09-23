@@ -8,6 +8,11 @@ const TerminalArtifact = enum {
     lib,
 };
 
+const GhosttyUnicodeTables = struct {
+    props: std.Build.LazyPath,
+    symbols: std.Build.LazyPath,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -22,7 +27,8 @@ pub fn build(b: *std.Build) void {
         "Filter for Zig unit tests",
     ) orelse &[0][]const u8{};
 
-    const yaml_dep = b.dependency("yaml", .{
+    const yaml_module = b.createModule(.{
+        .root_source_file = b.path("third_party/zig-yaml/src/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -35,7 +41,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    exe_module.addImport("yaml", yaml_dep.module("yaml"));
+    exe_module.addImport("yaml", yaml_module);
     exe_module.addImport("ghostty-vt", ghostty_vt);
     exe_module.addOptions("version_options", version_options);
 
@@ -61,7 +67,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    test_module.addImport("yaml", yaml_dep.module("yaml"));
+    test_module.addImport("yaml", yaml_module);
     test_module.addImport("ghostty-vt", ghostty_vt);
     test_module.addOptions("version_options", version_options);
 
@@ -97,6 +103,7 @@ fn addGhosttyVtModule(
         .tables_path = uucode_tables,
         .build_config_path = uucode_build_config,
     }).module("uucode");
+    const unicode_tables = addGhosttyUnicodeTables(b, uucode_tables, uucode_build_config);
     const terminal_options = addGhosttyTerminalOptions(b);
     const build_options = addGhosttyBuildOptions(b);
 
@@ -110,12 +117,56 @@ fn addGhosttyVtModule(
     vt.addOptions("terminal_options", terminal_options);
     vt.addOptions("build_options", build_options);
     vt.addAnonymousImport("unicode_tables", .{
-        .root_source_file = b.path("third_party/libghostty-vt/src/unicode/generated/ghostty-unicode-props.zig"),
+        .root_source_file = unicode_tables.props,
     });
     vt.addAnonymousImport("symbols_tables", .{
-        .root_source_file = b.path("third_party/libghostty-vt/src/unicode/generated/ghostty-unicode-symbols.zig"),
+        .root_source_file = unicode_tables.symbols,
     });
     return vt;
+}
+
+fn addGhosttyUnicodeTables(
+    b: *std.Build,
+    uucode_tables: std.Build.LazyPath,
+    uucode_build_config: std.Build.LazyPath,
+) GhosttyUnicodeTables {
+    const host_uucode = b.dependency("uucode", .{
+        .target = b.graph.host,
+        .tables_path = uucode_tables,
+        .build_config_path = uucode_build_config,
+    }).module("uucode");
+
+    const props = b.addExecutable(.{
+        .name = "ghostty-props-unigen",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("third_party/libghostty-vt/src/unicode/props_uucode.zig"),
+            .target = b.graph.host,
+        }),
+        .use_llvm = true,
+    });
+    props.root_module.addImport("uucode", host_uucode);
+
+    const symbols = b.addExecutable(.{
+        .name = "ghostty-symbols-unigen",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("third_party/libghostty-vt/src/unicode/symbols_uucode.zig"),
+            .target = b.graph.host,
+        }),
+        .use_llvm = true,
+    });
+    symbols.root_module.addImport("uucode", host_uucode);
+
+    const generated = b.addWriteFiles();
+    return .{
+        .props = generated.addCopyFile(
+            b.addRunArtifact(props).captureStdOut(.{}),
+            "ghostty-unicode-props.zig",
+        ),
+        .symbols = generated.addCopyFile(
+            b.addRunArtifact(symbols).captureStdOut(.{}),
+            "ghostty-unicode-symbols.zig",
+        ),
+    };
 }
 
 fn addGhosttyTerminalOptions(b: *std.Build) *std.Build.Step.Options {
@@ -126,12 +177,13 @@ fn addGhosttyTerminalOptions(b: *std.Build) *std.Build.Step.Options {
     options.addOption(bool, "simd", false);
     options.addOption(bool, "slow_runtime_safety", false);
     options.addOption(bool, "kitty_graphics", false);
+    options.addOption(bool, "glyph_protocol", false);
     options.addOption(bool, "tmux_control_mode", false);
-    options.addOption([]const u8, "version_string", "1.0.0");
-    options.addOption(usize, "version_major", 1);
-    options.addOption(usize, "version_minor", 0);
+    options.addOption([]const u8, "version_string", "0.1.0-dev");
+    options.addOption(usize, "version_major", 0);
+    options.addOption(usize, "version_minor", 1);
     options.addOption(usize, "version_patch", 0);
-    options.addOption(?[]const u8, "version_pre", null);
+    options.addOption(?[]const u8, "version_pre", "dev");
     options.addOption(?[]const u8, "version_build", null);
     return options;
 }

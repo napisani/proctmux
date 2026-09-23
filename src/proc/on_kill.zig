@@ -2,6 +2,7 @@
 //! Hooks are intentionally separate from normal child spawn so stop cleanup has its own timeout and environment behavior.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 const env = @import("env.zig");
 
@@ -26,15 +27,15 @@ pub fn executeWithTimeoutMs(
     var env_map = try env.buildMap(allocator, proc_cfg);
     defer env_map.deinit();
 
-    var child = std.process.Child.init(proc_cfg.on_kill.items, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    if (proc_cfg.cwd.len > 0) child.cwd = proc_cfg.cwd;
-    child.env_map = &env_map;
-
-    try child.spawn();
-    const child_pid = child.id;
+    var child = try std.process.spawn(platform.io(), .{
+        .argv = proc_cfg.on_kill.items,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+        .cwd = if (proc_cfg.cwd.len > 0) .{ .path = proc_cfg.cwd } else .inherit,
+        .environ_map = &env_map,
+    });
+    const child_pid = child.id.?;
 
     var wait_state = WaitState{ .child = &child };
     const wait_thread = try std.Thread.spawn(.{}, waitChild, .{&wait_state});
@@ -50,7 +51,7 @@ pub fn executeWithTimeoutMs(
         .exited => |term| term,
     };
     switch (term) {
-        .Exited => |code| if (code != 0) return error.OnKillFailed,
+        .exited => |code| if (code != 0) return error.OnKillFailed,
         else => return error.OnKillFailed,
     }
 }
@@ -68,7 +69,7 @@ const WaitState = struct {
 };
 
 fn waitChild(state: *WaitState) void {
-    state.result = .{ .exited = state.child.wait() catch |err| {
+    state.result = .{ .exited = state.child.wait(platform.io()) catch |err| {
         state.result = .{ .failed = err };
         state.done.store(true, .release);
         return;
@@ -84,7 +85,7 @@ fn waitForChild(done: *const std.atomic.Value(bool), timeout_ms: u64) bool {
         if (done.load(.acquire)) return true;
         const remaining_ms = timeout_ms - elapsed_ms;
         const current_sleep_ms: u64 = @min(sleep_ms, remaining_ms);
-        std.Thread.sleep(current_sleep_ms * @as(u64, std.time.ns_per_ms));
+        platform.sleepNanoseconds(current_sleep_ms * @as(u64, std.time.ns_per_ms));
         elapsed_ms += current_sleep_ms;
     }
 
@@ -95,7 +96,7 @@ test "on kill hook times out and kills long running hook" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const cwd = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const cwd = try tmp.dir.realPathFileAlloc(platform.io(), ".", std.testing.allocator);
     defer std.testing.allocator.free(cwd);
 
     var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
@@ -105,10 +106,10 @@ test "on kill hook times out and kills long running hook" {
     try config.schema.appendOwned(std.testing.allocator, &proc_cfg.on_kill, "-c");
     try config.schema.appendOwned(std.testing.allocator, &proc_cfg.on_kill, "sleep 5; printf late > on_kill.txt");
 
-    const started = std.time.milliTimestamp();
+    const started = platform.milliTimestamp();
     try std.testing.expectError(error.OnKillFailed, executeWithTimeoutMs(std.testing.allocator, &proc_cfg, 50));
-    const elapsed = std.time.milliTimestamp() - started;
+    const elapsed = platform.milliTimestamp() - started;
 
     try std.testing.expect(elapsed < 1000);
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access("on_kill.txt", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(platform.io(), "on_kill.txt", .{}));
 }

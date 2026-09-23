@@ -1,25 +1,61 @@
 const std = @import("std");
 const assert = @import("../../quirks.zig").inlineAssert;
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
 const simd = @import("../../simd/main.zig");
 const lib = @import("../lib.zig");
 
 const log = std.log.scoped(.kitty_gfx);
 
 /// The key-value pairs for the control information for a command. The
-/// keys are always single characters and the values are either single
-/// characters or 32-bit unsigned integers.
+/// recognized keys are always single ASCII letters and the values are either
+/// single characters or 32-bit unsigned integers. Unknown non-letter keys are
+/// ignored, matching how unknown letter keys are ignored when building a
+/// command.
 ///
-/// For the value of this: if the value is a single printable ASCII character
-/// it is the ASCII code. Otherwise, it is parsed as a 32-bit unsigned integer.
-const KV = std.AutoHashMapUnmanaged(u8, u32);
+/// This is deliberately a dense value table plus a presence bitmap. There are
+/// only 52 possible keys(technically KIP has fever than 52 possible .. at the moment of writing), so a lookup is one machine-word bit test followed by
+/// an indexed load. The values are undefined until their presence bit is set.
+///
+/// Other alternatives were considered and should probably be revisited in the
+/// future. Some of them were:
+/// A `[52]?u32` table is 416 bytes versus 216 bytes for this layout, and
+/// its larger copies erased the smaller lookup code.
+/// `std.EnumMap` added optional-return lowering,
+/// `std.StaticBitSet(52)` kept the same size but generated larger code
+/// for the packed mask. Passing the table by pointer removed the copies
+/// but did not improve end-to-end throughput. Keep this representation
+/// unless a new benchmark shows an improvement in the zig compilers codegen.
+///
+/// For the value itself: if it is a single printable ASCII character it is the
+/// ASCII code. Otherwise, it is parsed as a 32-bit unsigned integer.
+const KV = struct {
+    values: [52]u32 = undefined,
+    present: u64 = 0,
+
+    fn index(key: u8) ?u6 {
+        return switch (key) {
+            'a'...'z' => @intCast(key - 'a'),
+            'A'...'Z' => @intCast(26 + key - 'A'),
+            else => null,
+        };
+    }
+
+    fn get(self: *const KV, key: u8) ?u32 {
+        const idx = index(key) orelse return null;
+        if (self.present & (@as(u64, 1) << idx) == 0) return null;
+        return self.values[idx];
+    }
+
+    fn put(self: *KV, key: u8, value: u32) void {
+        const idx = index(key) orelse return;
+        self.values[idx] = value;
+        self.present |= @as(u64, 1) << idx;
+    }
+};
 
 /// Command parser parses the Kitty graphics protocol escape sequence.
 pub const Parser = struct {
-    /// The memory used by the parser is stored in an arena because it is
-    /// all freed at the end of the command.
-    arena: ArenaAllocator,
+    alloc: Allocator,
 
     /// This is the list of KV pairs that we're building up.
     kv: KV,
@@ -60,10 +96,8 @@ pub const Parser = struct {
     /// Initialize the parser. The allocator given will be used for both
     /// temporary data and long-lived values such as the final image blob.
     pub fn init(alloc: Allocator, max_bytes: usize) Parser {
-        var arena = ArenaAllocator.init(alloc);
-        errdefer arena.deinit();
         var result: Parser = .{
-            .arena = arena,
+            .alloc = alloc,
             .data = .empty,
             .kv = .{},
             .kv_temp_len = 0,
@@ -82,9 +116,7 @@ pub const Parser = struct {
     }
 
     pub fn deinit(self: *Parser) void {
-        // We don't free the hash map because its in the arena
-        self.data.deinit(self.arena.child_allocator);
-        self.arena.deinit();
+        self.data.deinit(self.alloc);
     }
 
     /// Parse a complete command string.
@@ -144,8 +176,28 @@ pub const Parser = struct {
 
             .data => {
                 if (self.data.items.len >= self.max_bytes) return error.OutOfMemory;
-                try self.data.append(self.arena.child_allocator, c);
+                try self.data.append(self.alloc, c);
             },
+        }
+    }
+
+    /// Feed a slice of bytes to the parser. This is equivalent to
+    /// calling feed for each byte in order, but once we're in the data
+    /// state the remainder of the slice is appended in bulk, avoiding
+    /// per-byte overhead for large payloads.
+    pub fn feedSlice(self: *Parser, bytes: []const u8) !void {
+        var rem = bytes;
+        while (rem.len > 0) {
+            if (self.state == .data) {
+                if (self.data.items.len + rem.len > self.max_bytes) {
+                    return error.OutOfMemory;
+                }
+                try self.data.appendSlice(self.alloc, rem);
+                return;
+            }
+
+            try self.feed(rem[0]);
+            rem = rem[1..];
         }
     }
 
@@ -249,8 +301,6 @@ pub const Parser = struct {
     }
 
     fn finishValue(self: *Parser, next_state: State) !void {
-        const alloc = self.arena.allocator();
-
         // We can move states right away, we don't use it.
         self.state = next_state;
 
@@ -258,7 +308,7 @@ pub const Parser = struct {
         if (self.kv_temp_len == 1) {
             const c = self.kv_temp[0];
             if (c < '0' or c > '9') {
-                try self.kv.put(alloc, self.kv_current, @intCast(c));
+                self.kv.put(self.kv_current, @intCast(c));
                 self.kv_temp_len = 0;
                 return;
             }
@@ -271,7 +321,7 @@ pub const Parser = struct {
             'z', 'H', 'V' => @bitCast(try std.fmt.parseInt(i32, self.kv_temp[0..self.kv_temp_len], 10)),
             else => try std.fmt.parseInt(u32, self.kv_temp[0..self.kv_temp_len], 10),
         };
-        try self.kv.put(alloc, self.kv_current, v);
+        self.kv.put(self.kv_current, v);
 
         // Clear our temp buffer
         self.kv_temp_len = 0;
@@ -356,6 +406,53 @@ pub const Command = struct {
         transmit_animation_frame: AnimationFrameLoading,
         control_animation: AnimationControl,
         compose_animation: AnimationFrameComposition,
+
+        pub const Identifiers = struct {
+            image_id: u32 = 0,
+            image_number: u32 = 0,
+            placement_id: u32 = 0,
+        };
+
+        /// Returns the image and placement identifiers for any action.
+        pub fn identifiers(self: Control) Identifiers {
+            return switch (self) {
+                .query, .transmit => |t| .{
+                    .image_id = t.image_id,
+                    .image_number = t.image_number,
+                    .placement_id = t.placement_id,
+                },
+                .transmit_and_display => |t| .{
+                    .image_id = t.transmission.image_id,
+                    .image_number = t.transmission.image_number,
+                    .placement_id = t.transmission.placement_id,
+                },
+                .display => |d| .{
+                    .image_id = d.image_id,
+                    .image_number = d.image_number,
+                    .placement_id = d.placement_id,
+                },
+                .delete => |d| .{
+                    .image_id = d.image_id,
+                    .image_number = d.image_number,
+                    .placement_id = d.placement_id,
+                },
+                .transmit_animation_frame => |f| .{
+                    .image_id = f.image_id,
+                    .image_number = f.image_number,
+                    .placement_id = f.placement_id,
+                },
+                .control_animation => |a| .{
+                    .image_id = a.image_id,
+                    .image_number = a.image_number,
+                    .placement_id = a.placement_id,
+                },
+                .compose_animation => |c| .{
+                    .image_id = c.image_id,
+                    .image_number = c.image_number,
+                    .placement_id = c.placement_id,
+                },
+            };
+        }
     };
 
     /// Take ownership over the data in this command. If the returned value
@@ -402,6 +499,7 @@ pub const Transmission = struct {
     placement_id: u32 = 0, // p
     compression: Compression = .none, // o
     more_chunks: bool = false, // m
+    usage: Usage = .default, // N
 
     pub const Format = lib.Enum(lib.target, &.{
         "rgb", // 24
@@ -425,6 +523,19 @@ pub const Transmission = struct {
         "none",
         "zlib_deflate", // z
     });
+
+    /// Usage hints allow for optimising resource consumption strategies.
+    ///
+    /// https://sw.kovidgoyal.net/kitty/graphics-protocol/#usage-hints
+    pub const Usage = packed struct(u32) {
+        /// Image with this usage hint is assumed to be used for only a short
+        /// time, so may be evicted before other images if memory pressure is
+        /// encountered.
+        transient: bool = false,
+        _padding: u31 = 0,
+
+        pub const default: Usage = .{};
+    };
 
     pub fn formatBpp(format: Format) u8 {
         return switch (format) {
@@ -507,6 +618,10 @@ pub const Transmission = struct {
             if (kv.get('m')) |v| {
                 result.more_chunks = v > 0;
             }
+        }
+
+        if (kv.get('N')) |v| {
+            result.usage = @bitCast(v);
         }
 
         return result;
@@ -629,6 +744,9 @@ pub const Display = struct {
 };
 
 pub const AnimationFrameLoading = struct {
+    image_id: u32 = 0, // i
+    image_number: u32 = 0, // I
+    placement_id: u32 = 0, // p
     x: u32 = 0, // x
     y: u32 = 0, // y
     create_frame: u32 = 0, // c
@@ -646,6 +764,18 @@ pub const AnimationFrameLoading = struct {
 
     fn parse(kv: KV) !AnimationFrameLoading {
         var result: AnimationFrameLoading = .{};
+
+        if (kv.get('i')) |v| {
+            result.image_id = v;
+        }
+
+        if (kv.get('I')) |v| {
+            result.image_number = v;
+        }
+
+        if (kv.get('p')) |v| {
+            result.placement_id = v;
+        }
 
         if (kv.get('x')) |v| {
             result.x = v;
@@ -684,6 +814,9 @@ pub const AnimationFrameLoading = struct {
 };
 
 pub const AnimationFrameComposition = struct {
+    image_id: u32 = 0, // i
+    image_number: u32 = 0, // I
+    placement_id: u32 = 0, // p
     frame: u32 = 0, // c
     edit_frame: u32 = 0, // r
     x: u32 = 0, // x
@@ -696,6 +829,18 @@ pub const AnimationFrameComposition = struct {
 
     fn parse(kv: KV) !AnimationFrameComposition {
         var result: AnimationFrameComposition = .{};
+
+        if (kv.get('i')) |v| {
+            result.image_id = v;
+        }
+
+        if (kv.get('I')) |v| {
+            result.image_number = v;
+        }
+
+        if (kv.get('p')) |v| {
+            result.placement_id = v;
+        }
 
         if (kv.get('c')) |v| {
             result.frame = v;
@@ -742,6 +887,9 @@ pub const AnimationFrameComposition = struct {
 };
 
 pub const AnimationControl = struct {
+    image_id: u32 = 0, // i
+    image_number: u32 = 0, // I
+    placement_id: u32 = 0, // p
     action: AnimationAction = .invalid, // s
     frame: u32 = 0, // r
     gap_ms: u32 = 0, // z
@@ -757,6 +905,18 @@ pub const AnimationControl = struct {
 
     fn parse(kv: KV) !AnimationControl {
         var result: AnimationControl = .{};
+
+        if (kv.get('i')) |v| {
+            result.image_id = v;
+        }
+
+        if (kv.get('I')) |v| {
+            result.image_number = v;
+        }
+
+        if (kv.get('p')) |v| {
+            result.placement_id = v;
+        }
 
         if (kv.get('s')) |v| {
             result.action = switch (v) {
@@ -788,180 +948,196 @@ pub const AnimationControl = struct {
     }
 };
 
-pub const Delete = union(enum) {
-    // a/A
-    all: bool,
-
-    // i/I
-    id: struct {
-        delete: bool = false, // uppercase
-        image_id: u32 = 0, // i
-        placement_id: u32 = 0, // p
-    },
-
-    // n/N
-    newest: struct {
-        delete: bool = false, // uppercase
-        image_number: u32 = 0, // I
-        placement_id: u32 = 0, // p
-    },
-
-    // c/C,
-    intersect_cursor: bool,
-
-    // f/F
-    animation_frames: bool,
-
-    // p/P
-    intersect_cell: struct {
-        delete: bool = false, // uppercase
-        x: u32 = 0, // x
-        y: u32 = 0, // y
-    },
-
-    // q/Q
-    intersect_cell_z: struct {
-        delete: bool = false, // uppercase
-        x: u32 = 0, // x
-        y: u32 = 0, // y
-        z: i32 = 0, // z
-    },
-
-    // r/R
-    range: struct {
-        delete: bool = false, // uppercase
-        first: u32 = 0, // x
-        last: u32 = 0, // y
-    },
-
-    // x/X
-    column: struct {
-        delete: bool = false, // uppercase
-        x: u32 = 0, // x
-    },
-
-    // y/Y
-    row: struct {
-        delete: bool = false, // uppercase
-        y: u32 = 0, // y
-    },
-
-    // z/Z
-    z: struct {
-        delete: bool = false, // uppercase
-        z: i32 = 0, // z
-    },
+pub const Delete = struct {
+    image_id: u32 = 0, // i
+    image_number: u32 = 0, // I
+    placement_id: u32 = 0, // p
+    action: Action,
 
     fn parse(kv: KV) !Delete {
-        const what: u8 = what: {
-            const value = kv.get('d') orelse break :what 'a';
-            const c = std.math.cast(u8, value) orelse return error.InvalidFormat;
-            break :what c;
-        };
-
-        return switch (what) {
-            'a', 'A' => .{ .all = what == 'A' },
-
-            'i', 'I' => blk: {
-                var result: Delete = .{ .id = .{ .delete = what == 'I' } };
-                if (kv.get('i')) |v| {
-                    result.id.image_id = v;
-                }
-                if (kv.get('p')) |v| {
-                    result.id.placement_id = v;
-                }
-
-                break :blk result;
-            },
-
-            'n', 'N' => blk: {
-                var result: Delete = .{ .newest = .{ .delete = what == 'N' } };
-                if (kv.get('I')) |v| {
-                    result.newest.image_number = v;
-                }
-                if (kv.get('p')) |v| {
-                    result.newest.placement_id = v;
-                }
-
-                break :blk result;
-            },
-
-            'c', 'C' => .{ .intersect_cursor = what == 'C' },
-
-            'f', 'F' => .{ .animation_frames = what == 'F' },
-
-            'p', 'P' => blk: {
-                var result: Delete = .{ .intersect_cell = .{ .delete = what == 'P' } };
-                if (kv.get('x')) |v| {
-                    result.intersect_cell.x = v;
-                }
-                if (kv.get('y')) |v| {
-                    result.intersect_cell.y = v;
-                }
-
-                break :blk result;
-            },
-
-            'q', 'Q' => blk: {
-                var result: Delete = .{ .intersect_cell_z = .{ .delete = what == 'Q' } };
-                if (kv.get('x')) |v| {
-                    result.intersect_cell_z.x = v;
-                }
-                if (kv.get('y')) |v| {
-                    result.intersect_cell_z.y = v;
-                }
-                if (kv.get('z')) |v| {
-                    // We can bitcast here because of how we parse it earlier.
-                    result.intersect_cell_z.z = @bitCast(v);
-                }
-
-                break :blk result;
-            },
-
-            'r', 'R' => blk: {
-                const x = kv.get('x') orelse return error.InvalidFormat;
-                const y = kv.get('y') orelse return error.InvalidFormat;
-                if (x > y) return error.InvalidFormat;
-                break :blk .{
-                    .range = .{
-                        .delete = what == 'R',
-                        .first = x,
-                        .last = y,
-                    },
-                };
-            },
-
-            'x', 'X' => blk: {
-                var result: Delete = .{ .column = .{ .delete = what == 'X' } };
-                if (kv.get('x')) |v| {
-                    result.column.x = v;
-                }
-
-                break :blk result;
-            },
-
-            'y', 'Y' => blk: {
-                var result: Delete = .{ .row = .{ .delete = what == 'Y' } };
-                if (kv.get('y')) |v| {
-                    result.row.y = v;
-                }
-
-                break :blk result;
-            },
-
-            'z', 'Z' => blk: {
-                var result: Delete = .{ .z = .{ .delete = what == 'Z' } };
-                if (kv.get('z')) |v| {
-                    // We can bitcast here because of how we parse it earlier.
-                    result.z.z = @bitCast(v);
-                }
-
-                break :blk result;
-            },
-
-            else => return error.InvalidFormat,
+        return .{
+            .image_id = kv.get('i') orelse 0,
+            .image_number = kv.get('I') orelse 0,
+            .placement_id = kv.get('p') orelse 0,
+            .action = try .parse(kv),
         };
     }
+
+    pub const Action = union(enum) {
+        // a/A
+        all: bool,
+
+        // i/I
+        id: struct {
+            delete: bool = false, // uppercase
+            image_id: u32 = 0, // i
+            placement_id: u32 = 0, // p
+        },
+
+        // n/N
+        newest: struct {
+            delete: bool = false, // uppercase
+            image_number: u32 = 0, // I
+            placement_id: u32 = 0, // p
+        },
+
+        // c/C,
+        intersect_cursor: bool,
+
+        // f/F
+        animation_frames: bool,
+
+        // p/P
+        intersect_cell: struct {
+            delete: bool = false, // uppercase
+            x: u32 = 0, // x
+            y: u32 = 0, // y
+        },
+
+        // q/Q
+        intersect_cell_z: struct {
+            delete: bool = false, // uppercase
+            x: u32 = 0, // x
+            y: u32 = 0, // y
+            z: i32 = 0, // z
+        },
+
+        // r/R
+        range: struct {
+            delete: bool = false, // uppercase
+            first: u32 = 0, // x
+            last: u32 = 0, // y
+        },
+
+        // x/X
+        column: struct {
+            delete: bool = false, // uppercase
+            x: u32 = 0, // x
+        },
+
+        // y/Y
+        row: struct {
+            delete: bool = false, // uppercase
+            y: u32 = 0, // y
+        },
+
+        // z/Z
+        z: struct {
+            delete: bool = false, // uppercase
+            z: i32 = 0, // z
+        },
+
+        fn parse(kv: KV) !Action {
+            const what: u8 = what: {
+                const value = kv.get('d') orelse break :what 'a';
+                const c = std.math.cast(u8, value) orelse return error.InvalidFormat;
+                break :what c;
+            };
+
+            return switch (what) {
+                'a', 'A' => .{ .all = what == 'A' },
+
+                'i', 'I' => blk: {
+                    var result: Action = .{ .id = .{ .delete = what == 'I' } };
+                    if (kv.get('i')) |v| {
+                        result.id.image_id = v;
+                    }
+                    if (kv.get('p')) |v| {
+                        result.id.placement_id = v;
+                    }
+
+                    break :blk result;
+                },
+
+                'n', 'N' => blk: {
+                    var result: Action = .{ .newest = .{ .delete = what == 'N' } };
+                    if (kv.get('I')) |v| {
+                        result.newest.image_number = v;
+                    }
+                    if (kv.get('p')) |v| {
+                        result.newest.placement_id = v;
+                    }
+
+                    break :blk result;
+                },
+
+                'c', 'C' => .{ .intersect_cursor = what == 'C' },
+
+                'f', 'F' => .{ .animation_frames = what == 'F' },
+
+                'p', 'P' => blk: {
+                    var result: Action = .{ .intersect_cell = .{ .delete = what == 'P' } };
+                    if (kv.get('x')) |v| {
+                        result.intersect_cell.x = v;
+                    }
+                    if (kv.get('y')) |v| {
+                        result.intersect_cell.y = v;
+                    }
+
+                    break :blk result;
+                },
+
+                'q', 'Q' => blk: {
+                    var result: Action = .{ .intersect_cell_z = .{ .delete = what == 'Q' } };
+                    if (kv.get('x')) |v| {
+                        result.intersect_cell_z.x = v;
+                    }
+                    if (kv.get('y')) |v| {
+                        result.intersect_cell_z.y = v;
+                    }
+                    if (kv.get('z')) |v| {
+                        // We can bitcast here because of how we parse it earlier.
+                        result.intersect_cell_z.z = @bitCast(v);
+                    }
+
+                    break :blk result;
+                },
+
+                'r', 'R' => blk: {
+                    const x = kv.get('x') orelse 0;
+                    const y = kv.get('y') orelse return error.InvalidFormat;
+                    if (x > y) return error.InvalidFormat;
+                    break :blk .{
+                        .range = .{
+                            .delete = what == 'R',
+                            .first = x,
+                            .last = y,
+                        },
+                    };
+                },
+
+                'x', 'X' => blk: {
+                    var result: Action = .{ .column = .{ .delete = what == 'X' } };
+                    if (kv.get('x')) |v| {
+                        result.column.x = v;
+                    }
+
+                    break :blk result;
+                },
+
+                'y', 'Y' => blk: {
+                    var result: Action = .{ .row = .{ .delete = what == 'Y' } };
+                    if (kv.get('y')) |v| {
+                        result.row.y = v;
+                    }
+
+                    break :blk result;
+                },
+
+                'z', 'Z' => blk: {
+                    var result: Action = .{ .z = .{ .delete = what == 'Z' } };
+                    if (kv.get('z')) |v| {
+                        // We can bitcast here because of how we parse it earlier.
+                        result.z.z = @bitCast(v);
+                    }
+
+                    break :blk result;
+                },
+
+                else => return error.InvalidFormat,
+            };
+        }
+    };
 };
 
 pub const CompositionMode = enum {
@@ -985,6 +1161,77 @@ test "transmission command" {
     try testing.expectEqual(Transmission.Format.rgb, v.format);
     try testing.expectEqual(@as(u32, 10), v.width);
     try testing.expectEqual(@as(u32, 20), v.height);
+    try testing.expectEqual(false, v.usage.transient);
+}
+
+test "transmission command with transient hint" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var p = Parser.init(alloc, 1024 * 1024);
+    defer p.deinit();
+
+    const input = "f=24,s=10,v=20,N=1";
+    for (input) |c| try p.feed(c);
+    const command = try p.complete(alloc);
+    defer command.deinit(alloc);
+
+    try testing.expect(command.control == .transmit);
+    const v = command.control.transmit;
+    try testing.expectEqual(Transmission.Format.rgb, v.format);
+    try testing.expectEqual(@as(u32, 10), v.width);
+    try testing.expectEqual(@as(u32, 20), v.height);
+    try testing.expectEqual(true, v.usage.transient);
+}
+
+test "feedSlice matches per-byte feed" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    const input = "f=24,s=10,v=20;aGVsbG8gd29ybGQ=";
+
+    var p1 = Parser.init(alloc, 1024 * 1024);
+    defer p1.deinit();
+    for (input) |c| try p1.feed(c);
+    const c1 = try p1.complete(alloc);
+    defer c1.deinit(alloc);
+
+    var p2 = Parser.init(alloc, 1024 * 1024);
+    defer p2.deinit();
+    try p2.feedSlice(input);
+    const c2 = try p2.complete(alloc);
+    defer c2.deinit(alloc);
+
+    try testing.expect(c1.control == .transmit);
+    try testing.expect(c2.control == .transmit);
+    try testing.expectEqualStrings(c1.data, c2.data);
+}
+
+test "feedSlice across slice boundaries" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var p = Parser.init(alloc, 1024 * 1024);
+    defer p.deinit();
+
+    try p.feedSlice("f=24,s=10");
+    try p.feedSlice(",v=20;aGVsbG8g");
+    try p.feedSlice("d29ybGQ=");
+    const command = try p.complete(alloc);
+    defer command.deinit(alloc);
+
+    try testing.expect(command.control == .transmit);
+
+    // The payload is base64-decoded on completion.
+    try testing.expectEqualStrings("hello world", command.data);
+}
+
+test "feedSlice respects max_bytes" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var p = Parser.init(alloc, 4);
+    defer p.deinit();
+
+    try p.feedSlice("f=24;ab");
+    try testing.expectError(error.OutOfMemory, p.feedSlice("cde"));
 }
 
 test "transmission ignores 'm' if medium is not direct" {
@@ -1071,7 +1318,7 @@ test "delete command" {
     defer command.deinit(alloc);
 
     try testing.expect(command.control == .delete);
-    const v = command.control.delete;
+    const v = command.control.delete.action;
     try testing.expect(v == .intersect_cell);
     const dv = v.intersect_cell;
     try testing.expect(!dv.delete);
@@ -1101,6 +1348,24 @@ test "ignore unknown keys (long)" {
     defer p.deinit();
 
     const input = "f=24,s=10,v=20,hello=world";
+    for (input) |c| try p.feed(c);
+    const command = try p.complete(alloc);
+    defer command.deinit(alloc);
+
+    try testing.expect(command.control == .transmit);
+    const v = command.control.transmit;
+    try testing.expectEqual(Transmission.Format.rgb, v.format);
+    try testing.expectEqual(@as(u32, 10), v.width);
+    try testing.expectEqual(@as(u32, 20), v.height);
+}
+
+test "ignore unknown keys (non-letter)" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var p = Parser.init(alloc, 1024 * 1024);
+    defer p.deinit();
+
+    const input = "f=24,s=10,v=20,!=1";
     for (input) |c| try p.feed(c);
     const command = try p.complete(alloc);
     defer command.deinit(alloc);
@@ -1271,7 +1536,7 @@ test "delete range command 1" {
     defer command.deinit(alloc);
 
     try testing.expect(command.control == .delete);
-    const v = command.control.delete;
+    const v = command.control.delete.action;
     try testing.expect(v == .range);
     const range = v.range;
     try testing.expect(!range.delete);
@@ -1291,7 +1556,7 @@ test "delete range command 2" {
     defer command.deinit(alloc);
 
     try testing.expect(command.control == .delete);
-    const v = command.control.delete;
+    const v = command.control.delete.action;
     try testing.expect(v == .range);
     const range = v.range;
     try testing.expect(range.delete);
@@ -1329,5 +1594,14 @@ test "delete range command 5" {
 
     const input = "a=d,d=R,y=5";
     for (input) |c| try p.feed(c);
-    try testing.expectError(error.InvalidFormat, p.complete(alloc));
+    const command = try p.complete(alloc);
+    defer command.deinit(alloc);
+
+    try testing.expect(command.control == .delete);
+    const v = command.control.delete.action;
+    try testing.expect(v == .range);
+    const range = v.range;
+    try testing.expect(range.delete);
+    try testing.expectEqual(@as(u32, 0), range.first);
+    try testing.expectEqual(@as(u32, 5), range.last);
 }

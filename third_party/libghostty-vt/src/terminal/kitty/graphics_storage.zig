@@ -16,6 +16,54 @@ const Command = command.Command;
 
 const log = std.log.scoped(.kitty_gfx);
 
+/// Process-global counter backing all generation stamps (see
+/// ImageStorage.generation and Image.generation). This is global rather
+/// than per-storage so that stamps are unique across every storage in
+/// the process: two mutation events never produce the same value, even
+/// across separate screens (main vs. alt), storage resets, or separate
+/// terminals. This lets consumers use a generation value alone as a
+/// cache key without any ambiguity.
+///
+/// Thread-safe because separate terminals may mutate their storages
+/// from different threads. On single-threaded targets this lowers to
+/// plain operations.
+var generation_counter: GenerationCounter = .{};
+
+/// Returns the next generation stamp. Stamps are unique and strictly
+/// monotonically increasing process-wide, starting at 1 (0 is reserved
+/// to mean "never stamped").
+pub fn nextGeneration(io: std.Io) u64 {
+    return generation_counter.next(io);
+}
+
+/// Backing implementation for the generation counter. We use a
+/// lock-free atomic counter where we can, but not all targets support
+/// 64-bit atomic operations (e.g. 32-bit ARM Android), so we fall back
+/// to a mutex-protected counter on those. This is a cold path (only
+/// invoked on content mutations) so the mutex cost is irrelevant.
+///
+/// The pointer-width check is a conservative proxy for 64-bit atomic
+/// support: every 64-bit target supports 64-bit atomics, while 32-bit
+/// targets may not (per the compiler's atomic operand validation).
+const GenerationCounter = if (@bitSizeOf(usize) >= 64) struct {
+    value: std.atomic.Value(u64) = .init(0),
+
+    fn next(self: *@This(), io: std.Io) u64 {
+        _ = io;
+        return self.value.fetchAdd(1, .monotonic) + 1;
+    }
+} else struct {
+    mutex: std.Io.Mutex = .init,
+    value: u64 = 0,
+
+    fn next(self: *@This(), io: std.Io) u64 {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        self.value += 1;
+        return self.value;
+    }
+};
+
 /// An image storage is associated with a terminal screen (i.e. main
 /// screen, alt screen) and contains all the transmitted images and
 /// placements.
@@ -27,7 +75,31 @@ pub const ImageStorage = struct {
     /// purely informational for the renderer and doesn't affect the
     /// correctness of the program. The renderer must set this to false
     /// if it cares about this value.
+    ///
+    /// Note that dirty is also set by scrolling and resizing (outside
+    /// of this struct) because those move placement pins, even though
+    /// the set of images/placements itself is unchanged. See generation
+    /// for a signal that only tracks content mutations.
+    ///
+    /// Invariant: dirty is always set when generation changes
+    /// (markMutated sets both); dirty set without a generation change
+    /// means a geometry-only event.
     dirty: bool = false,
+
+    /// Generation stamp of the last content mutation to this storage:
+    /// any image transmit/replace, placement add, or delete of either.
+    /// Zero means the storage has never been mutated (and is therefore
+    /// empty).
+    ///
+    /// Unlike dirty, this is NOT updated by scrolling/resizing, so an
+    /// unchanged generation means the placement set and all image data
+    /// are identical; only placement geometry (pins) may have moved.
+    /// Values come from a process-global monotonic counter, so a value
+    /// observed from any storage never recurs for different content,
+    /// even across screen switches or storage resets.
+    ///
+    /// This field must only be written via markMutated.
+    generation: u64 = 0,
 
     /// This is the next automatically assigned image ID. We start mid-way
     /// through the u32 range to avoid collisions with buggy programs.
@@ -60,6 +132,38 @@ pub const ImageStorage = struct {
     total_bytes: usize = 0,
     total_limit: usize = 320 * 1000 * 1000, // 320MB
 
+    /// Identifies one exact pending image transmission. The generation is
+    /// assigned by this storage when the pending image is inserted, so a
+    /// later replacement of the same ID cannot consume stale payload bytes.
+    pub const PendingImage = struct {
+        id: u32,
+        generation: u64,
+
+        /// Attach owned decoded bytes if this exact pending transmission is
+        /// still resident. On true, storage owns `data`; on false, the caller
+        /// retains ownership. Completion preserves the image generation (and
+        /// therefore eviction age) while marking storage content as mutated.
+        pub fn complete(
+            self: PendingImage,
+            storage: *ImageStorage,
+            io: std.Io,
+            data: []const u8,
+        ) bool {
+            const img = storage.images.getPtr(self.id) orelse return false;
+            if (img.generation != self.generation) return false;
+
+            const expected_len = switch (img.data) {
+                .complete => return false,
+                .pending => |len| len,
+            };
+            if (data.len != expected_len) return false;
+
+            img.data = .{ .complete = data };
+            storage.markMutated(io);
+            return true;
+        }
+    };
+
     pub fn deinit(
         self: *ImageStorage,
         alloc: Allocator,
@@ -67,17 +171,30 @@ pub const ImageStorage = struct {
     ) void {
         if (self.loading) |loading| loading.destroy(alloc);
 
+        self.clearPlacements(s);
+        self.placements.deinit(alloc);
+
         var it = self.images.iterator();
         while (it.next()) |kv| kv.value_ptr.deinit(alloc);
         self.images.deinit(alloc);
-
-        self.clearPlacements(s);
-        self.placements.deinit(alloc);
     }
 
     /// Kitty image protocol is enabled if we have a non-zero limit.
     pub fn enabled(self: *const ImageStorage) bool {
         return self.total_limit != 0;
+    }
+
+    /// Record a content mutation: marks the storage dirty and assigns a
+    /// fresh generation stamp. Must be called by anything that changes
+    /// the set of images or placements (or image contents).
+    ///
+    /// Do NOT call this for geometry-only events (scrolling, resizing,
+    /// screen switches); those must set only the dirty flag directly.
+    /// Bumping the generation for geometry changes would break the
+    /// contract that an unchanged generation means unchanged contents.
+    fn markMutated(self: *ImageStorage, io: std.Io) void {
+        self.dirty = true;
+        self.generation = nextGeneration(io);
     }
 
     /// Sets the limit in bytes for the total amount of image data that
@@ -86,22 +203,24 @@ pub const ImageStorage = struct {
     /// be disabled.
     pub fn setLimit(
         self: *ImageStorage,
+        io: std.Io,
         alloc: Allocator,
         s: *terminal.Screen,
         limit: usize,
-    ) !void {
+    ) void {
         // Special case disabling by quickly deleting all
         if (limit == 0) {
             const image_limits = self.image_limits;
             self.deinit(alloc, s);
             self.* = .{ .image_limits = image_limits };
+            self.markMutated(io);
         }
 
         // If we re lowering our limit, check if we need to evict.
         if (limit < self.total_bytes) {
             const req_bytes = self.total_bytes - limit;
             log.info("evicting images to lower limit, evicting={}", .{req_bytes});
-            if (!try self.evictImage(alloc, req_bytes)) {
+            if (!self.evictImage(io, alloc, s, req_bytes)) {
                 log.warn("failed to evict enough images for required bytes", .{});
             }
         }
@@ -109,49 +228,96 @@ pub const ImageStorage = struct {
         self.total_limit = limit;
     }
 
-    /// Add an already-loaded image to the storage. This will automatically
-    /// free any existing image with the same ID.
-    pub fn addImage(self: *ImageStorage, alloc: Allocator, img: Image) Allocator.Error!void {
+    /// Add an image to the storage. This will automatically free any existing
+    /// image with the same ID. Prefer addPendingImage for pending data so the
+    /// caller receives a completion token.
+    pub fn addImage(
+        self: *ImageStorage,
+        io: std.Io,
+        alloc: Allocator,
+        s: *terminal.Screen,
+        img: Image,
+    ) Allocator.Error!void {
+        const new_len = img.data.len();
+
         // If the image itself is over the limit, then error immediately
-        if (img.data.len > self.total_limit) return error.OutOfMemory;
+        if (new_len > self.total_limit) return error.OutOfMemory;
+
+        // Credit an existing image's reservation before calculating the
+        // replacement size. In particular, a completed live transmission
+        // replacing pending snapshot metadata must be able to reuse the
+        // reservation without evicting its own ID.
+        const old_len = if (self.images.get(img.id)) |old|
+            old.data.len()
+        else
+            0;
+        assert(old_len <= self.total_bytes);
+
+        // Reserve map capacity before evicting anything so allocation failure
+        // cannot leave storage partially evicted. Existing keys need no room.
+        if (!self.images.contains(img.id)) {
+            try self.images.ensureUnusedCapacity(alloc, 1);
+        }
 
         // If this would put us over the limit, then evict.
-        const total_bytes = self.total_bytes + img.data.len;
+        const total_bytes = self.total_bytes - old_len + new_len;
         if (total_bytes > self.total_limit) {
             const req_bytes = total_bytes - self.total_limit;
             log.info("evicting images to make space for {} bytes", .{req_bytes});
-            if (!try self.evictImage(alloc, req_bytes)) {
+            if (!self.evictImageExcept(io, alloc, s, req_bytes, img.id)) {
                 log.warn("failed to evict enough images for required bytes", .{});
                 return error.OutOfMemory;
             }
         }
 
-        // Do the gop op first so if it fails we don't get a partial state
-        const gop = try self.images.getOrPut(alloc, img.id);
+        const gop = self.images.getOrPutAssumeCapacity(img.id);
 
-        log.debug("addImage image={}", .{img: {
-            var copy = img;
-            copy.data = "";
-            break :img copy;
-        }});
+        log.debug("addImage image={}", .{img.withoutData()});
 
-        // Write our new image
+        // Retransmitting a specific image ID replaces the old image and all
+        // of its placements, as required by the Kitty graphics protocol.
         if (gop.found_existing) {
-            self.total_bytes -= gop.value_ptr.data.len;
+            self.removePlacementsByImageId(s, img.id);
+            self.total_bytes -= gop.value_ptr.data.len();
             gop.value_ptr.deinit(alloc);
         }
 
         gop.value_ptr.* = img;
-        self.total_bytes += img.data.len;
+        gop.value_ptr.metadata.placement_count = 0;
+        self.total_bytes += new_len;
 
-        self.dirty = true;
+        // Stamp the stored image with a fresh generation. This gives
+        // every add/replace a unique stamp even when the same image ID
+        // is retransmitted with identical dimensions, so consumers
+        // (e.g. renderer texture caches) can detect content changes.
+        self.markMutated(io);
+        gop.value_ptr.generation = self.generation;
+    }
+
+    /// Add an image whose decoded payload bytes have not arrived yet.
+    /// Returns the token required to complete this exact transmission.
+    pub fn addPendingImage(
+        self: *ImageStorage,
+        io: std.Io,
+        alloc: Allocator,
+        s: *terminal.Screen,
+        img: Image,
+    ) Allocator.Error!PendingImage {
+        assert(img.data == .pending);
+        try self.addImage(io, alloc, s, img);
+        const stored = self.images.get(img.id).?;
+        return .{ .id = stored.id, .generation = stored.generation };
     }
 
     /// Add a placement for a given image. The caller must verify in advance
-    /// the image exists to prevent memory corruption.
+    /// the image exists to prevent memory corruption. On success, storage
+    /// owns `p`; on error, the caller retains ownership. The screen must own
+    /// any tracked pin in `p` and in the placement it replaces.
     pub fn addPlacement(
         self: *ImageStorage,
+        io: std.Io,
         alloc: Allocator,
+        s: *terminal.Screen,
         image_id: u32,
         placement_id: u32,
         p: Placement,
@@ -162,6 +328,14 @@ pub const ImageStorage = struct {
             placement_id,
             p,
         });
+
+        // Tracked pins are marked garbage when their underlying history is
+        // pruned. Kitty removes placements once they scroll out of retained
+        // history, so reclaim those placements before growing the map for a
+        // new one. If allocation below fails, the sweep is still a content
+        // mutation and must be visible to consumers.
+        const removed_garbage = self.removeGarbagePlacements(s);
+        errdefer if (removed_garbage) self.markMutated(io);
 
         // The important piece here is that the placement ID needs to
         // be marked internal if it is zero. This allows multiple placements
@@ -183,15 +357,71 @@ pub const ImageStorage = struct {
         };
 
         const gop = try self.placements.getOrPut(alloc, key);
+        if (gop.found_existing) {
+            gop.value_ptr.deinit(s);
+        } else {
+            const img = self.images.getPtr(image_id).?;
+            img.metadata.placement_count = std.math.add(
+                @TypeOf(img.metadata.placement_count),
+                img.metadata.placement_count,
+                1,
+            ) catch {
+                self.placements.removeByPtr(gop.key_ptr);
+                return error.OutOfMemory;
+            };
+        }
         gop.value_ptr.* = p;
 
-        self.dirty = true;
+        self.markMutated(io);
+    }
+
+    /// Remove pin-backed placements whose tracked content has been pruned.
+    /// Virtual placements have no tracked screen location and are retained.
+    fn removeGarbagePlacements(
+        self: *ImageStorage,
+        s: *terminal.Screen,
+    ) bool {
+        var removed = false;
+        var it = self.placements.iterator();
+        while (it.next()) |entry| {
+            const pin = switch (entry.value_ptr.location) {
+                .pin => |pin| pin,
+                .virtual => continue,
+            };
+            if (!pin.garbage) continue;
+
+            entry.value_ptr.deinit(s);
+            self.removePlacementByPtr(entry.key_ptr);
+            removed = true;
+        }
+
+        return removed;
     }
 
     fn clearPlacements(self: *ImageStorage, s: *terminal.Screen) void {
         var it = self.placements.iterator();
         while (it.next()) |entry| entry.value_ptr.deinit(s);
         self.placements.clearRetainingCapacity();
+    }
+
+    fn removePlacementsByImageId(
+        self: *ImageStorage,
+        s: *terminal.Screen,
+        image_id: u32,
+    ) void {
+        var it = self.placements.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.image_id != image_id) continue;
+            entry.value_ptr.deinit(s);
+            self.removePlacementByPtr(entry.key_ptr);
+        }
+    }
+
+    fn removePlacementByPtr(self: *ImageStorage, key: *PlacementKey) void {
+        const img = self.images.getPtr(key.image_id).?;
+        assert(img.metadata.placement_count > 0);
+        img.metadata.placement_count -= 1;
+        self.placements.removeByPtr(key);
     }
 
     /// Get an image by its ID. If the image doesn't exist, null is returned.
@@ -207,7 +437,7 @@ pub const ImageStorage = struct {
         while (it.next()) |kv| {
             if (kv.value_ptr.number == image_number) {
                 if (newest == null or
-                    kv.value_ptr.transmit_time.order(newest.?.transmit_time) == .gt)
+                    kv.value_ptr.generation > newest.?.generation)
                 {
                     newest = kv.value_ptr.*;
                 }
@@ -217,37 +447,53 @@ pub const ImageStorage = struct {
         return newest;
     }
 
+    /// Clear placements intersecting the active screen, then reclaim every
+    /// image with no remaining placement. Unlike protocol d=A, a terminal
+    /// clear also reclaims images that were already unplaced.
+    pub fn clearScreen(
+        self: *ImageStorage,
+        io: std.Io,
+        alloc: Allocator,
+        t: *terminal.Terminal,
+    ) void {
+        const placements_before = self.placements.count();
+        const images_before = self.images.count();
+
+        // Delete unused placements and images
+        self.deleteVisiblePlacements(alloc, t, true);
+        var image_it = self.images.iterator();
+        while (image_it.next()) |entry| {
+            self.deleteIfUnused(alloc, entry.key_ptr.*);
+        }
+
+        // Mark mutated only if things changed.
+        if (self.placements.count() != placements_before or
+            self.images.count() != images_before) self.markMutated(io);
+    }
+
     /// Delete placements, images.
     pub fn delete(
         self: *ImageStorage,
+        io: std.Io,
         alloc: Allocator,
         t: *terminal.Terminal,
-        cmd: command.Delete,
+        cmd: command.Delete.Action,
     ) void {
+        // Deletes only ever remove placements/images, so comparing counts
+        // before and after tells us whether anything actually changed.
+        // Only then do we mark a mutation, so a delete that matches nothing
+        // doesn't dirty the image state or bump the generation.
+        const placements_before = self.placements.count();
+        const images_before = self.images.count();
+        defer if (self.placements.count() != placements_before or
+            self.images.count() != images_before) self.markMutated(io);
+
         switch (cmd) {
-            .all => |delete_images| {
-                var it = self.placements.iterator();
-                while (it.next()) |entry| {
-                    // Skip virtual placements
-                    switch (entry.value_ptr.location) {
-                        .pin => {},
-                        .virtual => continue,
-                    }
-
-                    // Deinit the placement and remove it
-                    const image_id = entry.key_ptr.image_id;
-                    entry.value_ptr.deinit(t.screens.active);
-                    self.placements.removeByPtr(entry.key_ptr);
-                    if (delete_images) self.deleteIfUnused(alloc, image_id);
-                }
-
-                if (delete_images) {
-                    var image_it = self.images.iterator();
-                    while (image_it.next()) |kv| self.deleteIfUnused(alloc, kv.key_ptr.*);
-                }
-
-                self.dirty = true;
-            },
+            .all => |delete_images| self.deleteVisiblePlacements(
+                alloc,
+                t,
+                delete_images,
+            ),
 
             .id => |v| self.deleteById(
                 alloc,
@@ -337,13 +583,10 @@ pub const ImageStorage = struct {
                     const rect = entry.value_ptr.rect(img, t) orelse continue;
                     if (rect.top_left.x <= x and rect.bottom_right.x >= x) {
                         entry.value_ptr.deinit(t.screens.active);
-                        self.placements.removeByPtr(entry.key_ptr);
+                        self.removePlacementByPtr(entry.key_ptr);
                         if (v.delete) self.deleteIfUnused(alloc, img.id);
                     }
                 }
-
-                // Mark dirty to force redraw
-                self.dirty = true;
             },
 
             .row => |v| row: {
@@ -369,13 +612,10 @@ pub const ImageStorage = struct {
                     target_pin_copy.x = rect.top_left.x;
                     if (target_pin_copy.isBetween(rect.top_left, rect.bottom_right)) {
                         entry.value_ptr.deinit(t.screens.active);
-                        self.placements.removeByPtr(entry.key_ptr);
+                        self.removePlacementByPtr(entry.key_ptr);
                         if (v.delete) self.deleteIfUnused(alloc, img.id);
                     }
                 }
-
-                // Mark dirty to force redraw
-                self.dirty = true;
             },
 
             .z => |v| {
@@ -392,18 +632,16 @@ pub const ImageStorage = struct {
                     if (entry.value_ptr.z == v.z) {
                         const image_id = entry.key_ptr.image_id;
                         entry.value_ptr.deinit(t.screens.active);
-                        self.placements.removeByPtr(entry.key_ptr);
+                        self.removePlacementByPtr(entry.key_ptr);
                         if (v.delete) self.deleteIfUnused(alloc, image_id);
                     }
                 }
-
-                // Mark dirty to force redraw
-                self.dirty = true;
             },
 
             .range => |v| range: {
-                if (v.first <= 0 or v.last <= 0) {
-                    log.warn("delete range values must be greater than zero", .{});
+                // The lower bound defaults to zero when x is omitted.
+                if (v.last == 0) {
+                    log.warn("delete range upper bound must be greater than zero", .{});
                     break :range;
                 }
                 if (v.first > v.last) {
@@ -411,23 +649,68 @@ pub const ImageStorage = struct {
                     break :range;
                 }
 
-                var it = self.placements.iterator();
-                while (it.next()) |entry| {
-                    if (entry.key_ptr.image_id >= v.first or entry.key_ptr.image_id <= v.last) {
-                        const image_id = entry.key_ptr.image_id;
-                        entry.value_ptr.deinit(t.screens.active);
-                        self.placements.removeByPtr(entry.key_ptr);
-                        if (v.delete) self.deleteIfUnused(alloc, image_id);
-                    }
+                // Remove matching placements in one pass.
+                var placement_it = self.placements.iterator();
+                while (placement_it.next()) |entry| {
+                    if (entry.key_ptr.image_id < v.first or
+                        entry.key_ptr.image_id > v.last) continue;
+
+                    entry.value_ptr.deinit(t.screens.active);
+                    self.removePlacementByPtr(entry.key_ptr);
                 }
 
-                // Mark dirty to force redraw
-                self.dirty = true;
+                // Uppercase deletion also frees matching images that are now
+                // unused, including images that had no placements initially.
+                if (!v.delete) break :range;
+                var image_it = self.images.iterator();
+                while (image_it.next()) |entry| {
+                    const image_id = entry.key_ptr.*;
+                    if (image_id >= v.first and image_id <= v.last) {
+                        self.deleteIfUnused(alloc, image_id);
+                    }
+                }
             },
 
             // We don't support animation frames yet so they are successfully
             // deleted!
             .animation_frames => {},
+        }
+    }
+
+    /// Delete only non-virtual placements that intersect the active screen.
+    /// The protocol defines d=a/A in terms of visible placements, and an
+    /// uppercase delete only frees data for images selected by those
+    /// placements.
+    fn deleteVisiblePlacements(
+        self: *ImageStorage,
+        alloc: Allocator,
+        t: *terminal.Terminal,
+        delete_unused: bool,
+    ) void {
+        var it = self.placements.iterator();
+        while (it.next()) |entry| {
+            const pin = switch (entry.value_ptr.location) {
+                .pin => |pin| pin,
+                .virtual => continue,
+            };
+            if (pin.garbage) continue;
+
+            // Placements anchored in the active area are necessarily visible.
+            // Only compute their extent when the anchor is already in history
+            // and the bottom edge may still intersect the active area.
+            if (t.screens.active.pages.pointFromPin(
+                .active,
+                pin.*,
+            ) == null) {
+                const image = self.imageById(entry.key_ptr.image_id) orelse continue;
+                const rect = entry.value_ptr.rect(image, t) orelse continue;
+                if (t.screens.active.pages.pointFromPin(.active, rect.bottom_right) == null) continue;
+            }
+
+            const image_id = entry.key_ptr.image_id;
+            entry.value_ptr.deinit(t.screens.active);
+            self.removePlacementByPtr(entry.key_ptr);
+            if (delete_unused) self.deleteIfUnused(alloc, image_id);
         }
     }
 
@@ -439,48 +722,38 @@ pub const ImageStorage = struct {
         placement_id: u32,
         delete_unused: bool,
     ) void {
+        var matched = placement_id == 0;
+
         // If no placement, we delete all placements with the ID
-        if (placement_id == 0) {
-            var it = self.placements.iterator();
-            while (it.next()) |entry| {
-                if (entry.key_ptr.image_id == image_id) {
-                    entry.value_ptr.deinit(s);
-                    self.placements.removeByPtr(entry.key_ptr);
-                }
-            }
-        } else {
-            if (self.placements.getEntry(.{
-                .image_id = image_id,
-                .placement_id = .{ .tag = .external, .id = placement_id },
-            })) |entry| {
-                entry.value_ptr.deinit(s);
-                self.placements.removeByPtr(entry.key_ptr);
-            }
+        if (placement_id == 0) self.removePlacementsByImageId(
+            s,
+            image_id,
+        ) else if (self.placements.getEntry(.{
+            .image_id = image_id,
+            .placement_id = .{
+                .tag = .external,
+                .id = placement_id,
+            },
+        })) |entry| {
+            entry.value_ptr.deinit(s);
+            self.removePlacementByPtr(entry.key_ptr);
+            matched = true;
         }
 
-        // If this is specified, then we also delete the image
-        // if it is no longer in use.
-        if (delete_unused) self.deleteIfUnused(alloc, image_id);
-
-        // Mark dirty to force redraw
-        self.dirty = true;
+        // A placement ID narrows the selection to that exact placement, so an
+        // unmatched selector must not free otherwise-unreferenced image data.
+        // https://sw.kovidgoyal.net/kitty/graphics-protocol/#deleting-images
+        if (delete_unused and matched) self.deleteIfUnused(alloc, image_id);
     }
 
     /// Delete an image if it is unused.
     fn deleteIfUnused(self: *ImageStorage, alloc: Allocator, image_id: u32) void {
-        var it = self.placements.iterator();
-        while (it.next()) |kv| {
-            if (kv.key_ptr.image_id == image_id) {
-                return;
-            }
-        }
+        const entry = self.images.getEntry(image_id) orelse return;
+        if (entry.value_ptr.metadata.placement_count > 0) return;
 
-        // If we get here, we can delete the image.
-        if (self.images.getEntry(image_id)) |entry| {
-            self.total_bytes -= entry.value_ptr.data.len;
-            entry.value_ptr.deinit(alloc);
-            self.images.removeByPtr(entry.key_ptr);
-        }
+        self.total_bytes -= entry.value_ptr.data.len();
+        entry.value_ptr.deinit(alloc);
+        self.images.removeByPtr(entry.key_ptr);
     }
 
     /// Deletes all placements intersecting a screen point.
@@ -500,116 +773,112 @@ pub const ImageStorage = struct {
         while (it.next()) |entry| {
             const img = self.imageById(entry.key_ptr.image_id) orelse continue;
             const rect = entry.value_ptr.rect(img, t) orelse continue;
-            if (target_pin.isBetween(rect.top_left, rect.bottom_right)) {
+            if (rect.contains(target_pin)) {
                 if (filter) |f| if (!f(filter_ctx, entry.value_ptr.*)) continue;
                 entry.value_ptr.deinit(t.screens.active);
-                self.placements.removeByPtr(entry.key_ptr);
+                self.removePlacementByPtr(entry.key_ptr);
                 if (delete_unused) self.deleteIfUnused(alloc, img.id);
             }
         }
-
-        // Mark dirty to force redraw
-        self.dirty = true;
     }
 
     /// Evict image to make space. This will evict the oldest image,
-    /// prioritizing unused images first, as recommended by the published
-    /// Kitty spec.
+    /// prioritizing transient images and unused images as recommended by the
+    /// published Kitty spec.
     ///
     /// This will evict as many images as necessary to make space for
     /// req bytes.
-    fn evictImage(self: *ImageStorage, alloc: Allocator, req: usize) !bool {
+    fn evictImage(
+        self: *ImageStorage,
+        io: std.Io,
+        alloc: Allocator,
+        s: *terminal.Screen,
+        req: usize,
+    ) bool {
+        return self.evictImageExcept(io, alloc, s, req, null);
+    }
+
+    /// Evict images while preserving `exclude_id`, used when replacing an
+    /// existing image whose old reservation has already been credited.
+    fn evictImageExcept(
+        self: *ImageStorage,
+        io: std.Io,
+        alloc: Allocator,
+        s: *terminal.Screen,
+        req: usize,
+        exclude_id: ?u32,
+    ) bool {
         assert(req <= self.total_limit);
 
-        // Ironically we allocate to evict. We should probably redesign the
-        // data structures to avoid this but for now allocating a little
-        // bit is fine compared to the megabytes we're looking to save.
         const Candidate = struct {
             id: u32,
-            time: std.time.Instant,
-            used: bool,
+            generation: u64,
+
+            // Lower values are evicted first:
+            // 0: transient, unused
+            // 1: not transient, unused
+            // 2: transient, used
+            // 3: not transient, used
+            priority: u2,
+
+            fn init(img: *const Image) @This() {
+                return .{
+                    .id = img.id,
+                    .generation = img.generation,
+                    .priority = (if (img.metadata.transient) @as(u2, 0) else @as(u2, 1)) +
+                        (if (img.metadata.placement_count > 0) @as(u2, 2) else @as(u2, 0)),
+                };
+            }
+
+            fn lessThan(lhs: @This(), rhs: @This()) bool {
+                if (lhs.priority != rhs.priority)
+                    return lhs.priority < rhs.priority;
+                if (lhs.generation != rhs.generation)
+                    return lhs.generation < rhs.generation;
+                return lhs.id < rhs.id;
+            }
         };
 
-        var candidates: std.ArrayList(Candidate) = .empty;
-        defer candidates.deinit(alloc);
+        // Evicting anything is a content mutation. This matters for the
+        // setLimit path in particular, which doesn't otherwise mark it.
+        const images_before = self.images.count();
+        defer if (self.images.count() != images_before) self.markMutated(io);
 
-        var it = self.images.iterator();
-        while (it.next()) |kv| {
-            const img = kv.value_ptr;
+        var evicted: usize = 0;
+        while (evicted < req) {
+            const c = candidate: {
+                var best: ?Candidate = null;
+                var it = self.images.iterator();
+                while (it.next()) |kv| {
+                    const img = kv.value_ptr;
+                    if (exclude_id != null and img.id == exclude_id.?) continue;
 
-            // This is a huge waste. See comment above about redesigning
-            // our data structures to avoid this. Eviction should be very
-            // rare though and we never have that many images/placements
-            // so hopefully this will last a long time.
-            const used = used: {
-                var p_it = self.placements.iterator();
-                while (p_it.next()) |p_kv| {
-                    if (p_kv.key_ptr.image_id == img.id) {
-                        break :used true;
-                    }
+                    const current = Candidate.init(img);
+                    if (best == null or current.lessThan(best.?)) best = current;
                 }
-
-                break :used false;
+                break :candidate best orelse return false;
             };
 
-            try candidates.append(alloc, .{
-                .id = img.id,
-                .time = img.transmit_time,
-                .used = used,
-            });
-        }
-
-        // Sort
-        std.mem.sortUnstable(
-            Candidate,
-            candidates.items,
-            {},
-            struct {
-                fn lessThan(
-                    ctx: void,
-                    lhs: Candidate,
-                    rhs: Candidate,
-                ) bool {
-                    _ = ctx;
-
-                    // If they're usage matches, then its based on time.
-                    if (lhs.used == rhs.used) return switch (lhs.time.order(rhs.time)) {
-                        .lt => true,
-                        .gt => false,
-                        .eq => lhs.id < rhs.id,
-                    };
-
-                    // If not used, then its a better candidate
-                    return !lhs.used;
-                }
-            }.lessThan,
-        );
-
-        // They're in order of best to evict.
-        var evicted: usize = 0;
-        for (candidates.items) |c| {
-            // Delete all the placements for this image and the image.
             var p_it = self.placements.iterator();
             while (p_it.next()) |entry| {
                 if (entry.key_ptr.image_id == c.id) {
-                    self.placements.removeByPtr(entry.key_ptr);
+                    entry.value_ptr.deinit(s);
+                    self.removePlacementByPtr(entry.key_ptr);
                 }
             }
 
-            if (self.images.getEntry(c.id)) |entry| {
-                log.info("evicting image id={} bytes={}", .{ c.id, entry.value_ptr.data.len });
+            const entry = self.images.getEntry(c.id).?;
+            const image_len = entry.value_ptr.data.len();
+            log.info("evicting image id={} bytes={}", .{ c.id, image_len });
 
-                evicted += entry.value_ptr.data.len;
-                self.total_bytes -= entry.value_ptr.data.len;
+            evicted += image_len;
+            self.total_bytes -= image_len;
 
-                entry.value_ptr.deinit(alloc);
-                self.images.removeByPtr(entry.key_ptr);
-
-                if (evicted > req) return true;
-            }
+            entry.value_ptr.deinit(alloc);
+            self.images.removeByPtr(entry.key_ptr);
         }
 
-        return false;
+        return true;
     }
 
     /// Every placement is uniquely identified by the image ID and the
@@ -662,6 +931,76 @@ pub const ImageStorage = struct {
             }
         }
 
+        /// Multiply two protocol-controlled values without allowing them to
+        /// wrap. Placement geometry is exposed as u32, so values larger than
+        /// that are represented by the largest possible value.
+        fn saturatingMul(lhs: u32, rhs: u32) u32 {
+            return std.math.mul(u32, lhs, rhs) catch std.math.maxInt(u32);
+        }
+
+        /// Scale a dimension by an aspect ratio and round to the nearest
+        /// integer. The u64 intermediate can hold the product of two u32s as
+        /// well as the rounding adjustment.
+        fn scaleDimension(value: u32, numerator: u32, denominator: u32) u32 {
+            if (denominator == 0) return 0;
+
+            const rounded = (@as(u64, value) * @as(u64, numerator) +
+                @as(u64, denominator) / 2) / @as(u64, denominator);
+            return std.math.cast(u32, rounded) orelse std.math.maxInt(u32);
+        }
+
+        pub const SourceRect = struct {
+            x: u32,
+            y: u32,
+            width: u32,
+            height: u32,
+        };
+
+        /// Returns the requested source rectangle intersected with the image.
+        /// A zero width or height requests the full corresponding image
+        /// dimension before intersection, as defined by the Kitty protocol.
+        pub fn sourceRect(self: Placement, image: Image) SourceRect {
+            const x = @min(self.source_x, image.width);
+            const y = @min(self.source_y, image.height);
+            return .{
+                .x = x,
+                .y = y,
+                .width = @min(
+                    if (self.source_width > 0) self.source_width else image.width,
+                    image.width - x,
+                ),
+                .height = @min(
+                    if (self.source_height > 0) self.source_height else image.height,
+                    image.height - y,
+                ),
+            };
+        }
+
+        /// Returns the placement offset clamped within the first cell. Pixel
+        /// geometry may temporarily be unavailable, in which case there is no
+        /// valid offset within the cell.
+        pub fn cellOffset(
+            self: Placement,
+            t: *const terminal.Terminal,
+        ) struct {
+            x: u32,
+            y: u32,
+        } {
+            const cell_width: u32 = t.width_px / t.cols;
+            const cell_height: u32 = t.height_px / t.rows;
+
+            return .{
+                .x = if (cell_width > 0)
+                    @min(self.x_offset, cell_width - 1)
+                else
+                    0,
+                .y = if (cell_height > 0)
+                    @min(self.y_offset, cell_height - 1)
+                else
+                    0,
+            };
+        }
+
         /// Returns the size of this placement's image in pixels,
         /// taking into account the source rectangle, specified
         /// rows/columns, and aspect ratio.
@@ -673,9 +1012,9 @@ pub const ImageStorage = struct {
             width: u32,
             height: u32,
         } {
-            // Height / width of the image in px.
-            const width = if (self.source_width > 0) self.source_width else image.width;
-            const height = if (self.source_height > 0) self.source_height else image.height;
+            const source = self.sourceRect(image);
+            const width = source.width;
+            const height = source.height;
 
             // If we don't have any specified cols or rows then the placement
             // should be the native size of the image, and doesn't need to be
@@ -692,20 +1031,18 @@ pub const ImageStorage = struct {
             // count and the height by the row count, because it should be.
             const cell_width: u32 = t.width_px / t.cols;
             const cell_height: u32 = t.height_px / t.rows;
-
-            const width_f64: f64 = @floatFromInt(width);
-            const height_f64: f64 = @floatFromInt(height);
+            const cell_offset = self.cellOffset(t);
 
             // If we have a specified cols AND rows then we calculate
             // the width and height from them directly, we don't need
             // to adjust for aspect ratio.
             if (self.columns > 0 and self.rows > 0) {
-                const calc_width = cell_width * self.columns;
-                const calc_height = cell_height * self.rows;
+                const calc_width = saturatingMul(cell_width, self.columns);
+                const calc_height = saturatingMul(cell_height, self.rows);
 
                 return .{
-                    .width = calc_width,
-                    .height = calc_height,
+                    .width = calc_width -| cell_offset.x,
+                    .height = calc_height -| cell_offset.y,
                 };
             }
 
@@ -715,11 +1052,11 @@ pub const ImageStorage = struct {
             // If only the columns were specified, we determine
             // the height of the image based on the aspect ratio.
             if (self.columns > 0) {
-                const aspect = height_f64 / width_f64;
-                const calc_width: u32 = cell_width * self.columns;
-                const calc_height: u32 = @intFromFloat(@round(
-                    @as(f64, @floatFromInt(calc_width)) * aspect,
-                ));
+                const calc_width = saturatingMul(
+                    cell_width,
+                    self.columns,
+                ) -| cell_offset.x;
+                const calc_height = scaleDimension(calc_width, height, width);
 
                 return .{
                     .width = calc_width,
@@ -730,11 +1067,11 @@ pub const ImageStorage = struct {
             // Otherwise, only the rows were specified, so we
             // determine the width based on the aspect ratio.
             {
-                const aspect = width_f64 / height_f64;
-                const calc_height: u32 = cell_height * self.rows;
-                const calc_width: u32 = @intFromFloat(@round(
-                    @as(f64, @floatFromInt(calc_height)) * aspect,
-                ));
+                const calc_height = saturatingMul(
+                    cell_height,
+                    self.rows,
+                ) -| cell_offset.y;
+                const calc_width = scaleDimension(calc_height, width, height);
 
                 return .{
                     .width = calc_width,
@@ -761,15 +1098,16 @@ pub const ImageStorage = struct {
             // Otherwise we calculate the pixel size, divide by
             // cell size, and round up to the nearest integer.
             const calc_size = self.pixelSize(image, t);
+            const cell_offset = self.cellOffset(t);
             return .{
                 .cols = std.math.divCeil(
                     u32,
-                    calc_size.width + self.x_offset,
+                    calc_size.width +| cell_offset.x,
                     t.width_px / t.cols,
                 ) catch 0,
                 .rows = std.math.divCeil(
                     u32,
-                    calc_size.height + self.y_offset,
+                    calc_size.height +| cell_offset.y,
                     t.height_px / t.rows,
                 ) catch 0,
             };
@@ -778,8 +1116,8 @@ pub const ImageStorage = struct {
         }
 
         /// Returns a selection of the entire rectangle this placement
-        /// occupies within the screen. This can return null if the placement
-        /// doesn't have an associated rect (i.e. a virtual placement).
+        /// occupies within the screen. This can return null for a virtual
+        /// placement or when unavailable pixel geometry makes it empty.
         pub fn rect(
             self: Placement,
             image: Image,
@@ -790,18 +1128,23 @@ pub const ImageStorage = struct {
                 .pin => |p| p,
                 .virtual => return null,
             };
+            if (pin.garbage) return null;
+
+            // A zero pixel-sized placement can produce a zero grid size when
+            // pixel geometry is unavailable. It occupies no rectangle.
+            if (grid_size.cols == 0 or grid_size.rows == 0) return null;
 
             var br = switch (pin.downOverflow(grid_size.rows - 1)) {
                 .offset => |v| v,
                 .overflow => |v| v.end,
             };
-            br.x = @min(
+            br.x = @intCast(@min(
                 // We need to sub one here because the x value is
                 // one width already. So if the image is width "1"
                 // then we add zero to X because X itself is width 1.
-                pin.x + (grid_size.cols - 1),
-                t.cols - 1,
-            );
+                @as(u32, pin.x) +| (grid_size.cols - 1),
+                @as(u32, t.cols) - 1,
+            ));
 
             return .{
                 .top_left = pin.*,
@@ -824,17 +1167,18 @@ fn trackPin(
 test "storage: add placement with zero placement id" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .cols = 100, .rows = 100 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .cols = 100, .rows = 100 });
     defer t.deinit(alloc);
     t.width_px = 100;
     t.height_px = 100;
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1, .width = 50, .height = 50 });
-    try s.addImage(alloc, .{ .id = 2, .width = 25, .height = 25 });
-    try s.addPlacement(alloc, 1, 0, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
-    try s.addPlacement(alloc, 1, 0, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 50, .height = 50 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2, .width = 25, .height = 25 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 0, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 0, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
 
     try testing.expectEqual(@as(usize, 2), s.placements.count());
     try testing.expectEqual(@as(usize, 2), s.images.count());
@@ -850,25 +1194,124 @@ test "storage: add placement with zero placement id" {
     }) != null);
 }
 
-test "storage: delete all placements and images" {
+test "storage: replacing placement releases tracked pin" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 3, .cols = 3 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .cols = 3, .rows = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+
+    const tracked = t.screens.active.pages.countTrackedPins();
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{
+        .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) },
+    });
+    try testing.expectEqual(
+        tracked + 1,
+        t.screens.active.pages.countTrackedPins(),
+    );
+
+    const replacement_pin = try trackPin(&t, .{ .x = 2, .y = 2 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{
+        .location = .{ .pin = replacement_pin },
+    });
+    try testing.expectEqual(@as(usize, 1), s.placements.count());
+    try testing.expectEqual(
+        tracked + 1,
+        t.screens.active.pages.countTrackedPins(),
+    );
+    try testing.expectEqual(
+        replacement_pin,
+        s.placements.get(.{
+            .image_id = 1,
+            .placement_id = .{ .tag = .external, .id = 1 },
+        }).?.location.pin,
+    );
+}
+
+test "storage: adding placement reclaims garbage placements" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .cols = 3, .rows = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+
+    const tracked = t.screens.active.pages.countTrackedPins();
+    const old_pin = try trackPin(&t, .{ .x = 0, .y = 0 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 0, .{
+        .location = .{ .pin = old_pin },
+    });
+    old_pin.garbage = true;
+
+    const new_pin = try trackPin(&t, .{ .x = 1, .y = 1 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 0, .{
+        .location = .{ .pin = new_pin },
+    });
+
+    try testing.expectEqual(@as(usize, 1), s.placements.count());
+    try testing.expectEqual(
+        tracked + 1,
+        t.screens.active.pages.countTrackedPins(),
+    );
+    try testing.expectEqual(
+        new_pin,
+        s.placements.get(.{
+            .image_id = 1,
+            .placement_id = .{ .tag = .internal, .id = 1 },
+        }).?.location.pin,
+    );
+}
+
+test "storage: placement count limit permits replacement" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .virtual = {} } });
+
+    const img = s.images.getPtr(1).?;
+    img.metadata.placement_count = std.math.maxInt(@TypeOf(img.metadata.placement_count));
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .virtual = {} } });
+    try testing.expectError(
+        error.OutOfMemory,
+        s.addPlacement(io, alloc, t.screens.active, 1, 2, .{ .location = .{ .virtual = {} } }),
+    );
+    try testing.expectEqual(@as(usize, 1), s.placements.count());
+}
+
+test "storage: delete all visible placements and matching images" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
     defer t.deinit(alloc);
     const tracked = t.screens.active.pages.countTrackedPins();
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1 });
-    try s.addImage(alloc, .{ .id = 2 });
-    try s.addImage(alloc, .{ .id = 3 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
-    try s.addPlacement(alloc, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .all = true });
+    s.delete(io, alloc, &t, .{ .all = true });
     try testing.expect(s.dirty);
-    try testing.expectEqual(@as(usize, 0), s.images.count());
+    try testing.expectEqual(@as(usize, 1), s.images.count());
+    try testing.expect(s.images.contains(3));
     try testing.expectEqual(@as(usize, 0), s.placements.count());
     try testing.expectEqual(tracked, t.screens.active.pages.countTrackedPins());
 }
@@ -876,45 +1319,133 @@ test "storage: delete all placements and images" {
 test "storage: delete all placements and images preserves limit" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 3, .cols = 3 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
     defer t.deinit(alloc);
     const tracked = t.screens.active.pages.countTrackedPins();
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
     s.total_limit = 5000;
-    try s.addImage(alloc, .{ .id = 1 });
-    try s.addImage(alloc, .{ .id = 2 });
-    try s.addImage(alloc, .{ .id = 3 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
-    try s.addPlacement(alloc, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .all = true });
+    s.delete(io, alloc, &t, .{ .all = true });
     try testing.expect(s.dirty);
-    try testing.expectEqual(@as(usize, 0), s.images.count());
+    try testing.expectEqual(@as(usize, 1), s.images.count());
+    try testing.expect(s.images.contains(3));
     try testing.expectEqual(@as(usize, 0), s.placements.count());
     try testing.expectEqual(@as(usize, 5000), s.total_limit);
     try testing.expectEqual(tracked, t.screens.active.pages.countTrackedPins());
 }
 
+test "storage: delete all visible placements preserves scrollback" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{
+        .rows = 2,
+        .cols = 2,
+        .max_scrollback_bytes = 4096,
+    });
+    defer t.deinit(alloc);
+    t.width_px = 2;
+    t.height_px = 2;
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 1, .height = 1 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{
+        .location = .{ .pin = try trackPin(&t, .{ .y = 0 }) },
+    });
+    try t.scrollUp(1);
+
+    const history_key: ImageStorage.PlacementKey = .{
+        .image_id = 1,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    };
+    try testing.expect(t.screens.active.pages.pointFromPin(
+        .active,
+        s.placements.get(history_key).?.location.pin.*,
+    ) == null);
+
+    try s.addPlacement(io, alloc, t.screens.active, 1, 2, .{
+        .location = .{ .pin = try trackPin(&t, .{ .y = 0 }) },
+    });
+
+    s.delete(io, alloc, &t, .{ .all = true });
+    try testing.expectEqual(@as(usize, 1), s.placements.count());
+    try testing.expect(s.placements.contains(history_key));
+    try testing.expectEqual(@as(usize, 1), s.images.count());
+    try testing.expect(s.images.contains(1));
+}
+
+test "storage: delete all includes placements spanning into active area" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{
+        .rows = 2,
+        .cols = 2,
+        .max_scrollback_bytes = 4096,
+    });
+    defer t.deinit(alloc);
+    t.width_px = 2;
+    t.height_px = 2;
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .width = 1,
+        .height = 2,
+    });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{
+        .location = .{ .pin = try trackPin(&t, .{ .y = 0 }) },
+    });
+    try t.scrollUp(1);
+
+    const placement = s.placements.get(.{
+        .image_id = 1,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    }).?;
+    try testing.expect(t.screens.active.pages.pointFromPin(
+        .active,
+        placement.location.pin.*,
+    ) == null);
+    const rect = placement.rect(s.imageById(1).?, &t).?;
+    try testing.expect(t.screens.active.pages.pointFromPin(
+        .active,
+        rect.bottom_right,
+    ) != null);
+
+    s.delete(io, alloc, &t, .{ .all = true });
+    try testing.expectEqual(@as(usize, 0), s.placements.count());
+    try testing.expectEqual(@as(usize, 0), s.images.count());
+}
+
 test "storage: delete all placements" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 3, .cols = 3 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
     defer t.deinit(alloc);
     const tracked = t.screens.active.pages.countTrackedPins();
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1 });
-    try s.addImage(alloc, .{ .id = 2 });
-    try s.addImage(alloc, .{ .id = 3 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
-    try s.addPlacement(alloc, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .all = false });
+    s.delete(io, alloc, &t, .{ .all = false });
     try testing.expect(s.dirty);
     try testing.expectEqual(@as(usize, 0), s.placements.count());
     try testing.expectEqual(@as(usize, 3), s.images.count());
@@ -924,20 +1455,21 @@ test "storage: delete all placements" {
 test "storage: delete all placements by image id" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 3, .cols = 3 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
     defer t.deinit(alloc);
     const tracked = t.screens.active.pages.countTrackedPins();
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1 });
-    try s.addImage(alloc, .{ .id = 2 });
-    try s.addImage(alloc, .{ .id = 3 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
-    try s.addPlacement(alloc, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .id = .{ .image_id = 2 } });
+    s.delete(io, alloc, &t, .{ .id = .{ .image_id = 2 } });
     try testing.expect(s.dirty);
     try testing.expectEqual(@as(usize, 1), s.placements.count());
     try testing.expectEqual(@as(usize, 3), s.images.count());
@@ -947,20 +1479,21 @@ test "storage: delete all placements by image id" {
 test "storage: delete all placements by image id and unused images" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 3, .cols = 3 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
     defer t.deinit(alloc);
     const tracked = t.screens.active.pages.countTrackedPins();
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1 });
-    try s.addImage(alloc, .{ .id = 2 });
-    try s.addImage(alloc, .{ .id = 3 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
-    try s.addPlacement(alloc, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .id = .{ .delete = true, .image_id = 2 } });
+    s.delete(io, alloc, &t, .{ .id = .{ .delete = true, .image_id = 2 } });
     try testing.expect(s.dirty);
     try testing.expectEqual(@as(usize, 1), s.placements.count());
     try testing.expectEqual(@as(usize, 2), s.images.count());
@@ -970,21 +1503,22 @@ test "storage: delete all placements by image id and unused images" {
 test "storage: delete placement by specific id" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 3, .cols = 3 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
     defer t.deinit(alloc);
     const tracked = t.screens.active.pages.countTrackedPins();
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1 });
-    try s.addImage(alloc, .{ .id = 2 });
-    try s.addImage(alloc, .{ .id = 3 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
-    try s.addPlacement(alloc, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
-    try s.addPlacement(alloc, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .id = .{
+    s.delete(io, alloc, &t, .{ .id = .{
         .delete = true,
         .image_id = 1,
         .placement_id = 2,
@@ -995,10 +1529,84 @@ test "storage: delete placement by specific id" {
     try testing.expectEqual(tracked + 2, t.screens.active.pages.countTrackedPins());
 }
 
+test "storage: uppercase id delete preserves image when placement does not match" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+
+    s.dirty = false;
+    const generation = s.generation;
+    s.delete(io, alloc, &t, .{ .id = .{
+        .delete = true,
+        .image_id = 1,
+        .placement_id = 7,
+    } });
+
+    try testing.expect(s.imageById(1) != null);
+    try testing.expect(!s.dirty);
+    try testing.expectEqual(generation, s.generation);
+}
+
+test "storage: uppercase id delete frees image after placement matches" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+    const tracked = t.screens.active.pages.countTrackedPins();
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 9, .{
+        .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) },
+    });
+
+    s.dirty = false;
+    s.delete(io, alloc, &t, .{ .id = .{
+        .delete = true,
+        .image_id = 1,
+        .placement_id = 9,
+    } });
+
+    try testing.expectEqual(@as(usize, 0), s.placements.count());
+    try testing.expectEqual(@as(usize, 0), s.images.count());
+    try testing.expect(s.dirty);
+    try testing.expectEqual(tracked, t.screens.active.pages.countTrackedPins());
+}
+
+test "storage: uppercase id delete without placement frees unplaced image" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+
+    s.dirty = false;
+    s.delete(io, alloc, &t, .{ .id = .{
+        .delete = true,
+        .image_id = 1,
+    } });
+
+    try testing.expectEqual(@as(usize, 0), s.images.count());
+    try testing.expect(s.dirty);
+}
+
 test "storage: delete intersecting cursor" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 100, .cols = 100 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 100, .cols = 100 });
     defer t.deinit(alloc);
     t.width_px = 100;
     t.height_px = 100;
@@ -1006,15 +1614,15 @@ test "storage: delete intersecting cursor" {
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1, .width = 50, .height = 50 });
-    try s.addImage(alloc, .{ .id = 2, .width = 25, .height = 25 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
-    try s.addPlacement(alloc, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 50, .height = 50 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2, .width = 25, .height = 25 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
 
     t.screens.active.cursorAbsolute(12, 12);
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .intersect_cursor = false });
+    s.delete(io, alloc, &t, .{ .intersect_cursor = false });
     try testing.expect(s.dirty);
     try testing.expectEqual(@as(usize, 1), s.placements.count());
     try testing.expectEqual(@as(usize, 2), s.images.count());
@@ -1027,10 +1635,66 @@ test "storage: delete intersecting cursor" {
     }) != null);
 }
 
+test "storage: delete intersecting cursor checks interior row column" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 100, .cols = 100 });
+    defer t.deinit(alloc);
+    t.width_px = 100;
+    t.height_px = 100;
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 10, .height = 10 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 20, .y = 0 }) } });
+
+    // This is inside the right placement and on an interior row shared by
+    // both placements, but it is outside the left placement's columns.
+    t.screens.active.cursorAbsolute(21, 5);
+    s.delete(io, alloc, &t, .{ .intersect_cursor = false });
+
+    try testing.expectEqual(@as(usize, 1), s.placements.count());
+    try testing.expect(s.placements.get(.{
+        .image_id = 1,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    }) != null);
+}
+
+test "storage: delete intersecting cell checks interior row column" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 100, .cols = 100 });
+    defer t.deinit(alloc);
+    t.width_px = 100;
+    t.height_px = 100;
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 10, .height = 10 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 20, .y = 0 }) } });
+
+    // Protocol coordinates are one-based, so this targets grid cell (21, 5).
+    s.delete(io, alloc, &t, .{ .intersect_cell = .{
+        .x = 22,
+        .y = 6,
+    } });
+
+    try testing.expectEqual(@as(usize, 1), s.placements.count());
+    try testing.expect(s.placements.get(.{
+        .image_id = 1,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    }) != null);
+}
+
 test "storage: delete intersecting cursor plus unused" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 100, .cols = 100 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 100, .cols = 100 });
     defer t.deinit(alloc);
     t.width_px = 100;
     t.height_px = 100;
@@ -1038,15 +1702,15 @@ test "storage: delete intersecting cursor plus unused" {
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1, .width = 50, .height = 50 });
-    try s.addImage(alloc, .{ .id = 2, .width = 25, .height = 25 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
-    try s.addPlacement(alloc, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 50, .height = 50 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2, .width = 25, .height = 25 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
 
     t.screens.active.cursorAbsolute(12, 12);
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .intersect_cursor = true });
+    s.delete(io, alloc, &t, .{ .intersect_cursor = true });
     try testing.expect(s.dirty);
     try testing.expectEqual(@as(usize, 1), s.placements.count());
     try testing.expectEqual(@as(usize, 2), s.images.count());
@@ -1062,7 +1726,8 @@ test "storage: delete intersecting cursor plus unused" {
 test "storage: delete intersecting cursor hits multiple" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 100, .cols = 100 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 100, .cols = 100 });
     defer t.deinit(alloc);
     t.width_px = 100;
     t.height_px = 100;
@@ -1070,15 +1735,15 @@ test "storage: delete intersecting cursor hits multiple" {
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1, .width = 50, .height = 50 });
-    try s.addImage(alloc, .{ .id = 2, .width = 25, .height = 25 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
-    try s.addPlacement(alloc, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 50, .height = 50 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2, .width = 25, .height = 25 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
 
     t.screens.active.cursorAbsolute(26, 26);
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .intersect_cursor = true });
+    s.delete(io, alloc, &t, .{ .intersect_cursor = true });
     try testing.expect(s.dirty);
     try testing.expectEqual(@as(usize, 0), s.placements.count());
     try testing.expectEqual(@as(usize, 1), s.images.count());
@@ -1088,7 +1753,8 @@ test "storage: delete intersecting cursor hits multiple" {
 test "storage: delete by column" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 100, .cols = 100 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 100, .cols = 100 });
     defer t.deinit(alloc);
     t.width_px = 100;
     t.height_px = 100;
@@ -1096,13 +1762,13 @@ test "storage: delete by column" {
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1, .width = 50, .height = 50 });
-    try s.addImage(alloc, .{ .id = 2, .width = 25, .height = 25 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
-    try s.addPlacement(alloc, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 50, .height = 50 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2, .width = 25, .height = 25 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .column = .{
+    s.delete(io, alloc, &t, .{ .column = .{
         .delete = false,
         .x = 60,
     } });
@@ -1121,19 +1787,20 @@ test "storage: delete by column" {
 test "storage: delete by column 1x1" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 100, .cols = 100 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 100, .cols = 100 });
     defer t.deinit(alloc);
     t.width_px = 100;
     t.height_px = 100;
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1, .width = 1, .height = 1 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
-    try s.addPlacement(alloc, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 0 }) } });
-    try s.addPlacement(alloc, 1, 3, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 2, .y = 0 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 1, .height = 1 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 0 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 3, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 2, .y = 0 }) } });
 
-    s.delete(alloc, &t, .{ .column = .{
+    s.delete(io, alloc, &t, .{ .column = .{
         .delete = false,
         .x = 2,
     } });
@@ -1154,7 +1821,8 @@ test "storage: delete by column 1x1" {
 test "storage: delete by row" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 100, .cols = 100 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 100, .cols = 100 });
     defer t.deinit(alloc);
     t.width_px = 100;
     t.height_px = 100;
@@ -1162,13 +1830,13 @@ test "storage: delete by row" {
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1, .width = 50, .height = 50 });
-    try s.addImage(alloc, .{ .id = 2, .width = 25, .height = 25 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
-    try s.addPlacement(alloc, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 50, .height = 50 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2, .width = 25, .height = 25 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 25, .y = 25 }) } });
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .row = .{
+    s.delete(io, alloc, &t, .{ .row = .{
         .delete = false,
         .y = 60,
     } });
@@ -1187,19 +1855,20 @@ test "storage: delete by row" {
 test "storage: delete by row 1x1" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 100, .cols = 100 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 100, .cols = 100 });
     defer t.deinit(alloc);
     t.width_px = 100;
     t.height_px = 100;
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1, .width = 1, .height = 1 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .y = 0 }) } });
-    try s.addPlacement(alloc, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .y = 1 }) } });
-    try s.addPlacement(alloc, 1, 3, .{ .location = .{ .pin = try trackPin(&t, .{ .y = 2 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 1, .height = 1 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .y = 0 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 2, .{ .location = .{ .pin = try trackPin(&t, .{ .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 3, .{ .location = .{ .pin = try trackPin(&t, .{ .y = 2 }) } });
 
-    s.delete(alloc, &t, .{ .row = .{
+    s.delete(io, alloc, &t, .{ .row = .{
         .delete = false,
         .y = 2,
     } });
@@ -1220,22 +1889,23 @@ test "storage: delete by row 1x1" {
 test "storage: delete images by range 1" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 3, .cols = 3 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
     defer t.deinit(alloc);
     const tracked = t.screens.active.pages.countTrackedPins();
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1 });
-    try s.addImage(alloc, .{ .id = 2 });
-    try s.addImage(alloc, .{ .id = 3 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
-    try s.addPlacement(alloc, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
     try testing.expectEqual(@as(usize, 3), s.images.count());
     try testing.expectEqual(@as(usize, 2), s.placements.count());
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .range = .{ .delete = false, .first = 1, .last = 2 } });
+    s.delete(io, alloc, &t, .{ .range = .{ .delete = false, .first = 1, .last = 2 } });
     try testing.expect(s.dirty);
     try testing.expectEqual(@as(usize, 3), s.images.count());
     try testing.expectEqual(@as(usize, 0), s.placements.count());
@@ -1245,22 +1915,23 @@ test "storage: delete images by range 1" {
 test "storage: delete images by range 2" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 3, .cols = 3 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
     defer t.deinit(alloc);
     const tracked = t.screens.active.pages.countTrackedPins();
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1 });
-    try s.addImage(alloc, .{ .id = 2 });
-    try s.addImage(alloc, .{ .id = 3 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
-    try s.addPlacement(alloc, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
     try testing.expectEqual(@as(usize, 3), s.images.count());
     try testing.expectEqual(@as(usize, 2), s.placements.count());
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .range = .{ .delete = true, .first = 1, .last = 2 } });
+    s.delete(io, alloc, &t, .{ .range = .{ .delete = true, .first = 1, .last = 2 } });
     try testing.expect(s.dirty);
     try testing.expectEqual(@as(usize, 1), s.images.count());
     try testing.expectEqual(@as(usize, 0), s.placements.count());
@@ -1270,58 +1941,201 @@ test "storage: delete images by range 2" {
 test "storage: delete images by range 3" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 3, .cols = 3 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
     defer t.deinit(alloc);
     const tracked = t.screens.active.pages.countTrackedPins();
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1 });
-    try s.addImage(alloc, .{ .id = 2 });
-    try s.addImage(alloc, .{ .id = 3 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
-    try s.addPlacement(alloc, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 3, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
     try testing.expectEqual(@as(usize, 3), s.images.count());
-    try testing.expectEqual(@as(usize, 2), s.placements.count());
+    try testing.expectEqual(@as(usize, 3), s.placements.count());
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .range = .{ .delete = false, .first = 1, .last = 1 } });
+    s.delete(io, alloc, &t, .{ .range = .{ .delete = false, .first = 2, .last = 2 } });
     try testing.expect(s.dirty);
     try testing.expectEqual(@as(usize, 3), s.images.count());
-    try testing.expectEqual(@as(usize, 0), s.placements.count());
-    try testing.expectEqual(tracked, t.screens.active.pages.countTrackedPins());
+    try testing.expectEqual(@as(usize, 2), s.placements.count());
+    try testing.expect(s.placements.get(.{
+        .image_id = 1,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    }) != null);
+    try testing.expect(s.placements.get(.{
+        .image_id = 3,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    }) != null);
+    try testing.expectEqual(tracked + 2, t.screens.active.pages.countTrackedPins());
 }
 
 test "storage: delete images by range 4" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    var t = try terminal.Terminal.init(alloc, .{ .rows = 3, .cols = 3 });
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
     defer t.deinit(alloc);
     const tracked = t.screens.active.pages.countTrackedPins();
 
     var s: ImageStorage = .{};
     defer s.deinit(alloc, t.screens.active);
-    try s.addImage(alloc, .{ .id = 1 });
-    try s.addImage(alloc, .{ .id = 2 });
-    try s.addImage(alloc, .{ .id = 3 });
-    try s.addPlacement(alloc, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
-    try s.addPlacement(alloc, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    try s.addPlacement(io, alloc, t.screens.active, 3, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
     try testing.expectEqual(@as(usize, 3), s.images.count());
-    try testing.expectEqual(@as(usize, 2), s.placements.count());
+    try testing.expectEqual(@as(usize, 3), s.placements.count());
 
     s.dirty = false;
-    s.delete(alloc, &t, .{ .range = .{ .delete = true, .first = 1, .last = 1 } });
+    s.delete(io, alloc, &t, .{ .range = .{ .delete = true, .first = 2, .last = 2 } });
     try testing.expect(s.dirty);
+    try testing.expectEqual(@as(usize, 2), s.images.count());
+    try testing.expectEqual(@as(usize, 2), s.placements.count());
+    try testing.expect(s.placements.get(.{
+        .image_id = 1,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    }) != null);
+    try testing.expect(s.placements.get(.{
+        .image_id = 3,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    }) != null);
+    try testing.expectEqual(tracked + 2, t.screens.active.pages.countTrackedPins());
+}
+
+test "storage: uppercase range deletes unplaced image data" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3 });
+
+    s.delete(io, alloc, &t, .{
+        .range = .{
+            .delete = true,
+            // Zero is the default lower bound when x is omitted.
+            .first = 0,
+            .last = 2,
+        },
+    });
     try testing.expectEqual(@as(usize, 1), s.images.count());
-    try testing.expectEqual(@as(usize, 0), s.placements.count());
-    try testing.expectEqual(tracked, t.screens.active.pages.countTrackedPins());
+    try testing.expect(s.images.contains(3));
+}
+
+test "storage: erase display preserves scrollback and reclaims unplaced images" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    var t = try terminal.Terminal.init(io, alloc, .{
+        .rows = 2,
+        .cols = 2,
+        .max_scrollback_bytes = 4096,
+    });
+    defer t.deinit(alloc);
+    t.width_px = 2;
+    t.height_px = 2;
+
+    const s = &t.screens.active.kitty_images;
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 1, .height = 1 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{
+        .location = .{ .pin = try trackPin(&t, .{ .y = 0 }) },
+    });
+    try t.scrollUp(1);
+
+    const history_key: ImageStorage.PlacementKey = .{
+        .image_id = 1,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    };
+    try testing.expect(t.screens.active.pages.pointFromPin(
+        .active,
+        s.placements.get(history_key).?.location.pin.*,
+    ) == null);
+
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2, .width = 1, .height = 1 });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{
+        .location = .{ .pin = try trackPin(&t, .{ .y = 0 }) },
+    });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 3, .width = 1, .height = 1 });
+
+    t.eraseDisplay(.complete, false);
+    try testing.expectEqual(@as(usize, 1), s.placements.count());
+    try testing.expect(s.placements.contains(history_key));
+    try testing.expectEqual(@as(usize, 1), s.images.count());
+    try testing.expect(s.images.contains(1));
+    try testing.expect(!s.images.contains(2));
+    try testing.expect(!s.images.contains(3));
+}
+
+test "storage: cell offsets stay within explicit destination rectangle" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var t = try terminal.Terminal.init(io, alloc, .{ .cols = 5, .rows = 5 });
+    defer t.deinit(alloc);
+    t.width_px = 50; // 10 px per col
+    t.height_px = 100; // 20 px per row
+
+    // Explicit columns and rows describe the far cell boundaries. Offsets
+    // move the near edge inward without moving those far edges.
+    const placement: ImageStorage.Placement = .{
+        .location = .{ .virtual = {} },
+        .x_offset = 3,
+        .y_offset = 4,
+        .columns = 2,
+        .rows = 1,
+    };
+    const actual = placement.pixelSize(.{ .width = 4, .height = 3 }, &t);
+    try testing.expectEqual(@as(u32, 17), actual.width);
+    try testing.expectEqual(@as(u32, 16), actual.height);
+    try testing.expectEqual(@as(u32, 2), placement.gridSize(.{ .width = 4, .height = 3 }, &t).cols);
+    try testing.expectEqual(@as(u32, 1), placement.gridSize(.{ .width = 4, .height = 3 }, &t).rows);
+}
+
+test "storage: cell offsets clamp to cell bounds" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var t = try terminal.Terminal.init(io, alloc, .{ .cols = 5, .rows = 5 });
+    defer t.deinit(alloc);
+    t.width_px = 50; // 10 px per col
+    t.height_px = 100; // 20 px per row
+
+    const placement: ImageStorage.Placement = .{
+        .location = .{ .virtual = {} },
+        .x_offset = std.math.maxInt(u32),
+        .y_offset = std.math.maxInt(u32),
+        .columns = 1,
+        .rows = 1,
+    };
+    const offset = placement.cellOffset(&t);
+    try testing.expectEqual(@as(u32, 9), offset.x);
+    try testing.expectEqual(@as(u32, 19), offset.y);
+
+    // Even hostile offsets leave one pixel inside the requested cell.
+    const actual = placement.pixelSize(.{ .width = 1, .height = 1 }, &t);
+    try testing.expectEqual(@as(u32, 1), actual.width);
+    try testing.expectEqual(@as(u32, 1), actual.height);
 }
 
 test "storage: aspect ratio calculation when only columns or rows specified" {
     const testing = std.testing;
     const alloc = testing.allocator;
+    const io = testing.io;
 
-    var t = try terminal.Terminal.init(alloc, .{ .cols = 100, .rows = 100 });
+    var t = try terminal.Terminal.init(io, alloc, .{ .cols = 100, .rows = 100 });
     defer t.deinit(alloc);
     t.width_px = 1000; // 10 px per col
     t.height_px = 2000; // 20 px per row
@@ -1361,4 +2175,599 @@ test "storage: aspect ratio calculation when only columns or rows specified" {
         try testing.expectEqual(@as(u32, 178), calc_size.width);
         try testing.expectEqual(@as(u32, 100), calc_size.height);
     }
+}
+
+test "storage: default source rectangle is intersected before sizing" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var t = try terminal.Terminal.init(io, alloc, .{ .cols = 5, .rows = 5 });
+    defer t.deinit(alloc);
+
+    const placement: ImageStorage.Placement = .{
+        .location = .{ .virtual = {} },
+        .source_x = 3,
+        .source_y = 1,
+    };
+    const actual = placement.pixelSize(.{ .width = 4, .height = 3 }, &t);
+    try testing.expectEqual(@as(u32, 1), actual.width);
+    try testing.expectEqual(@as(u32, 2), actual.height);
+}
+
+test "storage: explicit source rectangle is intersected before sizing" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var t = try terminal.Terminal.init(io, alloc, .{ .cols = 10, .rows = 10 });
+    defer t.deinit(alloc);
+    t.width_px = 100;
+    t.height_px = 100;
+
+    // The requested 8x8 rectangle intersects this 10x10 image as 2x3.
+    // With a two-column destination, the clipped 2:3 aspect ratio produces
+    // a 20x30 pixel destination.
+    const placement: ImageStorage.Placement = .{
+        .location = .{ .virtual = {} },
+        .source_x = 8,
+        .source_y = 7,
+        .source_width = 8,
+        .source_height = 8,
+        .columns = 2,
+    };
+    const actual = placement.pixelSize(.{ .width = 10, .height = 10 }, &t);
+    try testing.expectEqual(@as(u32, 20), actual.width);
+    try testing.expectEqual(@as(u32, 30), actual.height);
+}
+
+test "storage: placement geometry handles untrusted dimensions" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    const max = std.math.maxInt(u32);
+
+    var t = try terminal.Terminal.init(io, alloc, .{ .cols = 2, .rows = 2 });
+    defer t.deinit(alloc);
+    t.width_px = max;
+    t.height_px = max;
+
+    // Cell dimensions multiplied by protocol-controlled row and column
+    // counts saturate instead of panicking or wrapping.
+    {
+        const placement: ImageStorage.Placement = .{
+            .location = .{ .virtual = {} },
+            .columns = 3,
+            .rows = 3,
+        };
+        const actual = placement.pixelSize(.{ .width = 1, .height = 1 }, &t);
+        try testing.expectEqual(max, actual.width);
+        try testing.expectEqual(max, actual.height);
+    }
+
+    // Aspect-ratio scaling also saturates when the derived dimension does
+    // not fit in the public u32 geometry type.
+    {
+        const placement: ImageStorage.Placement = .{
+            .location = .{ .virtual = {} },
+            .columns = 3,
+            .source_height = max,
+        };
+        const actual = placement.pixelSize(.{ .width = 1, .height = 1 }, &t);
+        try testing.expectEqual(max, actual.width);
+        try testing.expectEqual(max, actual.height);
+    }
+    {
+        const placement: ImageStorage.Placement = .{
+            .location = .{ .virtual = {} },
+            .rows = 3,
+            .source_width = max,
+        };
+        const actual = placement.pixelSize(.{ .width = 1, .height = 1 }, &t);
+        try testing.expectEqual(max, actual.width);
+        try testing.expectEqual(max, actual.height);
+    }
+
+    // Pixel offsets are protocol-controlled too. Clamp them to the cell
+    // before including them in grid geometry.
+    t.width_px = 2;
+    t.height_px = 2;
+    {
+        const placement: ImageStorage.Placement = .{
+            .location = .{ .virtual = {} },
+            .x_offset = max,
+            .y_offset = max,
+        };
+        const actual = placement.gridSize(.{ .width = 1, .height = 1 }, &t);
+        try testing.expectEqual(@as(u32, 1), actual.cols);
+        try testing.expectEqual(@as(u32, 1), actual.rows);
+    }
+
+    const pin = try trackPin(&t, .{ .x = 0, .y = 0 });
+    defer t.screens.active.pages.untrackPin(pin);
+
+    // Explicit maximum dimensions must clamp the rectangle to the terminal
+    // without overflowing its horizontal extent.
+    {
+        const placement: ImageStorage.Placement = .{
+            .location = .{ .pin = pin },
+            .columns = max,
+            .rows = 1,
+        };
+        const rect = placement.rect(.{ .width = 1, .height = 1 }, &t).?;
+        try testing.expectEqual(@as(size.CellCountInt, 1), rect.bottom_right.x);
+    }
+
+    // A garbage pin represents content that has been pruned from retained
+    // history. Its fallback location must not make the placement visible.
+    pin.garbage = true;
+    {
+        const placement: ImageStorage.Placement = .{
+            .location = .{ .pin = pin },
+            .columns = 1,
+            .rows = 1,
+        };
+        try testing.expect(placement.rect(.{ .width = 1, .height = 1 }, &t) == null);
+    }
+    pin.garbage = false;
+
+    // Terminals can temporarily have no pixel geometry. A placement whose
+    // computed grid is empty has no rectangle, so rect must not subtract one
+    // from a zero row count.
+    t.width_px = 0;
+    t.height_px = 0;
+    {
+        const placement: ImageStorage.Placement = .{
+            .location = .{ .pin = pin },
+            .columns = 1,
+        };
+        const actual = placement.gridSize(.{ .width = 1, .height = 1 }, &t);
+        try testing.expectEqual(@as(u32, 0), actual.cols);
+        try testing.expectEqual(@as(u32, 0), actual.rows);
+        try testing.expect(placement.rect(.{ .width = 1, .height = 1 }, &t) == null);
+    }
+}
+
+test "storage: generation stamps on image add and replace" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+
+    // Fresh storage has generation zero (never mutated).
+    try testing.expectEqual(@as(u64, 0), s.generation);
+
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 1, .height = 1 });
+    const gen1 = s.generation;
+    try testing.expect(gen1 > 0);
+
+    const img1 = s.imageById(1).?;
+    try testing.expectEqual(gen1, img1.generation);
+
+    // A second image gets a strictly greater stamp.
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2, .width = 1, .height = 1 });
+    const gen2 = s.generation;
+    try testing.expect(gen2 > gen1);
+    try testing.expectEqual(gen2, s.imageById(2).?.generation);
+
+    // Retransmitting the same image ID (identical dimensions) gets a
+    // fresh stamp: this is what makes same-sized retransmissions
+    // detectable by renderers.
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .width = 1, .height = 1 });
+    const gen3 = s.generation;
+    try testing.expect(gen3 > gen2);
+    try testing.expectEqual(gen3, s.imageById(1).?.generation);
+
+    // Image 2 kept its stamp.
+    try testing.expectEqual(gen2, s.imageById(2).?.generation);
+}
+
+test "storage: generation bumps on placement and delete" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    const gen_add = s.generation;
+
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    const gen_place = s.generation;
+    try testing.expect(gen_place > gen_add);
+
+    // Reads don't change the generation.
+    _ = s.imageById(1);
+    _ = s.imageByNumber(1);
+    try testing.expectEqual(gen_place, s.generation);
+
+    s.delete(io, alloc, &t, .{ .all = true });
+    try testing.expect(s.generation > gen_place);
+}
+
+test "storage: generation bumps when setLimit evicts or disables" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+
+    const data = try alloc.dupe(u8, "1234");
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .width = 1,
+        .height = 1,
+        .data = .{ .complete = data },
+    });
+    const gen_add = s.generation;
+
+    // Lowering the limit evicts the image and must mark a mutation.
+    s.dirty = false;
+    s.setLimit(io, alloc, t.screens.active, 1);
+    try testing.expect(s.dirty);
+    try testing.expect(s.generation > gen_add);
+    try testing.expectEqual(@as(usize, 0), s.images.count());
+    const gen_evict = s.generation;
+
+    // Disabling (limit=0) resets the storage and must mark a mutation.
+    s.dirty = false;
+    s.setLimit(io, alloc, t.screens.active, 0);
+    try testing.expect(s.dirty);
+    try testing.expect(s.generation > gen_evict);
+}
+
+test "storage: imageByNumber returns most recently transmitted" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+
+    // Two images sharing a number: the newest transmission wins,
+    // regardless of insertion order or clock resolution.
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .number = 7 });
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 2, .number = 7 });
+    try testing.expectEqual(@as(u32, 2), s.imageByNumber(7).?.id);
+
+    // Retransmit the first: it becomes the newest.
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1, .number = 7 });
+    try testing.expectEqual(@as(u32, 1), s.imageByNumber(7).?.id);
+}
+
+test "storage: nextGeneration is unique and monotonic" {
+    const testing = std.testing;
+    const a = nextGeneration(testing.io);
+    const b = nextGeneration(testing.io);
+    try testing.expect(b > a);
+    try testing.expect(a > 0);
+}
+
+test "storage: no-op delete does not mark a mutation" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+
+    // A delete-all on an empty storage (this runs on every screen
+    // clear) must not dirty the state or bump the generation.
+    s.delete(io, alloc, &t, .{ .all = true });
+    try testing.expect(!s.dirty);
+    try testing.expectEqual(@as(u64, 0), s.generation);
+
+    // Same for a delete that matches nothing.
+    try s.addImage(io, alloc, t.screens.active, .{ .id = 1 });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } });
+    const gen = s.generation;
+    s.dirty = false;
+    s.delete(io, alloc, &t, .{ .id = .{ .image_id = 42 } });
+    try testing.expect(!s.dirty);
+    try testing.expectEqual(gen, s.generation);
+
+    // But a delete that removes something does mark a mutation.
+    s.delete(io, alloc, &t, .{ .id = .{ .image_id = 1 } });
+    try testing.expect(s.dirty);
+    try testing.expect(s.generation > gen);
+}
+
+test "storage: evicts images in priority order" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{ .total_limit = 192 };
+    defer s.deinit(alloc, t.screens.active);
+
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .data = .{ .complete = try alloc.dupe(u8, "*" ** 64) },
+        .metadata = .{ .transient = false },
+    });
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 2,
+        .data = .{ .complete = try alloc.dupe(u8, "*" ** 64) },
+        .metadata = .{ .transient = true },
+    });
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 3,
+        .data = .{ .complete = try alloc.dupe(u8, "*" ** 64) },
+        .metadata = .{ .transient = true },
+    });
+    try s.addPlacement(
+        io,
+        alloc,
+        t.screens.active,
+        2,
+        1,
+        .{ .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) } },
+    );
+
+    const gen = s.generation;
+    const result = s.evictImage(io, alloc, t.screens.active, 96);
+    try testing.expect(s.dirty);
+    try testing.expect(s.generation > gen);
+    try testing.expectEqual(true, result);
+    try testing.expectEqual(1, s.images.count());
+    try testing.expect(!s.images.contains(1));
+    try testing.expect(s.images.contains(2));
+    try testing.expect(!s.images.contains(3));
+}
+
+test "storage: eviction releases placement pins" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{ .total_limit = 128 };
+    defer s.deinit(alloc, t.screens.active);
+
+    const tracked = t.screens.active.pages.countTrackedPins();
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .data = .{ .complete = try alloc.dupe(u8, "*" ** 64) },
+    });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{
+        .location = .{ .pin = try trackPin(&t, .{ .x = 0, .y = 0 }) },
+    });
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 2,
+        .data = .{ .complete = try alloc.dupe(u8, "*" ** 64) },
+    });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{
+        .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) },
+    });
+    try testing.expectEqual(tracked + 2, t.screens.active.pages.countTrackedPins());
+
+    // Adding a third image evicts the oldest equally-ranked image and its
+    // placement. The newer image's placement and tracked pin remain intact.
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 3,
+        .data = .{ .complete = try alloc.dupe(u8, "*" ** 64) },
+    });
+    try testing.expect(!s.images.contains(1));
+    try testing.expect(s.images.contains(2));
+    try testing.expect(s.images.contains(3));
+    try testing.expectEqual(@as(usize, 1), s.placements.count());
+    try testing.expect(s.placements.contains(.{
+        .image_id = 2,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    }));
+    try testing.expectEqual(tracked + 1, t.screens.active.pages.countTrackedPins());
+}
+
+test "storage: pending image completes once and preserves age" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{ .total_limit = 16 };
+    defer s.deinit(alloc, t.screens.active);
+
+    const pending = try s.addPendingImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .number = 7,
+        .width = 2,
+        .height = 2,
+        .format = .rgba,
+        .data = .{ .pending = 16 },
+    });
+    try testing.expectEqual(@as(usize, 16), s.total_bytes);
+    try testing.expectEqual(@as(u32, 1), s.imageByNumber(7).?.id);
+    try testing.expect(s.imageById(1).?.data.isPending());
+
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{
+        .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) },
+    });
+    try testing.expectEqual(@as(usize, 1), s.placements.count());
+
+    const wrong = try alloc.dupe(u8, "short");
+    const wrong_completed = pending.complete(&s, io, wrong);
+    try testing.expect(!wrong_completed);
+    defer alloc.free(wrong);
+
+    const storage_generation = s.generation;
+    s.dirty = false;
+    const pixels = try alloc.dupe(u8, "*" ** 16);
+    try testing.expect(pending.complete(&s, io, pixels));
+    try testing.expect(s.dirty);
+    try testing.expect(s.generation > storage_generation);
+    try testing.expectEqual(pending.generation, s.imageById(1).?.generation);
+    try testing.expectEqual(@as(usize, 16), s.total_bytes);
+    try testing.expectEqualSlices(u8, pixels, s.imageById(1).?.data.bytes().?);
+
+    const duplicate = try alloc.dupe(u8, "!" ** 16);
+    const duplicate_completed = pending.complete(&s, io, duplicate);
+    try testing.expect(!duplicate_completed);
+    defer alloc.free(duplicate);
+}
+
+test "storage: stale pending completion loses to delete replacement and eviction" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{ .total_limit = 8 };
+    defer s.deinit(alloc, t.screens.active);
+
+    const deleted = try s.addPendingImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .data = .{ .pending = 4 },
+    });
+    s.delete(io, alloc, &t, .{ .id = .{ .delete = true, .image_id = 1 } });
+    const deleted_data = try alloc.dupe(u8, "gone");
+    const deleted_completed = deleted.complete(&s, io, deleted_data);
+    try testing.expect(!deleted_completed);
+    defer alloc.free(deleted_data);
+
+    const replaced = try s.addPendingImage(io, alloc, t.screens.active, .{
+        .id = 2,
+        .data = .{ .pending = 4 },
+    });
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 2,
+        .data = .{ .complete = try alloc.dupe(u8, "live") },
+    });
+    const replaced_data = try alloc.dupe(u8, "late");
+    const replaced_completed = replaced.complete(&s, io, replaced_data);
+    try testing.expect(!replaced_completed);
+    defer alloc.free(replaced_data);
+    try testing.expectEqualStrings("live", s.imageById(2).?.data.bytes().?);
+
+    const evicted = try s.addPendingImage(io, alloc, t.screens.active, .{
+        .id = 3,
+        .data = .{ .pending = 4 },
+    });
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 4,
+        .data = .{ .complete = try alloc.dupe(u8, "12345678") },
+    });
+    try testing.expect(s.imageById(3) == null);
+    const evicted_data = try alloc.dupe(u8, "late");
+    const evicted_completed = evicted.complete(&s, io, evicted_data);
+    try testing.expect(!evicted_completed);
+    defer alloc.free(evicted_data);
+}
+
+test "storage: replacement reuses pending reservation and removes placements" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{ .total_limit = 12 };
+    defer s.deinit(alloc, t.screens.active);
+    const tracked = t.screens.active.pages.countTrackedPins();
+
+    const pending = try s.addPendingImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .width = 2,
+        .height = 1,
+        .format = .rgba,
+        .data = .{ .pending = 8 },
+    });
+    try s.addPlacement(io, alloc, t.screens.active, 1, 1, .{
+        .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) },
+    });
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 2,
+        .data = .{ .complete = try alloc.dupe(u8, "keep") },
+    });
+
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .width = 2,
+        .height = 1,
+        .format = .rgba,
+        .data = .{ .complete = try alloc.dupe(u8, "12345678") },
+    });
+    try testing.expect(s.images.contains(1));
+    try testing.expect(s.images.contains(2));
+    try testing.expectEqual(@as(usize, 0), s.placements.count());
+    try testing.expectEqual(tracked, t.screens.active.pages.countTrackedPins());
+    try testing.expectEqual(
+        @as(u30, 0),
+        s.imageById(1).?.metadata.placement_count,
+    );
+    try testing.expectEqual(@as(usize, 12), s.total_bytes);
+
+    const stale = try alloc.dupe(u8, "snapshot");
+    const stale_completed = pending.complete(&s, io, stale);
+    try testing.expect(!stale_completed);
+    defer alloc.free(stale);
+
+    // Growing the replacement requires eviction, but the replacement ID is
+    // excluded. The other image supplies the needed bytes.
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .data = .{ .complete = try alloc.dupe(u8, "1234567890") },
+    });
+    try testing.expect(s.images.contains(1));
+    try testing.expect(!s.images.contains(2));
+    try testing.expectEqual(@as(usize, 0), s.placements.count());
+    try testing.expectEqual(@as(usize, 10), s.total_bytes);
+
+    s.delete(io, alloc, &t, .{ .id = .{ .delete = true, .image_id = 1 } });
+    try testing.expectEqual(@as(usize, 0), s.images.count());
+    try testing.expectEqual(@as(usize, 0), s.placements.count());
+}
+
+test "storage: pending images share exact eviction ordering" {
+    const testing = std.testing;
+    const io = testing.io;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+
+    var s: ImageStorage = .{ .total_limit = 192 };
+    defer s.deinit(alloc, t.screens.active);
+
+    _ = try s.addPendingImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .data = .{ .pending = 64 },
+        .metadata = .{ .transient = false },
+    });
+    _ = try s.addPendingImage(io, alloc, t.screens.active, .{
+        .id = 2,
+        .data = .{ .pending = 64 },
+        .metadata = .{ .transient = true },
+    });
+    try s.addImage(io, alloc, t.screens.active, .{
+        .id = 3,
+        .data = .{ .complete = try alloc.dupe(u8, "*" ** 64) },
+        .metadata = .{ .transient = true },
+    });
+    try s.addPlacement(io, alloc, t.screens.active, 2, 1, .{
+        .location = .{ .pin = try trackPin(&t, .{ .x = 1, .y = 1 }) },
+    });
+
+    // ID 3 is transient and unused, so one exact-size eviction is enough.
+    try testing.expect(s.evictImage(io, alloc, t.screens.active, 64));
+    try testing.expect(s.images.contains(1));
+    try testing.expect(s.images.contains(2));
+    try testing.expect(!s.images.contains(3));
+    try testing.expectEqual(@as(usize, 128), s.total_bytes);
 }

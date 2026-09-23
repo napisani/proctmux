@@ -31,12 +31,12 @@ make test-e2e
 make build
 ```
 
-If `zig` is not on `PATH`, pass the pinned compiler explicitly:
+If `zig` is not on `PATH`, run the commands through the pinned Zig 0.16 development shell:
 
 ```bash
-make fmt ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
-make test ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
-make build ZIG=/nix/store/fh292vnr8i4znyjqy65mkyc0qkcb5k6v-zig-0.15.2/bin/zig
+nix develop -c make fmt
+nix develop -c make test
+nix develop -c make build
 ```
 
 The Zig tests include Unix socket listener and process lifecycle coverage, so

@@ -87,6 +87,6 @@ ziglint --ignore Z001      # suppress specific rule
 
 ## References
 
-- Language Reference: https://ziglang.org/documentation/0.15.2/
-- Standard Library: https://ziglang.org/documentation/0.15.2/std/
+- Language Reference: https://ziglang.org/documentation/0.16.0/
+- Standard Library: https://ziglang.org/documentation/0.16.0/std/
 - Zig Guide: https://zig.guide/

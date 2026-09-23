@@ -2,11 +2,8 @@
     .name = .proctmux,
     .version = "1.0.0",
     .fingerprint = 0x3d7124ec04f5452a,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .yaml = .{
-            .path = "third_party/zig-yaml",
-        },
         .uucode = .{
             .path = "third_party/uucode",
         },

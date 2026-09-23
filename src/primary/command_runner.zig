@@ -2,6 +2,7 @@
 //! This module converts IPC Process Commands into process lifecycle and selection changes while keeping response construction local to command semantics.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
 const proc_mod = @import("../proc/root.zig");
@@ -61,7 +62,7 @@ pub const Runner = struct {
             .stop => try self.stopProcess(target_process),
             .restart => {
                 try self.stopProcess(target_process);
-                std.Thread.sleep(500 * std.time.ns_per_ms);
+                platform.sleepNanoseconds(500 * std.time.ns_per_ms);
                 try self.startProcess(target_process);
             },
             else => return error.UnsupportedCommand,
@@ -106,7 +107,7 @@ pub const Runner = struct {
         for (self.state.processes.items) |*target_process| {
             if (self.controller.isRunning(target_process.id)) {
                 try self.controller.stopProcess(target_process.id);
-                std.Thread.sleep(500 * std.time.ns_per_ms);
+                platform.sleepNanoseconds(500 * std.time.ns_per_ms);
                 _ = try self.controller.startProcess(target_process.id, target_process.config);
             }
         }

@@ -61,6 +61,7 @@ graph TB
     YAML --> CL
     CL --> PD
     PD --> AS
+    CL -. no file .-> PD
 ```
 
 ## Zig Module Map
@@ -72,7 +73,7 @@ domain modules:
 |--------|---------|
 | `src/app/` | App entrypoints, CLI parsing/routing, exit-code behavior, raw terminal entry/restore |
 | `src/modes/` | Primary, client, and signal runtime modes plus shared production input/output adapters |
-| `src/config/runtime.zig` | Loads Project Config and applies discovery in one place |
+| `src/config/runtime.zig` | Chooses file-backed or implicit Project Config and applies configless discovery |
 | `src/terminal/` | Raw terminal mode management, terminal size probing, and the narrow `ghostty_vt` wrapper |
 | `src/unified/` | Unified runtime loop, child-primary PTY adapter, in-process test adapter, split rendering, and server-pane output state |
 | `src/ipc/line.zig` | JSON-line reading and timeout reads |
@@ -234,13 +235,19 @@ Shared state is protected with `std.Thread.Mutex` and `std.atomic.Value`. Ring b
 
 ## Config Discovery Pipeline
 
-When `general.procs_from_make_targets` or `general.procs_from_package_json` is enabled, `src/discover/` runs before the primary server starts:
+`src/config/runtime.zig` first searches for a config file. If one is found, it
+is authoritative and `src/discover/` runs only for sources enabled by its
+`general.procs_from_*` settings. If no config exists, the loader creates a
+default config in memory and iterates all registered sources:
 
-1. Scans the working directory for `Makefile` and/or `package.json`
-2. Extracts targets/scripts and creates `ProcessConfig` entries
-3. Merges them into `cfg.Procs` — explicit config entries take precedence on name collision
+1. Scans the working directory for `Makefile` and `package.json`.
+2. Extracts targets/scripts and creates `ProcessConfig` entries.
+3. Merges them into the in-memory `cfg.Procs` map.
+4. Skips malformed sources with warnings so startup remains best effort.
 
-See [discovery.md](discovery.md) for naming conventions and detection details.
+Discovery sources implement a shared function-pointer contract and are kept
+independent from runtime modes. See [discovery.md](discovery.md) for naming
+conventions and extension details.
 
 ## Build and Test Entry Points
 
@@ -248,8 +255,8 @@ The shipped binary is built from the Zig entry point `src/main.zig`.
 The runtime:
 
 1. Parses flags and subcommands through `src/cli/`
-2. Loads YAML config through `src/config/`
-3. Applies process discovery through `src/discover/`
+2. Loads file-backed or implicit config through `src/config/`
+3. Applies configless process discovery through `src/discover/`
 4. Routes to primary, client, unified, or signal-command orchestration in
    `src/app/`
 
@@ -270,7 +277,7 @@ table generation step.
 
 | Technology | Usage |
 |-----------|-------|
-| **Zig 0.15.2** | Shipped implementation language |
+| **Zig 0.16.0** | Shipped implementation language |
 | **Zig stdlib** | CLI/runtime orchestration, Unix sockets, process management |
 | **zig-yaml** | Vendored YAML parsing dependency |
 | **libghostty-vt** | Vendored VT/ANSI terminal state for unified-mode process output |

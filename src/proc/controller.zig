@@ -2,6 +2,7 @@
 //! The controller owns active process instances, retained scrollback buffers, stop escalation, cleanup hooks, and the narrow status adapter used by snapshots.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
 const ring = @import("../ring/root.zig");
@@ -25,7 +26,7 @@ pub const Controller = struct {
     global_config: ?*const config.schema.Config,
     processes: std.AutoHashMap(domain.process.ProcessId, *Instance),
     scrollbacks: std.AutoHashMap(domain.process.ProcessId, *ring.RingBuffer),
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -41,10 +42,10 @@ pub const Controller = struct {
 
     pub fn deinit(self: *Controller) void {
         while (true) {
-            self.mutex.lock();
+            self.mutex.lockUncancelable(platform.io());
             var it = self.processes.keyIterator();
             const maybe_id = if (it.next()) |key| key.* else null;
-            self.mutex.unlock();
+            self.mutex.unlock(platform.io());
 
             const id = maybe_id orelse break;
             const instance = self.getInstance(id) orelse continue;
@@ -71,8 +72,8 @@ pub const Controller = struct {
         id: domain.process.ProcessId,
         proc_cfg: *const config.schema.ProcessConfig,
     ) !*Instance {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         if (self.processes.contains(id)) return error.ProcessAlreadyExists;
         const scrollback = try self.scrollbackForStartLocked(id);
@@ -153,9 +154,9 @@ pub const Controller = struct {
             instance.output_thread = null;
         }
 
-        self.mutex.lock();
+        self.mutex.lockUncancelable(platform.io());
         _ = self.processes.remove(id);
-        self.mutex.unlock();
+        self.mutex.unlock(platform.io());
 
         // Run the hook after threads are joined and the map no longer exposes
         // the instance, so a slow hook cannot make the process appear alive.
@@ -192,8 +193,8 @@ pub const Controller = struct {
     }
 
     pub fn getAllProcessIDs(self: *Controller, allocator: std.mem.Allocator) ![]domain.process.ProcessId {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         var ids = try allocator.alloc(domain.process.ProcessId, self.processes.count());
         var it = self.processes.keyIterator();
@@ -215,14 +216,14 @@ pub const Controller = struct {
     }
 
     fn getInstance(self: *Controller, id: domain.process.ProcessId) ?*Instance {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
         return self.processes.get(id);
     }
 
     fn getScrollbackBuffer(self: *Controller, id: domain.process.ProcessId) ?*ring.RingBuffer {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
         return self.scrollbacks.get(id);
     }
 
@@ -253,12 +254,12 @@ fn adapterGetPID(context: *anyopaque, id: domain.process.ProcessId) i32 {
     return self.getPID(id);
 }
 
-fn resolveStopSignal(proc_cfg: *const config.schema.ProcessConfig) u8 {
-    if (proc_cfg.stop > 0) return @intCast(proc_cfg.stop);
-    return std.posix.SIG.TERM;
+fn resolveStopSignal(proc_cfg: *const config.schema.ProcessConfig) std.posix.SIG {
+    if (proc_cfg.stop > 0) return @enumFromInt(@as(u32, @intCast(proc_cfg.stop)));
+    return .TERM;
 }
 
-fn signalProcessTree(pid: std.posix.pid_t, sig: u8) void {
+fn signalProcessTree(pid: std.posix.pid_t, sig: std.posix.SIG) void {
     if (pid <= 0) return;
     const process_group: std.posix.pid_t = -pid;
     std.posix.kill(process_group, sig) catch {
@@ -276,7 +277,7 @@ fn waitUntilStopped(instance: *Instance, timeout_ms: u64) bool {
     var index: u64 = 0;
     while (index < attempts) : (index += 1) {
         if (!instance.isRunning()) return true;
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+        platform.sleepNanoseconds(10 * std.time.ns_per_ms);
     }
     return !instance.isRunning();
 }

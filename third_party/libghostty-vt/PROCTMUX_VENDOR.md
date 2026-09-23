@@ -5,8 +5,10 @@ Vendored for proctmux unified-mode terminal output rendering.
 ## Upstream
 
 - Repository: https://github.com/ghostty-org/ghostty
-- Commit: `b0f8276658fbcc75318d2125d40146074a3fc505`
-- Vendored date: 2026-05-13
+- Commit: `50d3ac8ed6ad1cbca498f7a4388ab14054a5c3e1`
+- Ghostty app version: `1.3.2-dev`
+- libghostty-vt version: `0.1.0-dev`
+- Vendored date: 2026-08-19
 
 ## Included Source
 
@@ -52,8 +54,8 @@ path to exist, or because it has been replaced by a local shim below.
 proctmux vendors the exact dependency used by the pinned Ghostty revision:
 
 - Path: `third_party/uucode/`
-- Source: `https://deps.files.ghostty.org/uucode-0.2.0-ZZjBPqZVVABQepOqZHR7vV_NcaN-wats0IB6o-Exj6m9.tar.gz`
-- Zig package hash: `uucode-0.2.0-ZZjBPqZVVABQepOqZHR7vV_NcaN-wats0IB6o-Exj6m9`
+- Source: `https://deps.files.ghostty.org/uucode-2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz`
+- Zig package hash: `uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA`
 
 ## Local Patches
 
@@ -66,8 +68,10 @@ proctmux vendors the exact dependency used by the pinned Ghostty revision:
   with narrow lib-mode shims. These keep Ghostty terminal code compiling
   without linking Ghostty application, renderer, font backend, event loop, and
   PTY runtime implementations into proctmux.
-- Removed an unused test-only import from `src/config/formatter.zig` to avoid
-  pulling Ghostty's full configuration graph into proctmux's unit-test build.
+- Replaced `src/cli.zig` with the argument/diagnostic subset needed by terminal
+  configuration parsing, excluding application commands and crash reporting.
+- Replaced `src/main_c.zig` with the `String` carrier needed transitively by
+  config modules, excluding Ghostty's application C entry point.
 
 Keep upstream vendored source unchanged unless a required build patch is
 recorded in this section.

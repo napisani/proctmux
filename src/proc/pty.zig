@@ -2,6 +2,7 @@
 //! PTY setup is isolated because it is platform-sensitive and because proctmux intentionally gives managed processes a real terminal interface.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 
 const default_rows: u16 = 24;
 const default_cols: u16 = 80;
@@ -15,7 +16,7 @@ extern "c" fn forkpty(
 
 pub const Spawned = struct {
     pid: std.posix.pid_t,
-    master: std.fs.File,
+    master: platform.fs.File,
 };
 
 /// Spawns a child attached to a PTY so managed commands behave as if they were
@@ -23,7 +24,7 @@ pub const Spawned = struct {
 pub fn spawn(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
-    env_map: *const std.process.EnvMap,
+    env_map: *const std.process.Environ.Map,
     cwd: []const u8,
     rows: u16,
     cols: u16,
@@ -36,9 +37,8 @@ pub fn spawn(
     var argv_z = try ArgvZ.init(allocator, resolved_argv.argv);
     defer argv_z.deinit();
 
-    var env_arena = std.heap.ArenaAllocator.init(allocator);
-    defer env_arena.deinit();
-    const envp = try std.process.createEnvironFromMap(env_arena.allocator(), env_map, .{});
+    const envp = try env_map.createPosixBlock(allocator, .{});
+    defer envp.deinit(allocator);
 
     const cwd_z = if (cwd.len > 0) try allocator.dupeZ(u8, cwd) else null;
     defer if (cwd_z) |path| allocator.free(path);
@@ -56,14 +56,16 @@ pub fn spawn(
 
     if (pid == 0) {
         configureChildTerminal() catch {};
-        if (cwd_z) |path| std.posix.chdirZ(path.ptr) catch std.process.exit(127);
-        std.posix.execveZ(argv_z.ptrs[0].?, argv_z.ptrs.ptr, envp.ptr) catch {};
+        if (cwd_z) |path| {
+            if (std.posix.errno(std.posix.system.chdir(path.ptr)) != .SUCCESS) std.process.exit(127);
+        }
+        _ = std.posix.system.execve(argv_z.ptrs[0].?, argv_z.ptrs.ptr, envp.slice.ptr);
         std.process.exit(127);
     }
 
     return .{
         .pid = pid,
-        .master = .{ .handle = @intCast(master_fd) },
+        .master = .{ .handle = @intCast(master_fd), .flags = .{ .nonblocking = false } },
     };
 }
 
@@ -83,7 +85,7 @@ const ResolvedArgv = struct {
     fn init(
         allocator: std.mem.Allocator,
         argv: []const []const u8,
-        env_map: *const std.process.EnvMap,
+        env_map: *const std.process.Environ.Map,
     ) !ResolvedArgv {
         const resolved_path = try resolveExecutable(allocator, argv[0], env_map);
         errdefer if (resolved_path) |path| allocator.free(path);
@@ -109,7 +111,7 @@ const ResolvedArgv = struct {
 fn resolveExecutable(
     allocator: std.mem.Allocator,
     executable: []const u8,
-    env_map: *const std.process.EnvMap,
+    env_map: *const std.process.Environ.Map,
 ) !?[]const u8 {
     if (std.mem.indexOfScalar(u8, executable, '/') != null) return null;
 
@@ -117,9 +119,9 @@ fn resolveExecutable(
     var path_it = std.mem.splitScalar(u8, path_value, ':');
     while (path_it.next()) |dir| {
         if (dir.len == 0) continue;
-        const candidate = try std.fs.path.join(allocator, &.{ dir, executable });
+        const candidate = try platform.fs.path.join(allocator, &.{ dir, executable });
         errdefer allocator.free(candidate);
-        std.fs.cwd().access(candidate, .{}) catch |err| switch (err) {
+        platform.fs.cwd().access(platform.io(), candidate, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 allocator.free(candidate);
                 continue;

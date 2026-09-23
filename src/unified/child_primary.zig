@@ -2,6 +2,7 @@
 //! The adapter launches the current executable in a PTY so the unified server pane observes the same terminal behavior as a standalone primary.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const pty = @import("../proc/pty.zig");
 const tui = @import("../tui/root.zig");
 
@@ -17,11 +18,11 @@ pub const OutputCursor = struct {
 pub const ChildPrimary = struct {
     allocator: std.mem.Allocator,
     pid: std.posix.pid_t,
-    pty_file: ?std.fs.File,
-    output_file: ?std.fs.File,
+    pty_file: ?platform.fs.File,
+    output_file: ?platform.fs.File,
     output: std.array_list.Managed(u8),
     output_base_offset: u64 = 0,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
     output_thread: ?std.Thread = null,
     wait_thread: ?std.Thread = null,
     exited: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -31,15 +32,14 @@ pub const ChildPrimary = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         argv: []const []const u8,
-        env_map: *const std.process.EnvMap,
+        env_map: *const std.process.Environ.Map,
         cwd: []const u8,
     ) !*ChildPrimary {
         const spawned = try pty.spawn(allocator, argv, env_map, cwd, 30, 100);
-        errdefer spawned.master.close();
+        errdefer platform.fs.close(spawned.master);
 
-        const output_fd = try std.posix.dup(spawned.master.handle);
-        const output_file: std.fs.File = .{ .handle = output_fd };
-        errdefer output_file.close();
+        const output_file = try platform.fs.duplicate(spawned.master);
+        errdefer platform.fs.close(output_file);
 
         const child = try allocator.create(ChildPrimary);
         errdefer allocator.destroy(child);
@@ -61,16 +61,16 @@ pub const ChildPrimary = struct {
     pub fn deinit(self: *ChildPrimary) void {
         if (!self.exited.load(.seq_cst)) {
             std.posix.kill(self.pid, std.posix.SIG.INT) catch {};
-            std.Thread.sleep(50 * std.time.ns_per_ms);
+            platform.sleepNanoseconds(50 * std.time.ns_per_ms);
         }
         if (!self.exited.load(.seq_cst)) {
             std.posix.kill(self.pid, std.posix.SIG.TERM) catch {};
-            std.Thread.sleep(50 * std.time.ns_per_ms);
+            platform.sleepNanoseconds(50 * std.time.ns_per_ms);
         }
         if (!self.exited.load(.seq_cst)) std.posix.kill(self.pid, std.posix.SIG.KILL) catch {};
 
         if (self.pty_file) |file| {
-            file.close();
+            platform.fs.close(file);
             self.pty_file = null;
         }
         if (self.wait_thread) |thread| {
@@ -82,7 +82,7 @@ pub const ChildPrimary = struct {
             self.output_thread = null;
         }
         if (self.output_file) |file| {
-            file.close();
+            platform.fs.close(file);
             self.output_file = null;
         }
         self.output.deinit();
@@ -101,8 +101,8 @@ pub const ChildPrimary = struct {
         allocator: std.mem.Allocator,
         cursor: *OutputCursor,
     ) ![]u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         const base = self.output_base_offset;
         const end = base + self.output.items.len;
@@ -116,14 +116,14 @@ pub const ChildPrimary = struct {
     }
 
     pub fn outputEndOffset(self: *ChildPrimary) u64 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
         return self.output_base_offset + self.output.items.len;
     }
 
     fn appendOutput(self: *ChildPrimary, bytes: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
         try self.output.appendSlice(bytes);
         if (self.output.items.len > max_output) {
             const trim = self.output.items.len - max_output;
@@ -136,7 +136,7 @@ pub const ChildPrimary = struct {
     fn writeInput(context: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *ChildPrimary = @ptrCast(@alignCast(context));
         const file = self.pty_file orelse return error.ProcessNotRunning;
-        try file.writeAll(bytes);
+        try platform.fs.writeAll(file, bytes);
     }
 };
 
@@ -144,7 +144,7 @@ fn captureOutput(child: *ChildPrimary) void {
     const file = child.output_file orelse return;
     var buffer: [4096]u8 = undefined;
     while (true) {
-        const n = file.read(&buffer) catch |err| {
+        const n = platform.fs.read(file, &buffer) catch |err| {
             log.debug("child primary output capture stopped after read error: {s}", .{@errorName(err)});
             return;
         };
@@ -157,7 +157,8 @@ fn captureOutput(child: *ChildPrimary) void {
 }
 
 fn waitChild(child: *ChildPrimary) void {
-    _ = std.posix.waitpid(child.pid, 0);
+    var status: c_int = 0;
+    while (std.posix.errno(std.posix.system.waitpid(child.pid, &status, 0)) == .INTR) {}
     child.exited.store(true, .seq_cst);
 }
 

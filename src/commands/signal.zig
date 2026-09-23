@@ -2,6 +2,7 @@
 //! Mutation commands send Process Commands and exit; `signal-list` is intentionally read-only and formats the initial Client Snapshot instead of requiring a list command in the protocol.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
@@ -237,10 +238,10 @@ test "signal runner returns command failure for unsuccessful responses" {
 
 test "signal socket runner sends mutation command" {
     const path = "/tmp/proctmux-zig-signal-command-test.socket";
-    std.fs.deleteFileAbsolute(path) catch {};
-    defer std.fs.deleteFileAbsolute(path) catch {};
+    platform.fs.deleteFileAbsolute(path) catch {};
+    defer platform.fs.deleteFileAbsolute(path) catch {};
 
-    const address = try std.net.Address.initUnix(path);
+    const address = try platform.net.Address.initUnix(path);
     var server = try address.listen(.{});
     defer server.deinit();
 
@@ -262,10 +263,10 @@ test "signal socket runner sends mutation command" {
 
 test "signal socket runner formats list from initial snapshot" {
     const path = "/tmp/proctmux-zig-signal-list-test.socket";
-    std.fs.deleteFileAbsolute(path) catch {};
-    defer std.fs.deleteFileAbsolute(path) catch {};
+    platform.fs.deleteFileAbsolute(path) catch {};
+    defer platform.fs.deleteFileAbsolute(path) catch {};
 
-    const address = try std.net.Address.initUnix(path);
+    const address = try platform.net.Address.initUnix(path);
     var server = try address.listen(.{});
     defer server.deinit();
 

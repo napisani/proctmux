@@ -2,6 +2,7 @@
 //! The model owns user-facing UI state such as filtering, selection, help, and transient messages; server-owned process data comes from Client Snapshots.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
@@ -68,7 +69,7 @@ pub const ClientModel = struct {
     }
 
     pub fn addMessage(self: *ClientModel, text: []const u8) !void {
-        try self.addMessageAt(text, std.time.milliTimestamp());
+        try self.addMessageAt(text, platform.milliTimestamp());
     }
 
     pub fn addMessageAt(self: *ClientModel, text: []const u8, now_ms: i64) !void {

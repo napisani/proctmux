@@ -11,7 +11,7 @@ pub const Mode = struct {
 
     pub fn enterIfNeeded(should_enter: bool, fd: std.posix.fd_t) Mode {
         if (!should_enter) return .{ .fd = fd };
-        if (!std.posix.isatty(fd)) return .{ .fd = fd };
+        if (std.c.isatty(fd) == 0) return .{ .fd = fd };
 
         const original = std.posix.tcgetattr(fd) catch return .{ .fd = fd };
         var raw = original;

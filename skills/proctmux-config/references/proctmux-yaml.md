@@ -38,7 +38,7 @@ For new configs, omit ignored fields rather than relying on them.
 
 | Path | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `general` | map | `{}` | Discovery-related settings. |
+| `general` | map | `{}` | Per-source discovery settings. |
 | `layout` | map | defaults below | UI layout behavior. |
 | `style` | map | defaults below | Accepted visual style settings. |
 | `keybinding` | map | defaults below | Key lists for UI actions. |
@@ -49,41 +49,28 @@ For new configs, omit ignored fields rather than relying on them.
 
 ## `general`
 
+For a file-backed config, discovery is opt-in per source. A configless startup
+enables all built-in sources automatically.
+
 | Path | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `general.procs_from_make_targets` | bool | `false` | Discover Makefile targets as processes. |
 | `general.procs_from_package_json` | bool | `false` | Discover `package.json` scripts as processes. |
 
-### Discovery Details
+```yaml
+general:
+  procs_from_make_targets: true
+  procs_from_package_json: false
+```
 
-`general.procs_from_make_targets: true` scans `Makefile` in the config
-directory. Targets matching `^([A-Za-z0-9_.-]+):` become processes:
-
-- Label: `make:<target>`
-- `shell`: `make <target>`
-- `cwd`: config directory
-- `description`: `Auto-discovered Makefile target`
-- `categories`: `["makefile"]`
-
-`general.procs_from_package_json: true` scans `package.json` scripts whose names
-match `^[A-Za-z0-9:_-]+$`. Package manager detection checks, in order:
-
-1. pnpm: `pnpm-lock.yaml`, `.pnpmfile.cjs`, `pnpm-workspace.yaml`
-2. bun: `bun.lockb`, `bunfig.toml`
-3. yarn: `yarn.lock`, `.yarnrc`, `.yarnrc.yml`, `.yarnrc.yaml`
-4. npm: `package-lock.json`, `npm-shrinkwrap.json`
-5. deno: `deno.json`, `deno.jsonc`
-
-If none match, npm is used. Generated labels are `<manager>:<script>`, such as
-`pnpm:dev`. Generated `cmd` values are:
-
-- pnpm: `["pnpm", "run", "<script>"]`
-- yarn: `["yarn", "<script>"]`
-- bun: `["bun", "run", "<script>"]`
-- deno: `["deno", "task", "<script>"]`
-- npm: `["npm", "run", "<script>"]`
-
+Discovery scans the config directory for enabled sources. Generated Makefile
+labels are `make:<target>` with `shell: make <target>`. Package labels are
+`<manager>:<script>` and use the detected pnpm, bun, yarn, npm, or deno command.
 Explicit `procs` entries win on name collision.
+
+When no config exists, proctmux constructs an in-memory default config and runs
+both sources. Missing or malformed source files are skipped with warnings. Use
+`proctmux config-init` to create a file-backed config.
 
 ## `layout`
 
@@ -306,7 +293,6 @@ Under `general`:
 
 - `detached_session_name`
 - `kill_existing_session`
-
 Under `style`:
 
 - `style_classes`
@@ -324,7 +310,7 @@ explain legacy config.
 ```yaml
 general:
   procs_from_make_targets: false
-  procs_from_package_json: true
+  procs_from_package_json: false
 
 layout:
   processes_list_width: 30

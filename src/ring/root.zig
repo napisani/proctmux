@@ -2,6 +2,7 @@
 //! The buffer preserves recent process output and supports atomic snapshot+subscription so viewers do not lose bytes while switching processes.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 
 const max_reader_queue = 100;
 
@@ -53,7 +54,7 @@ pub const RingBuffer = struct {
     buf: []u8,
     w: usize = 0,
     full: bool = false,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
     readers: std.array_list.Managed(Reader),
     next_id: usize = 0,
 
@@ -69,8 +70,8 @@ pub const RingBuffer = struct {
     }
 
     pub fn deinit(self: *RingBuffer) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         for (self.readers.items) |*reader| reader.deinit();
         self.readers.deinit();
@@ -81,8 +82,8 @@ pub const RingBuffer = struct {
     }
 
     pub fn write(self: *RingBuffer, data: []const u8) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         for (data) |byte| {
             self.buf[self.w] = byte;
@@ -98,15 +99,15 @@ pub const RingBuffer = struct {
     }
 
     pub fn bytes(self: *RingBuffer, allocator: std.mem.Allocator) ![]u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         return self.copyBytesLocked(allocator);
     }
 
     pub fn len(self: *RingBuffer) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         if (self.full) return self.buf.len;
         return self.w;
@@ -117,16 +118,16 @@ pub const RingBuffer = struct {
     }
 
     pub fn clear(self: *RingBuffer) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         self.w = 0;
         self.full = false;
     }
 
     pub fn newReader(self: *RingBuffer) !usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         const id = self.next_id;
         self.next_id += 1;
@@ -135,8 +136,8 @@ pub const RingBuffer = struct {
     }
 
     pub fn readNext(self: *RingBuffer, reader_id: usize) ?[]u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         if (self.findReader(reader_id)) |reader| return reader.readNext();
         return null;
@@ -145,8 +146,8 @@ pub const RingBuffer = struct {
     /// Captures historical bytes and registers a live reader under one lock so
     /// switching viewers cannot miss bytes between the two operations.
     pub fn snapshotAndSubscribe(self: *RingBuffer, allocator: std.mem.Allocator) !SnapshotSubscription {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         const snapshot = try self.copyBytesLocked(allocator);
         errdefer allocator.free(snapshot);
@@ -162,8 +163,8 @@ pub const RingBuffer = struct {
     }
 
     pub fn removeReader(self: *RingBuffer, reader_id: usize) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(platform.io());
+        defer self.mutex.unlock(platform.io());
 
         for (self.readers.items, 0..) |*reader, index| {
             if (reader.id == reader_id) {

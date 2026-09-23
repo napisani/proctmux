@@ -2,13 +2,14 @@
 //! This mode loads Project Config, locates the Primary Server socket, and delegates command behavior to the signal command module.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const commands = @import("../commands/root.zig");
 const config = @import("../config/root.zig");
 const io = @import("io.zig");
 
 pub fn run(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: platform.fs.Dir,
     config_file: []const u8,
     subcommand: []const u8,
     args: []const []const u8,

@@ -2,6 +2,7 @@
 //! The runtime coordinates child-primary startup, Client Session IPC, raw input, server-output capture, terminal resize, and split-frame rendering.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const builtin = @import("builtin");
 const cli = @import("../cli/root.zig");
 const config = @import("../config/root.zig");
@@ -22,7 +23,7 @@ const log = std.log.scoped(.unified_runtime);
 /// in-process test adapter while sharing the same event-loop implementation.
 pub fn run(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: platform.fs.Dir,
     parent_args: []const []const u8,
     config_file: []const u8,
     orientation: cli.UnifiedSplit,
@@ -39,7 +40,7 @@ pub fn run(
 
 fn runWithChildProcess(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: platform.fs.Dir,
     parent_args: []const []const u8,
     config_file: []const u8,
     orientation: cli.UnifiedSplit,
@@ -52,7 +53,7 @@ fn runWithChildProcess(
     const child_args = try args_mod.childArgs(allocator, parent_args);
     defer args_mod.deinitArgs(allocator, child_args);
 
-    const exe_path = try std.fs.selfExePathAlloc(allocator);
+    const exe_path = try platform.fs.selfExePathAlloc(allocator);
     defer allocator.free(exe_path);
 
     const child_argv = try allocator.alloc([]const u8, child_args.len + 1);
@@ -60,11 +61,11 @@ fn runWithChildProcess(
     child_argv[0] = exe_path;
     for (child_args, 0..) |arg, index| child_argv[index + 1] = arg;
 
-    var env_map = try std.process.getEnvMap(allocator);
+    var env_map = try platform.currentEnvironmentMap(allocator);
     defer env_map.deinit();
     try env_map.put("PROCTMUX_EMBEDDED_PRIMARY", "1");
 
-    const child_cwd = std.fs.path.dirname(loaded.config.file_path) orelse ".";
+    const child_cwd = platform.fs.path.dirname(loaded.config.file_path) orelse ".";
     const child = try child_primary.ChildPrimary.init(allocator, child_argv, &env_map, child_cwd);
     defer child.deinit();
 
@@ -101,7 +102,7 @@ fn runWithChildProcess(
 
 fn runInProcess(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: platform.fs.Dir,
     config_file: []const u8,
     orientation: cli.UnifiedSplit,
     input: io.Input,
@@ -112,7 +113,7 @@ fn runInProcess(
 
     const socket_path = try ipc.socket.createPathForConfig(allocator, &loaded.config);
     defer allocator.free(socket_path);
-    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+    defer platform.fs.deleteFileAbsolute(socket_path) catch {};
 
     var primary_server = try primary.Server.init(allocator, &loaded.config);
     defer primary_server.deinit();
@@ -190,7 +191,7 @@ fn runInteractiveRuntime(runtime: RuntimeSession) !void {
 
     // Input and render loops both touch ClientSession and split/output state;
     // one mutex keeps terminal frames coherent without splitting ownership.
-    var render_mutex = std.Thread.Mutex{};
+    var render_mutex = std.Io.Mutex.init;
     try renderFrame(runtime.session, runtime.split, &output_state, runtime.output);
     var render_run = RenderLoop{
         .session = runtime.session,
@@ -244,7 +245,7 @@ const InputLoop = struct {
     output_state: *server_output.State,
     input: io.Input,
     output: io.Output,
-    mutex: *std.Thread.Mutex,
+    mutex: *std.Io.Mutex,
     sync_selection_after_command: bool,
 };
 
@@ -254,8 +255,8 @@ fn runInputLoop(state: InputLoop) !void {
         const n = try state.input.readBytes(&buffer);
         if (n == 0) return;
 
-        state.mutex.lock();
-        defer state.mutex.unlock();
+        state.mutex.lockUncancelable(platform.io());
+        defer state.mutex.unlock(platform.io());
 
         var should_render = false;
         var index: usize = 0;
@@ -373,15 +374,15 @@ const RenderLoop = struct {
     input: io.Input,
     output: io.Output,
     stopped: *std.atomic.Value(bool),
-    mutex: *std.Thread.Mutex,
+    mutex: *std.Io.Mutex,
     result: ThreadResult = .running,
 };
 
 fn runRenderLoop(state: *RenderLoop) void {
     while (!state.stopped.load(.seq_cst)) {
-        std.Thread.sleep(75 * std.time.ns_per_ms);
-        state.mutex.lock();
-        defer state.mutex.unlock();
+        platform.sleepNanoseconds(75 * std.time.ns_per_ms);
+        state.mutex.lockUncancelable(platform.io());
+        defer state.mutex.unlock(platform.io());
 
         const snapshot_changed = readPendingSnapshot(state.session, state.ipc_client) catch |err| {
             if (state.stopped.load(.seq_cst) or err == error.EndOfStream) break;
@@ -436,7 +437,7 @@ fn readAvailableSnapshotUpdate(
 }
 
 fn unblockServer(path: []const u8) void {
-    var stream = std.net.connectUnixSocket(path) catch |err| {
+    var stream = platform.net.connectUnixSocket(path) catch |err| {
         log.debug("failed to unblock in-process primary server: {s}", .{@errorName(err)});
         return;
     };

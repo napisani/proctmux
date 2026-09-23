@@ -2,15 +2,20 @@
 //! The parser extracts likely user targets while avoiding targets that are internal, pattern-based, or unsuitable as long-running proctmux processes.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 
 pub const ProcessMap = config.schema.ProcessMap;
 
+pub fn enabled(general: *const config.schema.GeneralConfig) bool {
+    return general.procs_from_make_targets;
+}
+
 pub fn discover(allocator: std.mem.Allocator, cwd: []const u8) !ProcessMap {
-    const path = try std.fs.path.join(allocator, &.{ cwd, "Makefile" });
+    const path = try platform.fs.path.join(allocator, &.{ cwd, "Makefile" });
     defer allocator.free(path);
 
-    const data = std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024) catch |err| switch (err) {
+    const data = platform.fs.cwd().readFileAlloc(platform.io(), path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => return error.SourceNotFound,
         else => return err,
     };

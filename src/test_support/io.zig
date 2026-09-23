@@ -2,6 +2,7 @@
 //! These adapters make interactive modes deterministic by replacing blocking terminal IO with scripted readers and captured writers.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const modes_io = @import("../modes/io.zig");
 
 pub const BytesInput = struct {
@@ -49,7 +50,7 @@ pub const BlockingInput = struct {
     fn read(context: *anyopaque, buffer: []u8) anyerror!usize {
         const input: *BlockingInput = @ptrCast(@alignCast(context));
         while (!input.released.load(.seq_cst)) {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+            platform.sleepNanoseconds(5 * std.time.ns_per_ms);
         }
         if (input.sent.swap(true, .seq_cst)) return 0;
 
@@ -60,7 +61,7 @@ pub const BlockingInput = struct {
 };
 
 pub const FileGateInput = struct {
-    dir: *std.fs.Dir,
+    dir: *platform.fs.Dir,
     path: []const u8,
     needle: []const u8,
     first: []const u8,
@@ -152,19 +153,19 @@ pub const NullOutput = struct {
     fn write(_: *anyopaque, _: []const u8) anyerror!void {}
 };
 
-pub fn waitForFileContains(dir: std.fs.Dir, path: []const u8, needle: []const u8) !void {
+pub fn waitForFileContains(dir: platform.fs.Dir, path: []const u8, needle: []const u8) !void {
     var attempts: usize = 0;
     while (attempts < 200) : (attempts += 1) {
-        const contents = dir.readFileAlloc(std.testing.allocator, path, 1024) catch |err| switch (err) {
+        const contents = dir.readFileAlloc(platform.io(), path, std.testing.allocator, .limited(1024)) catch |err| switch (err) {
             error.FileNotFound => {
-                std.Thread.sleep(5 * std.time.ns_per_ms);
+                platform.sleepNanoseconds(5 * std.time.ns_per_ms);
                 continue;
             },
             else => return err,
         };
         defer std.testing.allocator.free(contents);
         if (std.mem.indexOf(u8, contents, needle) != null) return;
-        std.Thread.sleep(5 * std.time.ns_per_ms);
+        platform.sleepNanoseconds(5 * std.time.ns_per_ms);
     }
     return error.ExpectedFileContents;
 }

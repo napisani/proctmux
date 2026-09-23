@@ -2,10 +2,11 @@
 //! This module intentionally knows nothing about protocol schemas; it only enforces newline framing, maximum line size, and optional read timeouts.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 
 /// Reads one newline-terminated frame. The returned slice includes the newline
 /// because protocol golden tests compare complete wire lines.
-pub fn read(allocator: std.mem.Allocator, stream: std.net.Stream, max_len: usize) ![]const u8 {
+pub fn read(allocator: std.mem.Allocator, stream: platform.net.Stream, max_len: usize) ![]const u8 {
     var out = std.array_list.Managed(u8).init(allocator);
     errdefer out.deinit();
 
@@ -25,7 +26,7 @@ pub fn read(allocator: std.mem.Allocator, stream: std.net.Stream, max_len: usize
 /// not hang the caller indefinitely.
 pub fn readTimeout(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: platform.net.Stream,
     max_len: usize,
     timeout_ms: i32,
 ) ![]const u8 {

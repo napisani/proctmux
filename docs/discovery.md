@@ -1,21 +1,25 @@
 # Process Discovery
 
-proctmux can automatically discover runnable processes from Makefile targets
-and package.json scripts. This removes the need to manually define every
-process in your configuration file -- common project tasks are picked up
-at startup and appear alongside your explicit entries.
+proctmux can discover runnable processes from Makefile targets and `package.json`
+scripts. Discovery is controlled per source:
 
-Discovery is opt-in. Enable it with two config flags under `general`:
+- In a **configless project**, both built-in sources run automatically.
+- When a config file exists, discovery is disabled by default. Enable an
+  individual source with its `general.procs_from_*` setting.
 
 ```yaml
 general:
   procs_from_make_targets: true
-  procs_from_package_json: true
+  procs_from_package_json: false
 ```
 
-Discovery runs at startup, before the primary server starts. Discovered
-processes are merged into `cfg.Procs`. Explicit config entries always win
-on name collision.
+If no config exists, proctmux creates an in-memory default configuration. If a
+config exists, its explicit `procs` entries remain authoritative and discovered
+entries are added only for explicitly enabled sources. Explicit entries win on
+name collision.
+
+Discovery is best effort. Missing source files are skipped, and malformed or
+unreadable source files are logged and skipped so they do not prevent startup.
 
 ---
 
@@ -23,22 +27,16 @@ on name collision.
 
 **Enable:** `general.procs_from_make_targets: true`
 
-Scans the `Makefile` in the working directory. Targets are extracted with the
-regex `^([A-Za-z0-9_.-]+):`, which matches lines starting with a valid target
-name followed by `:`.
+Scans `Makefile` in the current directory. Targets matching
+`^([A-Za-z0-9_.-]+):` become processes:
 
-Each matched target produces a process entry:
-
-| Field         | Value                                |
-|---------------|--------------------------------------|
-| Name          | `make:<target>` (e.g. `make:build`)  |
-| `shell`       | `"make <target>"`                    |
-| `cwd`         | working directory                    |
-| `description` | `"Auto-discovered Makefile target"`  |
-| `categories`  | `["makefile"]`                       |
-
-If `Makefile` does not exist in the working directory, discovery is silently
-skipped.
+| Field | Value |
+|---|---|
+| Name | `make:<target>` (for example `make:build`) |
+| `shell` | `make <target>` |
+| `cwd` | current project directory |
+| `description` | `Auto-discovered Makefile target` |
+| `categories` | `["makefile"]` |
 
 ---
 
@@ -46,96 +44,67 @@ skipped.
 
 **Enable:** `general.procs_from_package_json: true`
 
-Scans `package.json` in the working directory. Reads the `scripts` object and
-creates a process for each script whose name matches `^[A-Za-z0-9:_-]+$`
-(alphanumeric characters, colons, underscores, and hyphens).
+Scans `package.json` and creates a process for each script whose name matches
+`^[A-Za-z0-9:_-]+$`.
 
-### Package manager detection
+Package manager detection checks these files in order:
 
-The package manager is detected by checking for lock files and config files in
-the working directory. The first match wins:
+1. pnpm: `pnpm-lock.yaml`, `.pnpmfile.cjs`, `pnpm-workspace.yaml`
+2. bun: `bun.lockb`, `bunfig.toml`
+3. yarn: `yarn.lock`, `.yarnrc`, `.yarnrc.yml`, `.yarnrc.yaml`
+4. npm: `package-lock.json`, `npm-shrinkwrap.json`
+5. deno: `deno.json`, `deno.jsonc`
 
-| Priority | Manager | Files checked                                          |
-|----------|---------|--------------------------------------------------------|
-| 1        | pnpm    | `pnpm-lock.yaml`, `.pnpmfile.cjs`, `pnpm-workspace.yaml` |
-| 2        | bun     | `bun.lockb`, `bunfig.toml`                             |
-| 3        | yarn    | `yarn.lock`, `.yarnrc`, `.yarnrc.yml`, `.yarnrc.yaml`  |
-| 4        | npm     | `package-lock.json`, `npm-shrinkwrap.json`             |
-| 5        | deno    | `deno.json`, `deno.jsonc`                              |
+If no marker is found, npm is used. Generated labels and commands are:
 
-If none of those files are found, npm is used as the fallback.
+| Manager | Label | Command |
+|---|---|---|
+| pnpm | `pnpm:<script>` | `["pnpm", "run", "<script>"]` |
+| yarn | `yarn:<script>` | `["yarn", "<script>"]` |
+| bun | `bun:<script>` | `["bun", "run", "<script>"]` |
+| deno | `deno:<script>` | `["deno", "task", "<script>"]` |
+| npm | `npm:<script>` | `["npm", "run", "<script>"]` |
 
-### Command generation
-
-Each manager produces a different command list:
-
-| Manager | Command                          |
-|---------|----------------------------------|
-| pnpm    | `["pnpm", "run", "<script>"]`   |
-| yarn    | `["yarn", "<script>"]`          |
-| bun     | `["bun", "run", "<script>"]`    |
-| deno    | `["deno", "task", "<script>"]`  |
-| npm     | `["npm", "run", "<script>"]`    |
-
-### Generated process fields
-
-| Field         | Value                                                              |
-|---------------|--------------------------------------------------------------------|
-| Name          | `<manager>:<script>` (e.g. `pnpm:dev`, `npm:build`, `bun:test`)   |
-| `cmd`         | manager-specific command list (see table above)                    |
-| `cwd`         | working directory                                                  |
-| `description` | `"Auto-discovered <manager> script: <script-body>"` (or without script body if empty) |
-| `categories`  | `["<manager>"]` (e.g. `["pnpm"]`)                                 |
+Each process uses the project directory as `cwd`, has a manager category, and
+is stopped initially. Its description includes the script body when available.
 
 ---
 
-## Precedence Rules
+## Extensible Source Interface
 
-- Explicit `procs` entries in config always take precedence over discovered
-  processes.
-- If a discovered process name collides with an explicit entry, the discovered
-  one is skipped and a log message is emitted.
-- Multiple discoverers can run simultaneously. They do not conflict with each
-  other since naming prefixes are distinct (`make:` vs `pnpm:` vs `npm:` etc.).
+Discovery sources are isolated under `src/discover/`. Each source registers a
+name, an enable predicate for its `general.procs_*` setting, and a discover
+function:
 
----
+```zig
+pub const Source = struct {
+    name: []const u8,
+    enabled: *const fn (general: *const GeneralConfig) bool,
+    discover: *const fn (allocator: Allocator, cwd: []const u8) anyerror!ProcessMap,
+};
+```
 
-## Plugin Architecture
-
-Discovery is implemented under `src/discover/`:
-
-1. `src/discover/apply.zig` checks the relevant config flags.
-2. Enabled discoverers scan the working directory for supported files.
-3. Discovered processes are merged into the process list without overriding
-   explicitly configured processes.
-4. Adding a new discoverer means adding a focused module and wiring it into
-   `apply.zig`.
+The coordinator can apply all registered sources for configless startup or only
+sources whose settings are enabled for a file-backed config. Adding a future
+format requires a source module, its `general.procs_from_*` setting, and one
+registry entry; runtime modes do not change.
 
 ---
 
 ## Example
 
+Given a project with a Makefile containing `build:` and a package.json with a
+`dev` script, running `proctmux` without a config presents both discovered
+processes. To selectively enable discovery in a file-backed config:
+
 ```yaml
 general:
   procs_from_make_targets: true
-  procs_from_package_json: true
+  procs_from_package_json: false
 
 procs:
-  "my-server":
-    shell: "node ./server.js"
-    # This won't be overridden even if a make:my-server target exists
+  api:
+    shell: "./api-server"
 ```
 
-Given:
-- A Makefile with `build:` and `test:` targets
-- A package.json with `dev` and `lint` scripts, in a project using pnpm
-
-The final process list would be:
-
-| Process       | Source      |
-|---------------|-------------|
-| `my-server`   | config      |
-| `make:build`  | discovered  |
-| `make:test`   | discovered  |
-| `pnpm:dev`    | discovered  |
-| `pnpm:lint`   | discovered  |
+This produces `api` and `make:build`, but not `npm:dev`.

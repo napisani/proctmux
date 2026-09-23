@@ -8,7 +8,7 @@
 - Format: `make fmt` (`zig fmt build.zig src`).
 - Nix dev shell: `nix develop`.
 - Nix package: `nix build .#default`.
-- Zig version: use the pinned `zig_0_15` from the flake when possible.
+- Zig version: use the pinned Zig 0.16 toolchain from the flake when possible.
 - Imports: keep `std` imports first, local imports after; avoid unused imports.
 - Errors: prefer explicit error unions and narrow error propagation; avoid panics except for impossible test failures.
 - Memory: pass allocators explicitly, pair every owned allocation with cleanup, and use `defer`/`errdefer`.

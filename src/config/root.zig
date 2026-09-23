@@ -2,6 +2,7 @@
 //! Importers use this module as the stable seam for schema, defaults, loading, hashing, and generated config templates.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 
 pub const schema = @import("schema.zig");
 pub const defaults = @import("defaults.zig");
@@ -60,6 +61,8 @@ test "load full active config fixture" {
     try std.testing.expectEqualStrings("blue", loaded.config.style.unselected_process_color);
     try std.testing.expect(loaded.config.general.procs_from_make_targets);
     try std.testing.expect(loaded.config.general.procs_from_package_json);
+    try std.testing.expect(!loaded.hasWarning("general.procs_from_make_targets"));
+    try std.testing.expect(!loaded.hasWarning("general.procs_from_package_json"));
     try std.testing.expectEqualStrings("/bin/bash", loaded.config.shell_cmd.items[0]);
     try std.testing.expectEqualStrings("/tmp/proctmux.log", loaded.config.log_file);
 
@@ -196,7 +199,7 @@ test "load file in dir uses supplied directory and records resolved path" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{ .sub_path = "custom.yaml", .data = "{}\n" });
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "custom.yaml", .data = "{}\n" });
 
     var loaded = try load.loadFileInDir(std.testing.allocator, tmp.dir, "custom.yaml");
     defer loaded.deinit();
@@ -209,7 +212,7 @@ test "load default in dir follows proctmux search order" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{ .sub_path = "procmux.yml", .data = "{}\n" });
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "procmux.yml", .data = "{}\n" });
 
     var loaded = try load.loadDefaultInDir(std.testing.allocator, tmp.dir);
     defer loaded.deinit();
@@ -218,21 +221,24 @@ test "load default in dir follows proctmux search order" {
     try std.testing.expectEqualStrings("cat:", loaded.config.layout.category_search_prefix);
 }
 
-test "runtime config loads explicit file and applies Makefile discovery" {
+test "runtime config uses explicitly enabled discovery sources" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{ .sub_path = "proctmux.yaml", .data = 
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "proctmux.yaml", .data =
         \\general:
         \\  procs_from_make_targets: true
+        \\  procs_from_package_json: true
         \\procs:
         \\  explicit:
         \\    shell: "echo explicit"
         \\
     });
-    try tmp.dir.writeFile(.{
-        .sub_path = "Makefile",
-        .data = "build:\n",
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "Makefile", .data =
+        \\build:
+    });
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "package.json", .data =
+        \\{"scripts":{"dev":"echo dev"}}
     });
 
     var loaded = try runtime.loadInDir(std.testing.allocator, tmp.dir, "proctmux.yaml");
@@ -240,26 +246,99 @@ test "runtime config loads explicit file and applies Makefile discovery" {
 
     try std.testing.expect(loaded.config.procs.contains("explicit"));
     try std.testing.expect(loaded.config.procs.contains("make:build"));
+    try std.testing.expect(loaded.config.procs.contains("npm:dev"));
 }
 
-test "runtime config loads default file and applies Makefile discovery" {
+test "runtime config applies only enabled sources from a default config" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{ .sub_path = "proctmux.yaml", .data = 
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "proctmux.yaml", .data =
         \\general:
         \\  procs_from_make_targets: true
         \\
     });
-    try tmp.dir.writeFile(.{
-        .sub_path = "Makefile",
-        .data = "test:\n",
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "Makefile", .data =
+        \\test:
     });
 
     var loaded = try runtime.loadInDir(std.testing.allocator, tmp.dir, "");
     defer loaded.deinit();
 
     try std.testing.expect(loaded.config.procs.contains("make:test"));
+    try std.testing.expect(!loaded.config.procs.contains("npm:test"));
+}
+
+test "runtime config suppresses discovery when sources are disabled" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "proctmux.yaml", .data =
+        \\general:
+        \\  procs_from_make_targets: false
+        \\  procs_from_package_json: false
+        \\
+    });
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "Makefile", .data =
+        \\build:
+    });
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "package.json", .data =
+        \\{"scripts":{"dev":"echo dev"}}
+    });
+
+    var loaded = try runtime.loadInDir(std.testing.allocator, tmp.dir, "");
+    defer loaded.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), loaded.config.procs.count());
+}
+
+test "runtime config discovers Makefile and package scripts without a config" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "Makefile", .data =
+        \\build:
+    });
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "package.json", .data =
+        \\{"scripts":{"dev":"echo dev"}}
+    });
+
+    var loaded = try runtime.loadInDir(std.testing.allocator, tmp.dir, "");
+    defer loaded.deinit();
+
+    try std.testing.expect(loaded.config.procs.contains("make:build"));
+    try std.testing.expect(loaded.config.procs.contains("npm:dev"));
+    try std.testing.expect(std.mem.endsWith(u8, loaded.config.file_path, "proctmux.yaml"));
+}
+
+test "runtime config without files starts with an empty implicit config" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var loaded = try runtime.loadInDir(std.testing.allocator, tmp.dir, "");
+    defer loaded.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), loaded.config.procs.count());
+}
+
+test "explicit missing config does not fall back to implicit discovery" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "Makefile", .data =
+        \\build:
+    });
+
+    try std.testing.expectError(error.FileNotFound, runtime.loadInDir(std.testing.allocator, tmp.dir, "missing.yaml"));
+}
+
+test "malformed implicit package metadata does not prevent startup" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(platform.io(), .{ .sub_path = "package.json", .data = "{not json" });
+
+    var loaded = try runtime.loadInDir(std.testing.allocator, tmp.dir, "");
+    defer loaded.deinit();
+    try std.testing.expectEqual(@as(usize, 0), loaded.config.procs.count());
 }
 
 test "dead and unknown fields warn and do not populate active config" {

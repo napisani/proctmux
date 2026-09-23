@@ -2,6 +2,7 @@
 //! This module turns key intents into Process Commands, handles command errors, and applies server Snapshots while preserving local UI state.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
 const test_config = @import("../test_support/config.zig");
@@ -80,7 +81,7 @@ pub const ClientSession = struct {
             snapshot_update.snapshot(),
         );
         errdefer model.deinit();
-        model.no_color = std.process.hasEnvVarConstant("NO_COLOR");
+        model.no_color = platform.hasEnvVar("NO_COLOR");
 
         return .{
             .allocator = allocator,
@@ -285,8 +286,8 @@ test "client session initializes from transport snapshot and dispatches key inte
 
 test "client session dispatches key intents through persistent IPC transport" {
     const path = "/tmp/proctmux-zig-tui-session-ipc-transport-test.socket";
-    std.fs.deleteFileAbsolute(path) catch {};
-    defer std.fs.deleteFileAbsolute(path) catch {};
+    platform.fs.deleteFileAbsolute(path) catch {};
+    defer platform.fs.deleteFileAbsolute(path) catch {};
 
     var cfg = try test_config.standardSessionConfig(std.testing.allocator);
     defer cfg.deinit();

@@ -2,6 +2,7 @@
 //! This module exposes the controller plus focused internals used by Primary Server and process lifecycle tests.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
 
@@ -159,7 +160,7 @@ test "controller runs on kill hook after user stop" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const cwd = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const cwd = try tmp.dir.realPathFileAlloc(platform.io(), ".", std.testing.allocator);
     defer std.testing.allocator.free(cwd);
 
     var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
@@ -180,7 +181,7 @@ test "controller runs on kill hook after user stop" {
     _ = try ctl.startProcess(id, &proc_cfg);
     try ctl.stopProcess(id);
 
-    const contents = try tmp.dir.readFileAlloc(std.testing.allocator, "on_kill.txt", 1024);
+    const contents = try tmp.dir.readFileAlloc(platform.io(), "on_kill.txt", std.testing.allocator, .limited(1024));
     defer std.testing.allocator.free(contents);
     try std.testing.expectEqualStrings("hook", contents);
 }
@@ -189,7 +190,7 @@ test "controller cleanup skips on kill hook after natural exit" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const cwd = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const cwd = try tmp.dir.realPathFileAlloc(platform.io(), ".", std.testing.allocator);
     defer std.testing.allocator.free(cwd);
 
     var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
@@ -211,7 +212,7 @@ test "controller cleanup skips on kill hook after natural exit" {
     try ctl.cleanupProcess(id);
     try ctl.cleanupProcess(id);
 
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access("on_kill.txt", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(platform.io(), "on_kill.txt", .{}));
 
     const retained = try ctl.getScrollback(std.testing.allocator, id);
     defer std.testing.allocator.free(retained);
@@ -222,7 +223,7 @@ test "controller deinit skips on kill hook after natural exit" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const cwd = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const cwd = try tmp.dir.realPathFileAlloc(platform.io(), ".", std.testing.allocator);
     defer std.testing.allocator.free(cwd);
 
     var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
@@ -244,14 +245,14 @@ test "controller deinit skips on kill hook after natural exit" {
         try waitForControllerStopped(&ctl, id);
     }
 
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access("on_kill.txt", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(platform.io(), "on_kill.txt", .{}));
 }
 
 test "controller clears retained scrollback when process starts again" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const cwd = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const cwd = try tmp.dir.realPathFileAlloc(platform.io(), ".", std.testing.allocator);
     defer std.testing.allocator.free(cwd);
 
     var proc_cfg = config.schema.ProcessConfig.empty(std.testing.allocator);
@@ -383,7 +384,7 @@ fn waitForScrollbackContains(
         const bytes = try ctl.getScrollback(std.testing.allocator, id);
         defer std.testing.allocator.free(bytes);
         if (std.mem.indexOf(u8, bytes, needle) != null) return;
-        std.Thread.sleep(5 * std.time.ns_per_ms);
+        platform.sleepNanoseconds(5 * std.time.ns_per_ms);
     }
     return error.ExpectedScrollback;
 }
@@ -392,7 +393,7 @@ fn waitForControllerStopped(ctl: *controller.Controller, id: domain.process.Proc
     var attempts: usize = 0;
     while (attempts < 200) : (attempts += 1) {
         if (!ctl.isRunning(id)) return;
-        std.Thread.sleep(5 * std.time.ns_per_ms);
+        platform.sleepNanoseconds(5 * std.time.ns_per_ms);
     }
     return error.ExpectedProcessStopped;
 }

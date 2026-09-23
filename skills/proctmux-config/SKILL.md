@@ -50,6 +50,7 @@ Check generated configs against these constraints:
 
 - Top-level active keys are `general`, `layout`, `style`, `keybinding`,
   `shell_cmd`, `log_file`, `stdout_debug_log_file`, and `procs`.
+- `general.procs_from_make_targets` and `general.procs_from_package_json` are per-source discovery toggles; configless startup enables both automatically.
 - `procs` is a map from display label to process config. Labels may contain
   spaces when quoted.
 - List-valued fields must be YAML sequences of strings, not comma-separated

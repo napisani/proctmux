@@ -28,18 +28,22 @@ Generate a starter config with all options commented out:
 proctmux config-init
 ```
 
-The only required top-level key is `procs`.
+A configuration file is optional. If no config file is found, proctmux creates
+an in-memory default configuration and discovers Makefile targets and
+`package.json` scripts automatically. If a config file is found, discovery is
+disabled by default and can be enabled per source.
 
 ---
 
 ## `general`
 
-Top-level settings that control process discovery and session behavior.
+Discovery settings are opt-in for file-backed configurations. Configless
+startup enables both built-in sources automatically.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `procs_from_make_targets` | bool | `false` | Auto-discover Makefile targets and add them as processes. Each target becomes a runnable process entry. |
-| `procs_from_package_json` | bool | `false` | Auto-discover `package.json` scripts and add them as processes. The package manager is detected automatically from lock/config files (pnpm, bun, yarn, npm, or deno). |
+| `procs_from_make_targets` | bool | `false` | Enable Makefile target discovery for a file-backed config. |
+| `procs_from_package_json` | bool | `false` | Enable `package.json` script discovery for a file-backed config. |
 
 ```yaml
 general:
@@ -193,7 +197,8 @@ stdout_debug_log_file: "/tmp/proctmux_stdout.log"
 ## `procs`
 
 A map of process name to process configuration. The map key is the display name
-shown in the process list. At least one process must be defined.
+shown in the process list. It may be empty in a configless project with no
+discoverable sources.
 
 ### Process fields
 
@@ -223,9 +228,7 @@ shown in the process list. At least one process must be defined.
 ```yaml
 # proctmux.yaml
 
-general:
-  procs_from_make_targets: false
-  procs_from_package_json: true
+
 
 layout:
   processes_list_width: 35

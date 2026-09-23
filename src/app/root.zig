@@ -2,6 +2,7 @@
 //! This module is the high-level router from parsed arguments and loaded Project Config into runtime modes, while keeping terminal restore and exit-code behavior centralized.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const cli = @import("../cli/root.zig");
 const commands = @import("../commands/root.zig");
 const config = @import("../config/root.zig");
@@ -52,28 +53,28 @@ pub fn shouldPrintGenericError(err: anyerror) bool {
 }
 
 pub fn run(allocator: std.mem.Allocator, args: []const []const u8, output: Output) !void {
-    var stdin = std.fs.File.stdin();
+    var stdin = platform.fs.File.stdin();
     var terminal_mode = terminal.mode.Mode.enterIfNeeded(argsNeedRawTerminal(args), stdin.handle);
     defer terminal_mode.restore();
     try runWithInput(allocator, args, FileInput.reader(&stdin), output);
 }
 
 pub fn runWithInput(allocator: std.mem.Allocator, args: []const []const u8, input: Input, output: Output) !void {
-    try runInDirWithInput(allocator, std.fs.cwd(), args, input, output);
+    try runInDirWithInput(allocator, platform.fs.cwd(), args, input, output);
 }
 
-pub fn runInDir(allocator: std.mem.Allocator, dir: std.fs.Dir, args: []const []const u8, output: Output) !void {
+pub fn runInDir(allocator: std.mem.Allocator, dir: platform.fs.Dir, args: []const []const u8, output: Output) !void {
     try runInDirWithInput(allocator, dir, args, EmptyInput.reader(), output);
 }
 
-pub fn runInDirWithInput(allocator: std.mem.Allocator, dir: std.fs.Dir, args: []const []const u8, input: Input, output: Output) !void {
+pub fn runInDirWithInput(allocator: std.mem.Allocator, dir: platform.fs.Dir, args: []const []const u8, input: Input, output: Output) !void {
     var stopped = std.atomic.Value(bool).init(false);
     try runInDirUntilStoppedWithInput(allocator, dir, args, input, output, &stopped);
 }
 
 pub fn runInDirUntilStopped(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: platform.fs.Dir,
     args: []const []const u8,
     output: Output,
     stopped: *std.atomic.Value(bool),
@@ -85,7 +86,7 @@ pub fn runInDirUntilStopped(
 /// input, output, and stop flag keep runtime side effects injectable.
 pub fn runInDirUntilStoppedWithInput(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: platform.fs.Dir,
     args: []const []const u8,
     input: Input,
     output: Output,
@@ -140,7 +141,6 @@ pub fn runInDirUntilStoppedWithInput(
             }
             return err;
         },
-        else => return err,
     };
     if (parsed.version_requested) {
         try output.writeAll(version.banner());
@@ -210,7 +210,7 @@ test "app routes config-init and prints created path" {
 
     try runInDir(std.testing.allocator, tmp.dir, &.{"config-init"}, test_io.TestOutput.writer(&out));
 
-    try tmp.dir.access("proctmux.yaml", .{});
+    try tmp.dir.access(platform.io(), "proctmux.yaml", .{});
     try std.testing.expectEqualStrings("Created starter configuration at proctmux.yaml\n", out.items);
 }
 
@@ -341,25 +341,25 @@ test "app prints version for version flag without starting TUI" {
 test "app routes signal-list through config-derived socket" {
     const tmp_path = "/tmp/proctmux-zig-app-signal-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{ .sub_path = "proctmux.yaml", .data = "{}\n" });
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{ .sub_path = "proctmux.yaml", .data = "{}\n" });
 
     var loaded = try config.runtime.loadInDir(std.testing.allocator, dir, "");
     defer loaded.deinit();
 
     const socket_path = try ipc.socket.createPathForConfig(std.testing.allocator, &loaded.config);
     defer std.testing.allocator.free(socket_path);
-    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+    defer platform.fs.deleteFileAbsolute(socket_path) catch {};
 
-    const address = try std.net.Address.initUnix(socket_path);
+    const address = try platform.net.Address.initUnix(socket_path);
     var server = try address.listen(.{});
     defer server.deinit();
 
@@ -387,16 +387,16 @@ test "app routes signal-list through config-derived socket" {
 test "app primary mode serves signal-list from loaded config" {
     const tmp_path = "/tmp/proctmux-zig-app-primary-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -434,16 +434,16 @@ test "app primary mode serves signal-list from loaded config" {
 test "app client mode connects to primary and renders process list" {
     const tmp_path = "/tmp/proctmux-zig-app-client-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -491,16 +491,16 @@ test "app client mode connects to primary and renders process list" {
 test "app client mode refreshes render after process command broadcast" {
     const tmp_path = "/tmp/proctmux-zig-app-client-refresh-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -550,16 +550,16 @@ test "app client mode refreshes render after process command broadcast" {
 test "app client mode keypress redraws avoid repeated full-screen clears" {
     const tmp_path = "/tmp/proctmux-zig-app-client-repaint-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -612,16 +612,16 @@ test "app client mode keypress redraws avoid repeated full-screen clears" {
 test "app client mode maps down arrow to process navigation" {
     const tmp_path = "/tmp/proctmux-zig-app-client-arrow-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -669,16 +669,16 @@ test "app client mode maps down arrow to process navigation" {
 test "app client mode maps up arrow to process navigation" {
     const tmp_path = "/tmp/proctmux-zig-app-client-up-arrow-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -728,16 +728,16 @@ test "app client mode maps up arrow to process navigation" {
 test "app client mode accepts printable filter input" {
     const tmp_path = "/tmp/proctmux-zig-app-client-filter-input-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -788,16 +788,16 @@ test "app client mode accepts printable filter input" {
 test "app client mode renders command failure message and keeps running" {
     const tmp_path = "/tmp/proctmux-zig-app-client-command-failure-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{ .sub_path = "proctmux.yaml", .data = "{}\n" });
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{ .sub_path = "proctmux.yaml", .data = "{}\n" });
 
     var loaded = try config.load.loadFileInDir(std.testing.allocator, dir, "proctmux.yaml");
     defer loaded.deinit();
@@ -839,16 +839,16 @@ test "app client mode renders command failure message and keeps running" {
 test "app client mode quit stops running primary processes" {
     const tmp_path = "/tmp/proctmux-zig-app-client-quit-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -901,16 +901,16 @@ test "app client mode quit stops running primary processes" {
 test "app primary mode serves signal start list and stop commands" {
     const tmp_path = "/tmp/proctmux-zig-app-primary-control-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -965,17 +965,17 @@ test "app primary mode forwards stdin to selected running process" {
     const tmp_path = "/tmp/proctmux-zig-app-primary-stdin-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
     const got_path = tmp_path ++ "/got.txt";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteFileAbsolute(got_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteFileAbsolute(got_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -1025,16 +1025,16 @@ test "app primary mode forwards stdin to selected running process" {
 test "app unified mode renders process list and exits on quit" {
     const tmp_path = "/tmp/proctmux-zig-app-unified-render-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -1059,16 +1059,16 @@ test "app unified mode renders process list and exits on quit" {
 test "app unified mode hides process list when server focused and configured" {
     const tmp_path = "/tmp/proctmux-zig-app-unified-hide-list-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\layout:
@@ -1095,17 +1095,17 @@ test "app unified mode forwards server-focused input to selected process" {
     const tmp_path = "/tmp/proctmux-zig-app-unified-stdin-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
     const got_path = tmp_path ++ "/got.txt";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteFileAbsolute(got_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteFileAbsolute(got_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -1140,17 +1140,17 @@ test "app unified mode process output redraws avoid repeated full-screen clears"
     const tmp_path = "/tmp/proctmux-zig-app-unified-repaint-test";
     const config_path = tmp_path ++ "/proctmux.yaml";
     const done_path = tmp_path ++ "/done.txt";
-    std.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
+    platform.fs.makeDirAbsolute(tmp_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    defer std.fs.deleteFileAbsolute(config_path) catch {};
-    defer std.fs.deleteFileAbsolute(done_path) catch {};
-    defer std.fs.deleteDirAbsolute(tmp_path) catch {};
+    defer platform.fs.deleteFileAbsolute(config_path) catch {};
+    defer platform.fs.deleteFileAbsolute(done_path) catch {};
+    defer platform.fs.deleteDirAbsolute(tmp_path) catch {};
 
-    var dir = try std.fs.openDirAbsolute(tmp_path, .{});
-    defer dir.close();
-    try dir.writeFile(.{
+    var dir = try platform.fs.openDirAbsolute(tmp_path, .{});
+    defer dir.close(platform.io());
+    try dir.writeFile(platform.io(), .{
         .sub_path = "proctmux.yaml",
         .data =
         \\procs:
@@ -1203,11 +1203,11 @@ const AppPrimaryInputRun = struct {
 };
 
 fn runPrimaryApp(state: *AppPrimaryRun) void {
-    var dir = std.fs.openDirAbsolute(state.dir_path, .{}) catch |err| {
+    var dir = platform.fs.openDirAbsolute(state.dir_path, .{}) catch |err| {
         state.err = err;
         return;
     };
-    defer dir.close();
+    defer dir.close(platform.io());
 
     runInDirUntilStoppedWithInput(std.testing.allocator, dir, &.{}, EmptyInput.reader(), test_io.NullOutput.writer(), state.stopped) catch |err| {
         state.err = err;
@@ -1215,11 +1215,11 @@ fn runPrimaryApp(state: *AppPrimaryRun) void {
 }
 
 fn runPrimaryAppWithInput(state: *AppPrimaryInputRun) void {
-    var dir = std.fs.openDirAbsolute(state.dir_path, .{}) catch |err| {
+    var dir = platform.fs.openDirAbsolute(state.dir_path, .{}) catch |err| {
         state.err = err;
         return;
     };
-    defer dir.close();
+    defer dir.close(platform.io());
 
     runInDirUntilStoppedWithInput(std.testing.allocator, dir, &.{}, test_io.BlockingInput.reader(state.input), test_io.NullOutput.writer(), state.stopped) catch |err| {
         state.err = err;
@@ -1227,7 +1227,7 @@ fn runPrimaryAppWithInput(state: *AppPrimaryInputRun) void {
 }
 
 fn unblockServer(path: []const u8) void {
-    var stream = std.net.connectUnixSocket(path) catch return;
+    var stream = platform.net.connectUnixSocket(path) catch return;
     stream.close();
 }
 

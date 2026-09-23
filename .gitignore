@@ -8,6 +8,6 @@ zig-out/
 .swm
 .swo
 bin/
-./result
+/result
 __pycache__/
 .understand-anything/

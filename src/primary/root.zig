@@ -2,6 +2,7 @@
 //! The server owns AppState, ProcessController, Snapshot production, autostart, stdin forwarding, and the IPC command handler seam.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
@@ -343,8 +344,8 @@ test "primary snapshot provider serializes minimal snapshot" {
 
 test "primary command server handles repeated IPC clients" {
     const path = "/tmp/proctmux-zig-primary-server-loop-test.socket";
-    std.fs.deleteFileAbsolute(path) catch {};
-    defer std.fs.deleteFileAbsolute(path) catch {};
+    platform.fs.deleteFileAbsolute(path) catch {};
+    defer platform.fs.deleteFileAbsolute(path) catch {};
 
     var cfg = config.schema.Config.empty(std.testing.allocator);
     defer cfg.deinit();
@@ -399,7 +400,7 @@ fn waitForPrimaryScrollbackContains(primary: *Server, id: domain.process.Process
         const bytes = try primary.controller.getScrollback(std.testing.allocator, id);
         defer std.testing.allocator.free(bytes);
         if (std.mem.indexOf(u8, bytes, needle) != null) return;
-        std.Thread.sleep(5 * std.time.ns_per_ms);
+        platform.sleepNanoseconds(5 * std.time.ns_per_ms);
     }
     return error.ExpectedScrollback;
 }
@@ -408,7 +409,7 @@ fn waitForProcessStopped(primary: *Server, id: domain.process.ProcessId) !void {
     var attempts: usize = 0;
     while (attempts < 200) : (attempts += 1) {
         if (!primary.controller.isRunning(id)) return;
-        std.Thread.sleep(5 * std.time.ns_per_ms);
+        platform.sleepNanoseconds(5 * std.time.ns_per_ms);
     }
     return error.ExpectedStoppedProcess;
 }

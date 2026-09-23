@@ -2,6 +2,7 @@
 //! The client buffers interleaved Snapshot and Response messages so TUI sessions can match command responses without losing the latest server snapshot.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const line_io = @import("line.zig");
 const protocol = @import("protocol.zig");
 
@@ -13,7 +14,7 @@ const default_response_timeout_ms = 5000;
 /// to message interleaving on the socket.
 pub const Client = struct {
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: platform.net.Stream,
     next_request_id: u64 = 1,
     closed: bool = false,
     pending_snapshot: ?protocol.SnapshotUpdate = null,
@@ -23,7 +24,7 @@ pub const Client = struct {
     pub fn connect(allocator: std.mem.Allocator, socket_path: []const u8) !Client {
         return .{
             .allocator = allocator,
-            .stream = try std.net.connectUnixSocket(socket_path),
+            .stream = try platform.net.connectUnixSocket(socket_path),
             .read_buffer = std.array_list.Managed(u8).init(allocator),
         };
     }
@@ -258,7 +259,7 @@ pub fn sendCommandToPathWithTimeout(
     label: []const u8,
     response_timeout_ms: i32,
 ) !protocol.Response {
-    var stream = try std.net.connectUnixSocket(socket_path);
+    var stream = try platform.net.connectUnixSocket(socket_path);
     defer stream.close();
 
     const target: ?[]const u8 = if (label.len == 0) null else label;

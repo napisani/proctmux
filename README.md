@@ -13,7 +13,7 @@ Inspired by https://github.com/napisani/procmux.
 
 - **Unix-like operating system** (Linux, macOS, BSD) - Windows is not supported
 - **Terminal emulator** - Any modern terminal (iTerm2, Alacritty, Kitty, GNOME Terminal, etc.)
-- **Zig 0.15.2** only when building from source, or use `nix develop` for the pinned toolchain
+- **Zig 0.16.0** only when building from source, or use `nix develop` for the pinned toolchain
 
 
 ## Installation
@@ -77,9 +77,19 @@ binary names, Homebrew formula names, and Nix flake package names are unchanged.
 
 ## Getting Started
 
-### 1. Create a Configuration File
+### Start with or without a Configuration File
 
-Generate a starter configuration with helpful comments:
+Run proctmux directly in any project:
+
+```bash
+proctmux
+```
+
+When no configuration file is present, proctmux automatically discovers runnable
+Makefile targets and `package.json` scripts in the current directory. When a
+configuration file is present, discovery is disabled unless its corresponding
+`general.procs_from_*` setting is enabled. To create
+a starter configuration for custom processes or UI settings:
 
 ```bash
 proctmux config-init           # writes ./proctmux.yaml
@@ -88,7 +98,7 @@ proctmux config-init path/to/proctmux.yaml
 
 See the [Configuration Reference](#configuration-reference) below for all available options.
 
-### 2. Start proctmux
+### Start proctmux
 
 proctmux can run in three modes:
 
@@ -145,8 +155,8 @@ Full example with all configuration options:
 
 ```yaml
 general:
-  detached_session_name: _proctmux   # Session name for background processes
-  kill_existing_session: true        # Replace existing session if present
+  procs_from_make_targets: false
+  procs_from_package_json: false
 
 layout:
   processes_list_width: 31           # Left list width (percentage 1–99)
@@ -243,7 +253,7 @@ procs:
 - Enter behavior: pressing `enter` both triggers Start (if halted) and attaches focus to the pane.
 - New keybinding: `restart` (default `r`) stops then starts the selected process.
 - Default stop escalation: when `stop` is omitted, SIGTERM is sent first; if still running after ~3s, proctmux sends SIGKILL.
-- Auto-discovery of processes: set `general.procs_from_make_targets` or `general.procs_from_package_json` to generate `make:<target>` and `<manager>:<script>` processes automatically (package.json scripts detect pnpm, bun, yarn, npm, or deno).
+- Configless startup: when no config file exists, proctmux automatically discovers Makefile targets and `package.json` scripts. File-backed configs can opt into each source with `general.procs_from_*` settings.
 
 
 ## How It Works
@@ -258,15 +268,14 @@ procs:
 
 ## Configuration Reference
 
-proctmux reads `proctmux.yaml` from the working directory. Only `procs` is required. Defaults are applied where not specified.
+proctmux reads a supported config file from the working directory when one exists. Defaults are applied where not specified; without a config, Makefile and package.json discovery supplies the process list.
 
 ### Top‑level
 
 - `general`:
-  - `detached_session_name` (string): Name for the background process session. Default `_proctmux`.
-  - `kill_existing_session` (bool): If a session with this name already exists, kill and recreate it. If false and it exists, startup fails.
-  - `procs_from_make_targets` (bool): When true, add a process for each Makefile target (`make:<target>`).
-  - `procs_from_package_json` (bool): When true, add a process for each script in `package.json`. The package manager is inferred from lock/config files (pnpm, bun, yarn, npm, or deno) and the generated process names follow `<manager>:<script>`.
+  - `procs_from_make_targets` (bool): Enable Makefile target discovery for this config.
+  - `procs_from_package_json` (bool): Enable `package.json` script discovery for this config.
+
 - `layout`:
   - `processes_list_width` (int): Percent width of the left process list (1-99). The right pane uses the remainder.
   - `hide_help` (bool): Hide the help/footer text in the UI.

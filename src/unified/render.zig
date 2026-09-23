@@ -2,6 +2,7 @@
 //! This module composes the Client Session pane, server-output pane, focus/status bar, and terminal repaint sequences.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const domain = @import("../domain/root.zig");
 const io = @import("../modes/io.zig");
 const terminal = @import("../terminal/root.zig");
@@ -190,11 +191,11 @@ fn appendServerHeader(
     }
 
     if (activeProcessStatus(model)) |status| {
-        try out.writer().print("Output: {s}  {s}\n", .{ label, statusText(status) });
+        try platform.appendPrint(out, "Output: {s}  {s}\n", .{ label, statusText(status) });
         return;
     }
 
-    try out.writer().print("Output: {s}\n", .{label});
+    try platform.appendPrint(out, "Output: {s}\n", .{label});
 }
 
 fn activeProcessLabel(model: *const tui.client_model.ClientModel) []const u8 {
@@ -296,7 +297,7 @@ fn visibleLineCount(text: []const u8) usize {
 }
 
 fn trimLineRight(line: []const u8) []const u8 {
-    return std.mem.trimRight(u8, line, " \t\r");
+    return std.mem.trimEnd(u8, line, " \t\r");
 }
 
 fn positiveWidth(width: i32) usize {

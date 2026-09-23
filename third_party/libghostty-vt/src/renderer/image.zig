@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const assert = @import("../quirks.zig").inlineAssert;
 const wuffs = @import("wuffs");
 const terminal = @import("../terminal/main.zig");
+const global = @import("../global.zig");
 
 const Renderer = @import("../renderer.zig").Renderer;
 const GraphicsAPI = Renderer.API;
@@ -192,9 +193,9 @@ pub const State = struct {
             return;
         };
 
-        // For transmit time we always just use the current time
-        // and overwrite the overlay.
-        const transmit_time = try std.time.Instant.now();
+        // Overlays are always considered new content, so we take a
+        // fresh generation stamp to force replacing any existing one.
+        const generation = terminal.kitty.graphics.nextGeneration(global.io());
 
         // Ensure we have space for our overlay placement. Do this before
         // we upload our image so we don't have to deal with cleaning
@@ -207,7 +208,7 @@ pub const State = struct {
         try self.prepImage(
             alloc,
             .overlay,
-            transmit_time,
+            generation,
             pending,
         );
         errdefer comptime unreachable;
@@ -276,7 +277,13 @@ pub const State = struct {
             while (it.next()) |kv| {
                 switch (kv.key_ptr.*) {
                     // We're only looking at Kitty images
-                    .kitty => |id| if (storage.imageById(id) == null) {
+                    .kitty => |id| if (storage.imageById(id)) |image| {
+                        // A pending source must not keep an older texture for
+                        // the same ID renderable while its placements wait.
+                        if (image.data.isPending()) {
+                            kv.value_ptr.image.markForUnload();
+                        }
+                    } else {
                         kv.value_ptr.image.markForUnload();
                     },
 
@@ -407,6 +414,10 @@ pub const State = struct {
         image: *const terminal.kitty.graphics.Image,
         p: *const terminal.kitty.graphics.ImageStorage.Placement,
     ) PrepImageError!void {
+        // Keep the native placement but do not create a renderer placement or
+        // texture until the decoded bytes arrive.
+        if (image.data.isPending()) return;
+
         // Get the rect for the placement. If this placement doesn't have
         // a rect then its virtual or something so skip it.
         const rect = p.rect(image.*, t) orelse return;
@@ -427,18 +438,9 @@ pub const State = struct {
         // Calculate the dimensions of our image, taking in to
         // account the rows / columns specified by the placement.
         const dest_size = p.pixelSize(image.*, t);
+        const cell_offset = p.cellOffset(t);
 
-        // Calculate the source rectangle
-        const source_x = @min(image.width, p.source_x);
-        const source_y = @min(image.height, p.source_y);
-        const source_width = if (p.source_width > 0)
-            @min(image.width - source_x, p.source_width)
-        else
-            image.width;
-        const source_height = if (p.source_height > 0)
-            @min(image.height - source_y, p.source_height)
-        else
-            image.height;
+        const source = p.sourceRect(image.*);
 
         // Get the viewport-relative Y position of the placement.
         const y_pos: i32 = @as(i32, @intCast(img_top_y)) - @as(i32, @intCast(top_y));
@@ -452,12 +454,12 @@ pub const State = struct {
                 .z = p.z,
                 .width = dest_size.width,
                 .height = dest_size.height,
-                .cell_offset_x = p.x_offset,
-                .cell_offset_y = p.y_offset,
-                .source_x = source_x,
-                .source_y = source_y,
-                .source_width = source_width,
-                .source_height = source_height,
+                .cell_offset_x = cell_offset.x,
+                .cell_offset_y = cell_offset.y,
+                .source_x = source.x,
+                .source_y = source.y,
+                .source_width = source.width,
+                .source_height = source.height,
             });
         }
     }
@@ -477,6 +479,7 @@ pub const State = struct {
             );
             return;
         };
+        if (image.data.isPending()) return;
 
         const rp = p.renderPlacement(
             storage,
@@ -525,14 +528,14 @@ pub const State = struct {
         self: *State,
         alloc: Allocator,
         id: Id,
-        transmit_time: std.time.Instant,
+        generation: u64,
         pending: Image.Pending,
     ) PrepImageError!void {
-        // If this image exists and its transmit time is the same we assume
-        // it is the identical image so we don't need to send it to the GPU.
+        // If this image exists and its generation is the same it is the
+        // identical image so we don't need to send it to the GPU.
         const gop = try self.images.getOrPut(alloc, id);
         if (gop.found_existing and
-            gop.value_ptr.transmit_time.order(transmit_time) == .eq)
+            gop.value_ptr.generation == generation)
         {
             return;
         }
@@ -570,7 +573,7 @@ pub const State = struct {
         if (!gop.found_existing) {
             gop.value_ptr.* = .{
                 .image = new_image,
-                .transmit_time = undefined,
+                .generation = 0,
             };
         } else {
             gop.value_ptr.image.markForReplace(
@@ -586,7 +589,7 @@ pub const State = struct {
             log.warn("error preparing image for upload err={}", .{err});
             return error.ImageConversionError;
         };
-        gop.value_ptr.transmit_time = transmit_time;
+        gop.value_ptr.generation = generation;
     }
 
     /// Prepare the provided Kitty image for upload to the GPU by copying its
@@ -596,10 +599,11 @@ pub const State = struct {
         alloc: Allocator,
         image: *const terminal.kitty.graphics.Image,
     ) PrepImageError!void {
+        const data = image.data.bytes() orelse unreachable;
         try self.prepImage(
             alloc,
             .{ .kitty = image.id },
-            image.transmit_time,
+            image.generation,
             .{
                 .width = image.width,
                 .height = image.height,
@@ -614,7 +618,7 @@ pub const State = struct {
                 // constCasts are always gross but this one is safe is because
                 // the data is only read from here and copied into its own
                 // buffer.
-                .data = @constCast(image.data.ptr),
+                .data = @constCast(data.ptr),
             },
         );
     }
@@ -688,7 +692,13 @@ pub const Id = union(enum) {
 /// The map used for storing images.
 pub const ImageMap = std.AutoHashMapUnmanaged(Id, struct {
     image: Image,
-    transmit_time: std.time.Instant,
+
+    /// The generation of the terminal image this was created from
+    /// (see terminal.kitty.graphics.Image.generation). Used to detect
+    /// staleness: a differing generation for the same ID means the
+    /// contents changed and the texture must be replaced. Zero is
+    /// never a valid stored generation so it marks "not yet uploaded".
+    generation: u64,
 });
 
 /// The state for a single image that is to be rendered.
@@ -956,3 +966,108 @@ pub const Image = union(enum) {
         };
     }
 };
+
+test "kitty renderer ignores pending payloads and removes replaced placements" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+    t.width_px = 30;
+    t.height_px = 30;
+
+    var state: State = .empty;
+    defer state.deinit(alloc);
+
+    const storage = &t.screens.active.kitty_images;
+    const tracked = t.screens.active.pages.countTrackedPins();
+    const pending = try storage.addPendingImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .width = 1,
+        .height = 1,
+        .format = .rgba,
+        .data = .{ .pending = 4 },
+    });
+    const pin = try t.screens.active.pages.trackPin(
+        t.screens.active.cursor.page_pin.*,
+    );
+    try storage.addPlacement(io, alloc, t.screens.active, 1, 1, .{
+        .location = .{ .pin = pin },
+        .columns = 1,
+        .rows = 1,
+    });
+
+    state.kittyUpdate(alloc, &t, .{ .width = 10, .height = 10 });
+    try testing.expectEqual(@as(usize, 1), storage.placements.count());
+    try testing.expectEqual(@as(usize, 0), state.kitty_placements.items.len);
+    try testing.expect(state.images.get(.{ .kitty = 1 }) == null);
+
+    const pixels = try alloc.dupe(u8, "rgba");
+    try testing.expect(pending.complete(storage, io, pixels));
+    state.kittyUpdate(alloc, &t, .{ .width = 10, .height = 10 });
+    try testing.expectEqual(@as(usize, 1), state.kitty_placements.items.len);
+    try testing.expectEqual(
+        pending.generation,
+        state.images.get(.{ .kitty = 1 }).?.generation,
+    );
+
+    // A newer pending replacement deletes the native placement and marks the
+    // copied texture data for unload.
+    _ = try storage.addPendingImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .width = 1,
+        .height = 1,
+        .format = .rgba,
+        .data = .{ .pending = 4 },
+    });
+    state.kittyUpdate(alloc, &t, .{ .width = 10, .height = 10 });
+    try testing.expectEqual(@as(usize, 0), storage.placements.count());
+    try testing.expectEqual(tracked, t.screens.active.pages.countTrackedPins());
+    try testing.expectEqual(@as(usize, 0), state.kitty_placements.items.len);
+    try testing.expect(state.images.get(.{ .kitty = 1 }).?.image.isUnloading());
+}
+
+test "kitty renderer uses the intersected source rectangle" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+    t.width_px = 30;
+    t.height_px = 30;
+
+    var state: State = .empty;
+    defer state.deinit(alloc);
+
+    const storage = &t.screens.active.kitty_images;
+    const pixels = try alloc.alloc(u8, 4 * 3 * 3);
+    @memset(pixels, 0);
+    try storage.addImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .width = 4,
+        .height = 3,
+        .format = .rgb,
+        .data = .{ .complete = pixels },
+    });
+    const pin = try t.screens.active.pages.trackPin(
+        t.screens.active.cursor.page_pin.*,
+    );
+    try storage.addPlacement(io, alloc, t.screens.active, 1, 1, .{
+        .location = .{ .pin = pin },
+        .source_x = 3,
+        .source_y = 1,
+    });
+
+    state.kittyUpdate(alloc, &t, .{ .width = 10, .height = 10 });
+    try testing.expectEqual(@as(usize, 1), state.kitty_placements.items.len);
+
+    const placement = state.kitty_placements.items[0];
+    try testing.expectEqual(@as(u32, 1), placement.width);
+    try testing.expectEqual(@as(u32, 2), placement.height);
+    try testing.expectEqual(@as(u32, 3), placement.source_x);
+    try testing.expectEqual(@as(u32, 1), placement.source_y);
+    try testing.expectEqual(@as(u32, 1), placement.source_width);
+    try testing.expectEqual(@as(u32, 2), placement.source_height);
+}

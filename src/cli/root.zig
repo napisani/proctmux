@@ -101,10 +101,7 @@ pub fn unknownFlagName(args: []const []const u8) ?[]const u8 {
         if (std.mem.eql(u8, arg, "--")) return null;
         if (arg.len <= 1 or arg[0] != '-') return null;
 
-        const parsed = parseFlagToken(arg) catch |err| switch (err) {
-            error.UnknownFlag => return flagName(arg),
-            else => return null,
-        };
+        const parsed = parseFlagToken(arg) catch return flagName(arg);
 
         if (flagRequiresValue(parsed.kind) and parsed.value == null) i += 1;
         i += 1;

@@ -2,8 +2,13 @@
 //! Scripts become Process Config entries with predictable labels so JavaScript projects can be run without duplicating common commands in proctmux.yaml.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 const makefile = @import("makefile.zig");
+
+pub fn enabled(general: *const config.schema.GeneralConfig) bool {
+    return general.procs_from_package_json;
+}
 
 const Manager = struct {
     prefix: []const u8,
@@ -11,10 +16,10 @@ const Manager = struct {
 };
 
 pub fn discover(allocator: std.mem.Allocator, cwd: []const u8) !config.schema.ProcessMap {
-    const path = try std.fs.path.join(allocator, &.{ cwd, "package.json" });
+    const path = try platform.fs.path.join(allocator, &.{ cwd, "package.json" });
     defer allocator.free(path);
 
-    const data = std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024) catch |err| switch (err) {
+    const data = platform.fs.cwd().readFileAlloc(platform.io(), path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => return error.SourceNotFound,
         else => return err,
     };
@@ -99,9 +104,9 @@ fn detectManager(allocator: std.mem.Allocator, cwd: []const u8) !Manager {
 }
 
 fn exists(allocator: std.mem.Allocator, cwd: []const u8, name: []const u8) !bool {
-    const path = try std.fs.path.join(allocator, &.{ cwd, name });
+    const path = try platform.fs.path.join(allocator, &.{ cwd, name });
     defer allocator.free(path);
-    std.fs.cwd().access(path, .{}) catch |err| switch (err) {
+    platform.fs.cwd().access(platform.io(), path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
     };

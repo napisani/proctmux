@@ -2,6 +2,7 @@
 //! This module owns validation, string ownership transfer, and warning collection so callers receive a ready-to-default config without depending on YAML parse internals.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const yaml_mod = @import("yaml");
 const schema = @import("schema.zig");
 const defaults = @import("defaults.zig");
@@ -32,27 +33,27 @@ pub const LoadedConfig = struct {
 };
 
 pub fn loadFile(allocator: schema.Allocator, path: []const u8) !LoadedConfig {
-    return loadFileInDir(allocator, std.fs.cwd(), path);
+    return loadFileInDir(allocator, platform.fs.cwd(), path);
 }
 
-pub fn loadFileInDir(allocator: schema.Allocator, dir: std.fs.Dir, path: []const u8) !LoadedConfig {
-    const data = dir.readFileAlloc(allocator, path, 1024 * 1024) catch |err| switch (err) {
+pub fn loadFileInDir(allocator: schema.Allocator, dir: platform.fs.Dir, path: []const u8) !LoadedConfig {
+    const data = dir.readFileAlloc(platform.io(), path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
         else => return err,
     };
     defer allocator.free(data);
 
-    const absolute_path = try dir.realpathAlloc(allocator, path);
+    const absolute_path = try dir.realPathFileAlloc(platform.io(), path, allocator);
     defer allocator.free(absolute_path);
 
     return loadFromSlice(allocator, data, absolute_path);
 }
 
 pub fn loadDefault(allocator: schema.Allocator) !LoadedConfig {
-    return loadDefaultInDir(allocator, std.fs.cwd());
+    return loadDefaultInDir(allocator, platform.fs.cwd());
 }
 
-pub fn loadDefaultInDir(allocator: schema.Allocator, dir: std.fs.Dir) !LoadedConfig {
+pub fn loadDefaultInDir(allocator: schema.Allocator, dir: platform.fs.Dir) !LoadedConfig {
     const paths = [_][]const u8{ "proctmux.yaml", "proctmux.yml", "procmux.yaml", "procmux.yml" };
     for (paths) |path| {
         return loadFileInDir(allocator, dir, path) catch |err| switch (err) {
@@ -61,6 +62,18 @@ pub fn loadDefaultInDir(allocator: schema.Allocator, dir: std.fs.Dir) !LoadedCon
         };
     }
     return error.ConfigFileNotFound;
+}
+
+/// Creates a default LoadedConfig without touching the filesystem. The
+/// synthetic path preserves the existing project identity and child cwd seams.
+pub fn loadImplicitInDir(allocator: schema.Allocator, dir: platform.fs.Dir) !LoadedConfig {
+    const cwd = try dir.realPathFileAlloc(platform.io(), ".", allocator);
+    defer allocator.free(cwd);
+
+    const source_path = try platform.fs.path.join(allocator, &.{ cwd, "proctmux.yaml" });
+    defer allocator.free(source_path);
+
+    return loadFromSlice(allocator, "{}\n", source_path);
 }
 
 /// Parses YAML into an owned Project Config plus non-fatal warnings. Ownership

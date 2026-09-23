@@ -2,6 +2,7 @@
 //! Production modes and tests share these small interfaces so interactive loops can be exercised without real stdin/stdout.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 
 pub const Input = struct {
     context: *anyopaque,
@@ -75,7 +76,7 @@ pub fn writeTextClearingLineTails(output: Output, text: []const u8, clear_line_t
 }
 
 pub const FileInput = struct {
-    pub fn reader(file: *std.fs.File) Input {
+    pub fn reader(file: *platform.fs.File) Input {
         return .{
             .context = file,
             .read = read,
@@ -84,8 +85,8 @@ pub const FileInput = struct {
     }
 
     fn read(context: *anyopaque, buffer: []u8) anyerror!usize {
-        const file: *std.fs.File = @ptrCast(@alignCast(context));
-        return file.read(buffer);
+        const file: *platform.fs.File = @ptrCast(@alignCast(context));
+        return platform.fs.read(file.*, buffer);
     }
 };
 

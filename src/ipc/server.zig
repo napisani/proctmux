@@ -2,6 +2,7 @@
 //! This module owns socket lifecycle, permissions, and peer authorization; stateful Snapshot broadcasting is delegated to `snapshot_broadcaster`.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const builtin = @import("builtin");
 const interfaces = @import("interfaces.zig");
 const line_io = @import("line.zig");
@@ -163,13 +164,13 @@ fn serveSnapshotListener(
     }
 }
 
-fn listenAtSocketPath(socket_path: []const u8) !std.net.Server {
-    std.fs.deleteFileAbsolute(socket_path) catch |err| switch (err) {
+fn listenAtSocketPath(socket_path: []const u8) !platform.net.Server {
+    platform.fs.deleteFileAbsolute(socket_path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
 
-    const address = try std.net.Address.initUnix(socket_path);
+    const address = try platform.net.Address.initUnix(socket_path);
     var listener = try address.listen(.{});
     errdefer listener.deinit();
     try setSocketPermissions(socket_path);
@@ -178,7 +179,7 @@ fn listenAtSocketPath(socket_path: []const u8) !std.net.Server {
 
 fn serveCommandConnection(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: platform.net.Stream,
     handler: CommandHandler,
 ) !void {
     defer stream.close();
@@ -208,7 +209,7 @@ fn authorizeDefaultPeer(_: *anyopaque, fd: std.posix.fd_t) !void {
         else => return err,
     };
 
-    const expected_uid: u32 = @intCast(std.posix.geteuid());
+    const expected_uid: u32 = @intCast(std.c.geteuid());
     if (peer_uid != expected_uid) return error.UnauthorizedPeer;
 }
 
@@ -233,10 +234,7 @@ const DarwinXuCred = extern struct {
 
 fn peerUIDDarwin(fd: std.posix.fd_t) !u32 {
     var cred: DarwinXuCred = undefined;
-    std.posix.getsockopt(fd, darwin_sol_local, darwin_local_peercred, std.mem.asBytes(&cred)) catch |err| switch (err) {
-        error.InvalidProtocolOption => return error.PeerCredentialUnsupported,
-        else => return err,
-    };
+    try getPeerCredentials(fd, darwin_sol_local, darwin_local_peercred, std.mem.asBytes(&cred));
     if (cred.cr_uid == std.math.maxInt(std.c.uid_t)) return error.InvalidPeerCredential;
     return @intCast(cred.cr_uid);
 }
@@ -249,13 +247,25 @@ const LinuxUCred = extern struct {
 
 fn peerUIDLinux(fd: std.posix.fd_t) !u32 {
     var cred: LinuxUCred = undefined;
-    std.posix.getsockopt(fd, std.os.linux.SOL.SOCKET, std.os.linux.SO.PEERCRED, std.mem.asBytes(&cred)) catch |err| switch (err) {
-        error.InvalidProtocolOption => return error.PeerCredentialUnsupported,
-        else => return err,
-    };
+    try getPeerCredentials(fd, std.os.linux.SOL.SOCKET, std.os.linux.SO.PEERCRED, std.mem.asBytes(&cred));
     return @intCast(cred.uid);
 }
 
+fn getPeerCredentials(fd: std.posix.fd_t, level: c_int, option: u32, bytes: []u8) !void {
+    var len: std.posix.socklen_t = @intCast(bytes.len);
+    const rc = std.posix.system.getsockopt(fd, level, @intCast(option), bytes.ptr, &len);
+    switch (std.posix.errno(rc)) {
+        .SUCCESS => {},
+        .NOPROTOOPT => return error.PeerCredentialUnsupported,
+        else => return error.Unexpected,
+    }
+}
+
 fn setSocketPermissions(socket_path: []const u8) !void {
-    try std.posix.fchmodat(std.posix.AT.FDCWD, socket_path, 0o600, 0);
+    try platform.fs.cwd().setFilePermissions(
+        platform.io(),
+        socket_path,
+        .fromMode(0o600),
+        .{},
+    );
 }

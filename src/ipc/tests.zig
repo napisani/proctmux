@@ -2,6 +2,7 @@
 //! These tests protect the public IPC seam rather than old internal codec compatibility.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const domain = @import("../domain/root.zig");
 const config = @import("../config/root.zig");
 const protocol = @import("protocol.zig");
@@ -63,8 +64,8 @@ test "snapshotLine emits a minimal snapshot without process execution config" {
 
 test "one-shot command server handles clean command request" {
     const path = "/tmp/proctmux-zig-clean-ipc-command-test.socket";
-    std.fs.deleteFileAbsolute(path) catch {};
-    defer std.fs.deleteFileAbsolute(path) catch {};
+    platform.fs.deleteFileAbsolute(path) catch {};
+    defer platform.fs.deleteFileAbsolute(path) catch {};
 
     var handler = test_ipc.FakeCommandHandler{};
     var authorizer = test_ipc.FakePeerAuthorizer{};
@@ -89,8 +90,8 @@ test "one-shot command server handles clean command request" {
 
 test "snapshot client reads initial snapshot" {
     const path = "/tmp/proctmux-zig-clean-ipc-snapshot-test.socket";
-    std.fs.deleteFileAbsolute(path) catch {};
-    defer std.fs.deleteFileAbsolute(path) catch {};
+    platform.fs.deleteFileAbsolute(path) catch {};
+    defer platform.fs.deleteFileAbsolute(path) catch {};
 
     var handler = test_ipc.FakeCommandHandler{};
     var provider = test_ipc.FakeSnapshotProvider{ .line = test_ipc.selectedApiSnapshotLine };

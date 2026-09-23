@@ -2,6 +2,7 @@
 //! This mode discovers the primary socket, initializes raw terminal handling, and delegates interactive behavior to Client Session.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 const ipc = @import("../ipc/root.zig");
 const terminal = @import("../terminal/root.zig");
@@ -10,7 +11,7 @@ const io = @import("io.zig");
 
 pub fn run(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: platform.fs.Dir,
     config_file: []const u8,
     input: io.Input,
     output: io.Output,

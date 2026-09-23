@@ -2,6 +2,7 @@
 //! This mode starts the process-owning server, preserves terminal cleanup, and forwards raw stdin bytes to the currently selected process.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const config = @import("../config/root.zig");
 const domain = @import("../domain/root.zig");
 const ipc = @import("../ipc/root.zig");
@@ -14,7 +15,7 @@ const log = std.log.scoped(.primary_mode);
 /// Terminal raw-mode cleanup is kept in this mode because stdin is forwarded to PTYs.
 pub fn runUntilStopped(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: platform.fs.Dir,
     config_file: []const u8,
     input: io.Input,
     output: io.Output,
@@ -25,7 +26,7 @@ pub fn runUntilStopped(
 
     const socket_path = try ipc.socket.createPathForConfig(allocator, &loaded.config);
     defer allocator.free(socket_path);
-    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+    defer platform.fs.deleteFileAbsolute(socket_path) catch {};
 
     var primary_server = try primary_mod.Server.init(allocator, &loaded.config);
     defer primary_server.deinit();
@@ -103,7 +104,7 @@ fn runOutputLoop(state: *PrimaryOutputRun) void {
             };
         }
 
-        std.Thread.sleep(25 * std.time.ns_per_ms);
+        platform.sleepNanoseconds(25 * std.time.ns_per_ms);
     }
     state.result = .completed;
 }
@@ -209,7 +210,7 @@ fn forwardInput(state: *PrimaryInputRun) void {
 }
 
 fn unblockServer(path: []const u8) void {
-    var stream = std.net.connectUnixSocket(path) catch |err| {
+    var stream = platform.net.connectUnixSocket(path) catch |err| {
         log.debug("failed to unblock primary command server: {s}", .{@errorName(err)});
         return;
     };

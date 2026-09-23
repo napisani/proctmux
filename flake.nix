@@ -3,8 +3,9 @@
 
   # Nixpkgs / NixOS version to use.
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/d1c15b7d5806069da59e819999d70e1cec0760bf";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    zig-overlay.url = "github:mitchellh/zig-overlay";
     agent-tui-src = {
       url = "github:pproenca/agent-tui";
       flake = false;
@@ -16,6 +17,7 @@
       self,
       nixpkgs,
       flake-utils,
+      zig-overlay,
       agent-tui-src,
       ...
     }:
@@ -24,6 +26,7 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         lib = pkgs.lib;
+        zig = zig-overlay.packages.${system}."0.16.0";
 
         agent-tui = pkgs.rustPlatform.buildRustPackage {
           pname = "agent-tui";
@@ -45,7 +48,7 @@
           python3
           python3Packages.pytest
           tmux
-          zig_0_15
+          zig
           agent-tui
         ];
 
@@ -61,7 +64,7 @@
 
           nativeBuildInputs = with pkgs; [
             gnumake
-            zig_0_15
+            zig
           ];
 
           dontConfigure = true;

@@ -2,6 +2,7 @@
 //! These adapters let IPC transport own sockets and serialization while Primary Server owns Process Command execution and Snapshot production.
 
 const std = @import("std");
+const platform = @import("../platform.zig");
 const protocol = @import("protocol.zig");
 
 /// Adapter from transport-owned command requests to the domain owner that can
@@ -40,7 +41,7 @@ pub const PeerAuthorizer = struct {
     context: *anyopaque,
     authorize: *const fn (context: *anyopaque, fd: std.posix.fd_t) anyerror!void,
 
-    pub fn authorizeStream(self: PeerAuthorizer, stream: std.net.Stream) !void {
+    pub fn authorizeStream(self: PeerAuthorizer, stream: platform.net.Stream) !void {
         try self.authorize(self.context, stream.handle);
     }
 };
